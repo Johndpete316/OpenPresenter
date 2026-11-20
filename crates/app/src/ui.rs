@@ -481,7 +481,7 @@ fn grid(
     }
     let arrangement = show.arrangement_for(&path);
     let arrangements = doc.arrangements();
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let unsaved = if show.unsaved.contains(&path) {
             " •"
         } else {
@@ -518,18 +518,21 @@ fn grid(
                     pick(Some(a.uuid.clone()), a.name.clone());
                 }
             });
-        if doc
+        // Slide timers are supported; other cues and timeline/media tracks aren't yet.
+        let timeline_cues = doc
             .timeline
             .as_ref()
-            .is_some_and(|t| t.time_cue_count() + t.media_track_count() > 0)
-            || doc.slides().any(|s| s.cue_count() > 0)
-        {
-            let msg = if doc.slide_timings().is_some() {
-                "! slide timing read with an unverified format; media cues not supported yet"
-            } else {
-                "! media cues / auto-advance not supported yet"
-            };
-            ui.colored_label(Color32::YELLOW, msg);
+            .is_some_and(|t| t.time_cue_count() + t.media_track_count() > 0);
+        let timers = doc.slide_timings();
+        let other_cues = match &timers {
+            Some(t) => t.other_cues,
+            None => doc.slides().map(|s| s.cue_count()).sum(),
+        };
+        if timeline_cues || other_cues > 0 {
+            ui.colored_label(
+                Color32::YELLOW,
+                "! some cues (media / timeline) aren't supported yet",
+            );
         }
     });
     let order: Vec<SlideRef> = pp6core::slide_order(&doc, arrangement.as_deref());
@@ -554,7 +557,7 @@ fn grid(
                 });
             });
             let spacing = ui.spacing().item_spacing.x;
-            let per_row = (((ui.available_width().min(ui.clip_rect().width()) + spacing)
+            let per_row = (((ui.available_width().min(ui.clip_rect().width()) + spacing - 12.0)
                 / (TILE_W as f32 + spacing))
                 .floor() as usize)
                 .max(1);
@@ -710,13 +713,13 @@ fn loop_panel(ui: &mut egui::Ui, show: &ShowState, actions: &mut Vec<UiAction>) 
             {
                 actions.push(UiAction::Core(Command::StartLoop));
             }
-            ui.label(
-                RichText::new(format!(
-                    "{} has slide timing (format unverified)",
-                    title(&path)
-                ))
-                .small()
-                .weak(),
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!("{} has slide timers", title(&path)))
+                        .small()
+                        .weak(),
+                )
+                .wrap(),
             );
         });
     }
