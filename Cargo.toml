@@ -10,6 +10,7 @@ publish = false
 
 [workspace.dependencies]
 pro6 = { path = "crates/pro6" }
+render = { path = "crates/render" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

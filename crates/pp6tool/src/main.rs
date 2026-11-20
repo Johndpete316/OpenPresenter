@@ -1,5 +1,6 @@
 //! `pp6tool`: command-line tools for `.pro6` libraries.
 
+mod render_cmd;
 mod report;
 mod roundtrip;
 mod walk;
@@ -41,6 +42,22 @@ enum Command {
         /// Also save each rewritten file here, at the same relative path.
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+    /// Render every slide of a .pro6 file to PNG (for visual comparison with PP6).
+    Render {
+        file: PathBuf,
+        /// Directory for the PNGs (created if missing).
+        #[arg(long)]
+        out: PathBuf,
+        /// Output size WIDTHxHEIGHT (default: the document's canvas size).
+        #[arg(long, value_parser = render_cmd::parse_size)]
+        size: Option<(u32, u32)>,
+        /// Extra font directory (repeatable).
+        #[arg(long = "fonts")]
+        font_dirs: Vec<PathBuf>,
+        /// Use only the --fonts directories, not the fonts installed on this PC.
+        #[arg(long)]
+        fonts_only: bool,
     },
 }
 
@@ -93,6 +110,34 @@ fn main() -> anyhow::Result<ExitCode> {
                 started.elapsed().as_secs_f64() * 1000.0
             );
             if results.iter().any(|r| r.outcome.is_failure()) {
+                return Ok(ExitCode::FAILURE);
+            }
+        }
+        Command::Render {
+            file,
+            out,
+            size,
+            font_dirs,
+            fonts_only,
+        } => {
+            let started = Instant::now();
+            let opts = render_cmd::Options {
+                file,
+                out,
+                size,
+                font_dirs,
+                fonts_only,
+            };
+            let results = render_cmd::run(&opts)?;
+            print!("{}", render_cmd::render_text(&results));
+            let failed = results.iter().filter(|r| r.error.is_some()).count();
+            eprintln!(
+                "rendered {} of {} slide(s) in {:.1} ms (including font loading)",
+                results.len() - failed,
+                results.len(),
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+            if failed > 0 {
                 return Ok(ExitCode::FAILURE);
             }
         }

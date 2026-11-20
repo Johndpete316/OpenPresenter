@@ -522,8 +522,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "image",
  "insta",
  "pro6",
+ "render",
  "serde",
  "serde_json",
  "tracing",
