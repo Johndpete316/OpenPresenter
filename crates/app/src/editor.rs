@@ -148,7 +148,7 @@ pub fn grid_edit(
                                 .sum::<usize>()
                                 + si;
                             ui.vertical(|ui| {
-                                let (_, tex) = st.thumb_public(thumbs, doc, flat, TILE_W);
+                                let (_, tex) = st.thumb_public(thumbs, doc, flat);
                                 let resp = tile_image(ui, tex, Vec2::new(TILE_W as f32, height));
                                 let selected = st.edit.sel == Some((gi, si));
                                 let stroke = if selected {

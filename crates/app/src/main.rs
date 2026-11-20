@@ -10,6 +10,7 @@ mod keys;
 mod operator;
 mod output;
 mod raster;
+mod theme;
 mod thumbs;
 mod ui;
 

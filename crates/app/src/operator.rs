@@ -76,6 +76,7 @@ impl OperatorWindow {
             glow::Context::from_loader_function_cstr(|s| display.get_proc_address(s).cast())
         });
         let egui = egui_glow::EguiGlow::new(el, gl.clone(), None, None, true);
+        crate::theme::install(&egui.egui_ctx);
         egui.egui_ctx.set_request_repaint_callback(move |info| {
             let _ = proxy.send_event(UserEvent::Repaint(info.delay));
         });
