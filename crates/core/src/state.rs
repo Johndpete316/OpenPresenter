@@ -24,6 +24,17 @@ pub struct Live {
     pub slide: SlideRef,
 }
 
+/// A running auto-advance loop (see `Command::StartLoop`).
+#[derive(Debug, Clone)]
+pub struct LoopState {
+    pub path: PathBuf,
+    pub timings: Arc<pro6::timing::SlideTimings>,
+    /// When the current slide advances; `None` = it has no stored time (waits for the operator).
+    pub next_at: Option<Instant>,
+    /// How long the current slide stays up.
+    pub slide_duration: Option<std::time::Duration>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NoticeLevel {
     Info,
@@ -64,6 +75,7 @@ pub struct ShowState {
     pub notices: Arc<Vec<Notice>>,
     /// Presentations with unsaved edits.
     pub unsaved: Arc<std::collections::HashSet<PathBuf>>,
+    pub looping: Option<LoopState>,
 }
 
 impl Default for ShowState {
@@ -86,6 +98,7 @@ impl Default for ShowState {
             arrangements: Arc::default(),
             notices: Arc::default(),
             unsaved: Arc::default(),
+            looping: None,
         }
     }
 }
@@ -169,6 +182,14 @@ impl ShowState {
             self.selected
         );
         let _ = writeln!(s, "loaded presentations: {}", self.docs.len());
+        if let Some(l) = &self.looping {
+            let _ = writeln!(
+                s,
+                "loop running: {} (slide duration {:?})",
+                l.path.display(),
+                l.slide_duration
+            );
+        }
         s
     }
 }

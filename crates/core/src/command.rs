@@ -56,4 +56,7 @@ pub enum Command {
     Save(PathBuf),
     /// Throw away unsaved edits and reload from disk.
     Revert(PathBuf),
+    /// Auto-advance the live (or selected) presentation using its stored slide timing.
+    StartLoop,
+    StopLoop,
 }

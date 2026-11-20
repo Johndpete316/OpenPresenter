@@ -3,6 +3,7 @@ source: crates/pp6tool/src/roundtrip.rs
 expression: "render_text(&results, \"fixtures\")"
 ---
 pp6tool roundtrip: fixtures
+  IDENTICAL  announcements_synthetic.pro6
   SKIP       invalid/bad_base64.pro6
       'bad_base64.pro6' couldn't be opened: the text of slide 1 in group 1 is corrupted. The file was skipped; other files are unaffected.
   SKIP       invalid/bad_rect.pro6
@@ -19,4 +20,4 @@ pp6tool roundtrip: fixtures
   IDENTICAL  two_fonts_1920x1080.pro6
   IDENTICAL  unknowns.pro6
 
-5 identical, 0 semantically equal, 0 different, 0 broken, 0 save failed, 5 skipped (input doesn't parse)
+6 identical, 0 semantically equal, 0 different, 0 broken, 0 save failed, 5 skipped (input doesn't parse)

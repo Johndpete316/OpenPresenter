@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SYNTHETIC FIXTURE for M8. The timeCues structure (SyntheticTimeCue with timeStamp + a slide UUID) is an
+     ASSUMPTION used to exercise the tolerant timing reader; it is NOT verified PP6 XML. -->
+<RVPresentationDocument height="768" width="1024" docType="0" versionNumber="600" usedCount="0" backgroundColor="0 0 0 1" drawingBackgroundColor="false" CCLIDisplay="false" lastDateUsed="" selectedArrangementID="" category="Presentation" resourcesDirectory="" notes="" CCLISongTitle="" chordChartPath="" os="1" buildNumber="6016">
+  <RVTimeline timeOffset="0" duration="12" selectedMediaTrackIndex="-1" loop="true" rvXMLIvarName="timeline">
+    <array rvXMLIvarName="timeCues">
+      <SyntheticTimeCue timeStamp="0" slideUUID="A0000000-0005-4000-8000-000000000001" />
+      <SyntheticTimeCue timeStamp="3"><NSString rvXMLIvarName="slideUUID">A0000000-0005-4000-8000-000000000002</NSString></SyntheticTimeCue>
+      <SyntheticTimeCue timeStamp="8" slideUUID="A0000000-0005-4000-8000-000000000004" />
+      <SyntheticTimeCue timeStamp="9" slideUUID="not-a-slide" />
+    </array>
+    <array rvXMLIvarName="mediaTracks" />
+  </RVTimeline>
+  <array rvXMLIvarName="groups">
+    <RVSlideGrouping name="Announcements" uuid="B0000000-0005-4000-8000-000000000001" color="1 0.6 0 1">
+      <array rvXMLIvarName="slides">
+        <RVDisplaySlide backgroundColor="0 0 0 1" highlightColor="" drawingBackgroundColor="false" enabled="true" hotKey="" label="" notes="" UUID="A0000000-0005-4000-8000-000000000001" chordChartPath="">
+          <array rvXMLIvarName="cues" />
+          <array rvXMLIvarName="displayElements">
+            <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000001" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="1" revealType="0">
+              <RVRect3D rvXMLIvarName="position">{112 84 0 800 600}</RVRect3D>
+              <NSString rvXMLIvarName="PlainText">@@TXT:ann.1@@</NSString>
+              <NSString rvXMLIvarName="RTFData">@@RTF:ann.1@@</NSString>
+            </RVTextElement>
+          </array>
+        </RVDisplaySlide>
+        <RVDisplaySlide backgroundColor="0 0 0 1" highlightColor="" drawingBackgroundColor="false" enabled="true" hotKey="" label="" notes="" UUID="A0000000-0005-4000-8000-000000000002" chordChartPath="">
+          <array rvXMLIvarName="cues" />
+          <array rvXMLIvarName="displayElements">
+            <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000002" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="1" revealType="0">
+              <RVRect3D rvXMLIvarName="position">{112 84 0 800 600}</RVRect3D>
+              <NSString rvXMLIvarName="PlainText">@@TXT:ann.2@@</NSString>
+              <NSString rvXMLIvarName="RTFData">@@RTF:ann.2@@</NSString>
+            </RVTextElement>
+          </array>
+        </RVDisplaySlide>
+        <RVDisplaySlide backgroundColor="0 0 0 1" highlightColor="" drawingBackgroundColor="false" enabled="false" hotKey="" label="" notes="" UUID="A0000000-0005-4000-8000-000000000003" chordChartPath="">
+          <array rvXMLIvarName="cues" />
+          <array rvXMLIvarName="displayElements">
+            <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000003" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="1" revealType="0">
+              <RVRect3D rvXMLIvarName="position">{112 84 0 800 600}</RVRect3D>
+              <NSString rvXMLIvarName="PlainText">@@TXT:ann.3@@</NSString>
+              <NSString rvXMLIvarName="RTFData">@@RTF:ann.3@@</NSString>
+            </RVTextElement>
+          </array>
+        </RVDisplaySlide>
+        <RVDisplaySlide backgroundColor="0 0 0 1" highlightColor="" drawingBackgroundColor="false" enabled="true" hotKey="" label="" notes="" UUID="A0000000-0005-4000-8000-000000000004" chordChartPath="">
+          <array rvXMLIvarName="cues" />
+          <array rvXMLIvarName="displayElements">
+            <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000004" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="1" revealType="0">
+              <RVRect3D rvXMLIvarName="position">{112 84 0 800 600}</RVRect3D>
+              <NSString rvXMLIvarName="PlainText">@@TXT:ann.4@@</NSString>
+              <NSString rvXMLIvarName="RTFData">@@RTF:ann.4@@</NSString>
+            </RVTextElement>
+          </array>
+        </RVDisplaySlide>
+      </array>
+    </RVSlideGrouping>
+  </array>
+  <array rvXMLIvarName="arrangements" />
+</RVPresentationDocument>

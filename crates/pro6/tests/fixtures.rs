@@ -343,3 +343,34 @@ fn arrangements_view() {
     );
     assert!(load("render_1024x768.pro6").arrangements().is_empty());
 }
+
+#[test]
+fn slide_timings_from_timeline_cues() {
+    use std::time::Duration;
+    let doc = load("announcements_synthetic.pro6");
+    let t = doc.slide_timings().unwrap();
+    assert!(t.wrap);
+    assert_eq!(
+        (t.cues, t.unreadable),
+        (3, 1),
+        "the cue pointing at no slide is counted, not guessed"
+    );
+    let d = |n: u32| {
+        t.durations
+            .get(&format!("A0000000-0005-4000-8000-00000000000{n}"))
+            .copied()
+    };
+    assert_eq!(d(1), Some(Duration::from_secs(3)));
+    assert_eq!(
+        d(2),
+        Some(Duration::from_secs(5)),
+        "nested NSString reference"
+    );
+    assert_eq!(d(3), None, "disabled slide has no cue");
+    assert_eq!(
+        d(4),
+        Some(Duration::from_secs(4)),
+        "last cue runs to the timeline duration"
+    );
+    assert!(load("song_1024x768.pro6").slide_timings().is_none());
+}

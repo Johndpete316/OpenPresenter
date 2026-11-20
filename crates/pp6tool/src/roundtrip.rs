@@ -157,6 +157,7 @@ mod tests {
         assert_eq!(
             identical,
             [
+                "announcements_synthetic.pro6",
                 "invalid/unbalanced_rtf.pro6",
                 "render_1024x768.pro6",
                 "song_1024x768.pro6",

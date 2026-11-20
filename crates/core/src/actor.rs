@@ -208,7 +208,23 @@ impl Core {
     }
 
     fn run(&mut self, rx: &Receiver<Msg>) {
-        while let Ok(msg) = rx.recv() {
+        loop {
+            // The loop timer lives here, on the core thread: a UI stall can't delay it.
+            let msg = match self.s.looping.as_ref().and_then(|l| l.next_at) {
+                Some(deadline) => match rx.recv_deadline(deadline) {
+                    Ok(m) => m,
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                        self.loop_tick();
+                        self.publish();
+                        continue;
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
+                },
+                None => match rx.recv() {
+                    Ok(m) => m,
+                    Err(_) => return,
+                },
+            };
             match msg {
                 Msg::Command(cmd, at) => {
                     let _span = tracing::info_span!("command", ?cmd).entered();
@@ -387,15 +403,20 @@ impl Core {
         match cmd {
             Command::Next => self.step(true, at),
             Command::Prev => self.step(false, at),
-            Command::ClearText => self.s.text_visible = false,
+            Command::ClearText => {
+                self.s.text_visible = false;
+                self.stop_loop("Loop stopped (cleared).");
+            }
             Command::ClearBackground => {
                 self.s.background_visible = false;
                 self.s.background_media = None;
+                self.stop_loop("Loop stopped (cleared).");
             }
             Command::ClearAll => {
                 self.s.text_visible = false;
                 self.s.background_visible = false;
                 self.s.background_media = None;
+                self.stop_loop("Loop stopped (cleared).");
             }
             Command::SetBackground { media, next } => {
                 if media.is_some() {
@@ -503,6 +524,8 @@ impl Core {
                     ),
                 ),
             },
+            Command::StartLoop => self.start_loop(at),
+            Command::StopLoop => self.stop_loop("Loop stopped."),
             Command::Revert(path) => {
                 Arc::make_mut(&mut self.s.unsaved).remove(&path);
                 Arc::make_mut(&mut self.s.docs).remove(&path);
@@ -570,6 +593,100 @@ impl Core {
         }
     }
 
+    fn start_loop(&mut self, at: Instant) {
+        let path = match (&self.s.live, &self.s.selected) {
+            (Some(l), _) => l.path.clone(),
+            (None, Some(p)) => p.clone(),
+            (None, None) => {
+                self.notice(
+                    NoticeLevel::Warning,
+                    "Choose the presentation to loop first.".into(),
+                );
+                return;
+            }
+        };
+        let Some(doc) = self.s.docs.get(&path).cloned() else {
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "'{}' isn't loaded yet; try again in a moment.",
+                    path.display()
+                ),
+            );
+            return;
+        };
+        let Some(timings) = doc.slide_timings() else {
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "'{}' has no slide timing this version can read, so it can't loop on its own yet. Slides can still be advanced by hand.",
+                    path.display()
+                ),
+            );
+            return;
+        };
+        tracing::info!(path = %path.display(), slides_timed = timings.durations.len(), wrap = timings.wrap, "loop started");
+        if !self.s.is_live(&path) {
+            let Some(first) = self.s.order_for(&path).and_then(|o| next_enabled(&o, None)) else {
+                return;
+            };
+            self.go_live(&path, first, Some(at));
+        }
+        self.s.looping = Some(crate::state::LoopState {
+            path,
+            timings: Arc::new(timings),
+            next_at: None,
+            slide_duration: None,
+        });
+        self.restart_loop_timer();
+    }
+
+    fn stop_loop(&mut self, why: &str) {
+        if self.s.looping.take().is_some() {
+            self.notice(NoticeLevel::Info, why.to_owned());
+        }
+    }
+
+    /// Time the live slide according to the loop's timings.
+    fn restart_loop_timer(&mut self) {
+        let Some(live) = &self.s.live else { return };
+        let uuid = live
+            .doc
+            .slides()
+            .nth(live.slide.flat)
+            .map(|s| s.uuid.clone())
+            .unwrap_or_default();
+        if let Some(l) = self.s.looping.as_mut().filter(|l| l.path == live.path) {
+            l.slide_duration = l.timings.durations.get(&uuid).copied();
+            l.next_at = l.slide_duration.map(|d| Instant::now() + d);
+        }
+    }
+
+    /// The live slide's time is up: advance (wrapping if the timeline loops).
+    fn loop_tick(&mut self) {
+        let Some(l) = self.s.looping.clone() else {
+            return;
+        };
+        let Some(live) = self.s.live.clone().filter(|live| live.path == l.path) else {
+            self.stop_loop("Loop stopped.");
+            return;
+        };
+        let target = next_enabled(&live.order, live.position).or_else(|| {
+            if l.timings.wrap {
+                next_enabled(&live.order, None)
+            } else {
+                None
+            }
+        });
+        match target {
+            Some(t) => {
+                tracing::debug!(position = t, "loop advance");
+                self.go_live(&live.path, t, Some(Instant::now()));
+            }
+            None => self.stop_loop("Loop finished (the timeline doesn't repeat)."),
+        }
+    }
+
     fn select_item(&mut self, i: usize) {
         let Some(item) = self.s.playlist.items.get(i).cloned() else {
             return;
@@ -604,6 +721,9 @@ impl Core {
         let Some(doc) = self.s.docs.get(path).cloned() else {
             return;
         };
+        if self.s.looping.as_ref().is_some_and(|l| &l.path != path) {
+            self.stop_loop("Loop stopped: another presentation went live.");
+        }
         let arrangement = self.s.arrangement_for(path);
         let order = Arc::new(slide_order(&doc, arrangement.as_deref()));
         let Some(&slide) = order.get(position) else {
@@ -625,6 +745,8 @@ impl Core {
             slide,
         });
         self.s.text_visible = true;
+        // While looping, every slide change (operator or timer) restarts the timer for it.
+        self.restart_loop_timer();
         self.touch(path);
         // If this presentation is a playlist item, follow it and pre-parse the next one.
         if let Some(i) = self.s.playlist.items.iter().position(|it| &it.path == path)

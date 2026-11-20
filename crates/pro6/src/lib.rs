@@ -17,6 +17,7 @@ pub mod raw;
 pub mod rescale;
 pub mod rtf;
 pub mod schema;
+pub mod timing;
 pub mod write;
 
 use std::path::Path;
