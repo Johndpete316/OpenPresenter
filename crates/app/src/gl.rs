@@ -118,6 +118,8 @@ fn run_inner(
                 Ok(c) => c,
                 Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
                     media.warm_up();
+                    // libmpv is loaded now: the app can do its other mpv start-up work.
+                    let _ = events.send_event(UserEvent::MediaWarm);
                     continue;
                 }
                 Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,

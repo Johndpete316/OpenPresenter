@@ -131,6 +131,8 @@ pub enum UserEvent {
     MediaFailed(String),
     Media(Box<media_scan::MediaScan>),
     AudioDevices(Result<Vec<media::AudioDevice>, String>),
+    /// The output thread has loaded libmpv and set up its players (start-up, idle).
+    MediaWarm,
 }
 
 fn parse_size(s: &str) -> Result<(u32, u32), String> {
@@ -350,7 +352,10 @@ fn main() -> ExitCode {
             next_at: None,
         }),
         latencies: Vec::new(),
-        cold_start_logged: false,
+        // Cold start is measured only when a slide is put up at launch (--open); otherwise
+        // the first click is an ordinary, measured slide change.
+        cold_start_logged: args.open.is_none(),
+        audio_listed: false,
         recreate_attempts: 0,
         started_once: false,
         quitting: false,
@@ -442,6 +447,7 @@ struct App {
     bench: Option<Bench>,
     latencies: Vec<Duration>,
     cold_start_logged: bool,
+    audio_listed: bool,
     recreate_attempts: u32,
     started_once: bool,
     quitting: bool,
@@ -511,6 +517,28 @@ impl App {
         }
         if let Some(o) = self.output.take() {
             o.destroy();
+        }
+    }
+
+    /// List mpv's audio devices once, at launch, after the windows are up and the output
+    /// has loaded libmpv (never on a slide click: starting mpv's audio loads Windows audio
+    /// DLLs, which can stall other threads for a moment).
+    fn list_audio_devices(&mut self) {
+        if self.audio_listed {
+            return;
+        }
+        self.audio_listed = true;
+        let audio_proxy = self.proxy.clone();
+        let started = Instant::now();
+        let spawned = std::thread::Builder::new()
+            .name("audio-devices".into())
+            .spawn(move || {
+                let r = media::audio_devices().map_err(|e| e.user_message());
+                tracing::info!(elapsed_ms = ms(started.elapsed()), "audio devices listed");
+                let _ = audio_proxy.send_event(UserEvent::AudioDevices(r));
+            });
+        if let Err(e) = spawned {
+            tracing::error!(error = %e, "couldn't start listing audio devices");
         }
     }
 
@@ -942,8 +970,13 @@ impl ApplicationHandler<UserEvent> for App {
                 self.request_redraw();
             }
             UserEvent::FontsReady { elapsed, faces } => {
-                tracing::info!(faces, elapsed_ms = ms(elapsed), "fonts ready")
+                tracing::info!(faces, elapsed_ms = ms(elapsed), "fonts ready");
+                // With no output window there's no media warm-up to wait for.
+                if self.output.is_none() {
+                    self.list_audio_devices();
+                }
             }
+            UserEvent::MediaWarm => self.list_audio_devices(),
             UserEvent::RenderFailed { index, message } => {
                 tracing::warn!(slide = index + 1, %message, "slide not shown");
                 self.ui
@@ -964,15 +997,6 @@ impl ApplicationHandler<UserEvent> for App {
                     self.cold_start_logged = true;
                     let cold = at.duration_since(self.started);
                     tracing::info!(cold_start_ms = ms(cold), "first slide on screen");
-                    // Only now load libmpv to list audio devices: on Windows, loading the
-                    // ~120 MB DLL holds the loader lock and would stall window creation.
-                    let audio_proxy = self.proxy.clone();
-                    let _ = std::thread::Builder::new()
-                        .name("audio-devices".into())
-                        .spawn(move || {
-                            let r = media::audio_devices().map_err(|e| e.user_message());
-                            let _ = audio_proxy.send_event(UserEvent::AudioDevices(r));
-                        });
                     println!(
                         "cold start (process start → first slide presented): {:.1} ms",
                         ms(cold)
