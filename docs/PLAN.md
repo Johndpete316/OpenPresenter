@@ -250,6 +250,8 @@ Track findings here as real files arrive. "M0:" notes say how the parser current
 
 ## Deployment requirements (found on Windows, 2026-11-20)
 - [ ] **Code signing.** Windows 11 **Smart App Control** blocks unsigned `pp6.exe`/`pp6tool.exe` (and would block `libmpv-2.dll`); a Defender exclusion doesn't help. Before deploying to the church PC: check whether Smart App Control is on there, and plan to sign the executables and DLL with a trusted code-signing certificate (e.g. Microsoft Trusted Signing or a commercial OV/EV certificate; self-signed won't satisfy Smart App Control).
+  - Decision (2026-11-20): ship unsigned for now. Signing must happen before the church PC if Smart App Control is on there (it can't be bypassed per app). Recommended: Azure Artifact Signing (formerly Trusted Signing), ideally in the church's name; the installer, `pp6.exe`, `pp6tool.exe` and `libmpv-2.dll` all get signed.
+- [x] **Installer.** Inno Setup (built under Wine by `packaging/build-installer.sh`), per-machine install to `C:\Program Files\PP6`. Updates are a new installer sent over (Google Drive), not an auto-updater; same AppId = in-place upgrade. User data stays in AppData. Version + commit shown in Settings → General.
 
 ## Required Tooling
 ### Dev Machine (CachyOS / Arch)
@@ -268,6 +270,8 @@ sudo pacman -S libxkbcommon wayland libx11 libxcursor libxrandr libxi mesa
 sudo pacman -S mpv
 # Handy
 cargo install cargo-nextest cargo-watch
+# Installer (Inno Setup 6 runs under Wine; see docs/windows-setup.md)
+sudo pacman -S wine
 ```
 Build for Windows: `cargo xwin build --release --target x86_64-pc-windows-msvc`
 

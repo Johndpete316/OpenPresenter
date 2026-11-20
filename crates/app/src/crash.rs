@@ -222,7 +222,7 @@ fn build_report(
 ) -> String {
     let mut r = String::new();
     let _ = writeln!(r, "PP6 crash report");
-    let _ = writeln!(r, "version: {}", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(r, "version: {}", crate::VERSION);
     let _ = writeln!(r, "os: {} {}", std::env::consts::OS, std::env::consts::ARCH);
     let _ = writeln!(r, "time (unix): {}", unix_now());
     let _ = writeln!(r, "thread: {thread}");

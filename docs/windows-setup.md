@@ -3,30 +3,40 @@
 Everything below was built and checked on Linux. These are the steps that still need the Windows
 show PC (M2, M3 and M5 acceptance).
 
-## Build
+## Build the installer
 
-On the Linux dev machine:
+On the Linux dev machine (one-time: `wine`, `cargo-xwin`, and Inno Setup 6 installed into a
+Wine prefix, e.g. `wine innosetup-6.7.2.exe /VERYSILENT /CURRENTUSER "/DIR=C:\inno"`;
+put the shinchiro `libmpv-2.dll` in `packaging/vendor/`, which is gitignored):
 
 ```sh
-cargo xwin build --release --target x86_64-pc-windows-msvc -p app -p pp6tool
-# → target/x86_64-pc-windows-msvc/release/pp6.exe and pp6tool.exe
+packaging/build-installer.sh
+# → target/installer/PP6-Setup-<version>-<commit>.exe  (≈40 MB, sha256 printed)
 ```
 
-Or take the `pp6-windows` artifact from CI.
+Commit first: a build with uncommitted changes is stamped `-dirty`. Bump `version` in the
+root `Cargo.toml` for each release that goes to the church. The version and commit show in
+**Settings → General**, at the top of the log, in crash reports and in `pp6.exe --version`.
+
+For a quick test build without the installer:
+`cargo xwin build --release --target x86_64-pc-windows-msvc -p app -p pp6tool`.
 
 ## Install on the show PC
 
-1. Copy `pp6.exe` (and `pp6tool.exe`) into a folder, e.g. `C:\PP6\`.
-2. **For backgrounds/video:** download a libmpv build (e.g. shinchiro *mpv-dev-x86_64* from
-   mpv-winbuild-cmake), and put **`libmpv-2.dll` or `mpv-2.dll`** next to `pp6.exe`. The app loads it at runtime. Without
-   it, slides still work and the operator sees "Video and image backgrounds are unavailable…".
-   No `mpv.lib` is needed (nothing links against mpv at build time).
+1. Copy `PP6-Setup-….exe` over (Google Drive works; Gmail blocks `.exe` attachments) and run
+   it. It installs `pp6.exe`, `pp6tool.exe` and `libmpv-2.dll` to `C:\Program Files\PP6`,
+   adds a Start-menu shortcut (a desktop one is optional), and registers in *Installed apps*.
+   **Updating = running a newer installer**: it replaces the old version in place and offers
+   to close pp6 if it's running. Uninstalling or upgrading never touches settings, playlists
+   or logs. Silent install: `PP6-Setup-….exe /VERYSILENT /SUPPRESSMSGBOXES`.
+2. The installer isn't code-signed yet. With SmartScreen: *More info → Run anyway*. With
+   **Smart App Control on, unsigned apps can't run at all** (see Code signing in PLAN.md).
 3. Install every font the slides use. Find them with:
    `pp6tool.exe report "D:\ProPresenter\Library"` (see the FONTS section).
 4. GPU driver with OpenGL 3.3.
 
-Data locations: settings `%APPDATA%\PP6\config\settings.toml`; logs, crash reports and the
-restore file under `%LOCALAPPDATA%\PP6\data\`; caches under `%LOCALAPPDATA%\PP6\cache\`.
+Data locations: settings `%APPDATA%\PP6\config\settings.toml`; logs, crash reports and
+playlists under `%LOCALAPPDATA%\PP6\data\`; caches under `%LOCALAPPDATA%\PP6\cache\`.
 (Exact folders are printed on startup in the log.) `--data-dir DIR` puts everything in one
 folder instead. In the app, messages and the recent log are under **Settings → Log**; new
 problems show a toast in the bottom-right corner and a warning badge in the toolbar.

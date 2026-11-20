@@ -3,3 +3,4 @@
 *.pending-snap
 *.snap.new
 /pp6-examples/
+/packaging/vendor/

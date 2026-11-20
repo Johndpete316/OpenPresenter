@@ -37,7 +37,7 @@ use crate::thumbs::{ThumbRequest, ThumbResult};
 use crate::ui::{UiAction, UiState};
 
 #[derive(Parser)]
-#[command(version, about = "PP6 replacement")]
+#[command(name = "pp6", version = VERSION, about = "PP6 replacement")]
 struct Args {
     /// Put this presentation's first slide live at startup.
     #[arg(long)]
@@ -143,6 +143,9 @@ fn parse_size(s: &str) -> Result<(u32, u32), String> {
     }
 }
 
+/// Version and the git commit it was built from, e.g. "0.1.0 (851e7e5)".
+pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("PP6_BUILD"), ")");
+
 struct Paths {
     settings: PathBuf,
     logs: PathBuf,
@@ -181,7 +184,7 @@ fn main() -> ExitCode {
     let paths = paths(args.data_dir.clone());
     let crash = crash::init_logging(paths.logs.clone(), args.verbose);
     crash::install_panic_hook(crash.clone());
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), settings = %paths.settings.display(), logs = %paths.logs.display(), "starting");
+    tracing::info!(version = VERSION, settings = %paths.settings.display(), logs = %paths.logs.display(), "starting");
 
     let mut app_notices = Vec::new();
     let mut settings = Settings::load(&paths.settings).unwrap_or_else(|e| {

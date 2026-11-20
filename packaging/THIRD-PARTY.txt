@@ -1,0 +1,11 @@
+PP6 includes the following third-party components.
+
+libmpv-2.dll
+  mpv media player library (https://mpv.io), Windows build by shinchiro
+  (https://github.com/shinchiro/mpv-winbuild-cmake). mpv is licensed under the
+  GNU GPL v2 or later (parts LGPL v2.1 or later); this build also contains FFmpeg
+  and other libraries under their own licences. Source code is available from the
+  projects above.
+
+Phosphor Icons (built into pp6.exe)
+  https://phosphoricons.com, MIT licence, Copyright (c) 2023 Phosphor Icons.

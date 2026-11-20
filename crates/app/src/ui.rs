@@ -1794,6 +1794,7 @@ fn settings_general(
     settings: &Settings,
     actions: &mut Vec<UiAction>,
 ) {
+    ui.weak(format!("PP6 {}", crate::VERSION));
     ui.heading("Output");
     let mut on = show.output_enabled;
     if ui.checkbox(&mut on, "Output enabled").changed() {
