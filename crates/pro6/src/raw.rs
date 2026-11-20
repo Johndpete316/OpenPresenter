@@ -308,14 +308,14 @@ mod tests {
     #[test]
     fn truncated_file_reports_open_path() {
         let err = p("<RVPresentationDocument><array rvXMLIvarName=\"groups\"><x>").unwrap_err();
-        assert!(matches!(err.kind, ParseErrorKind::Xml { .. }), "{err}");
-        assert_eq!(err.xml_path, "RVPresentationDocument/array[groups]/x[0]");
+        assert!(matches!(err.kind(), ParseErrorKind::Xml { .. }), "{err}");
+        assert_eq!(err.xml_path(), "RVPresentationDocument/array[groups]/x[0]");
     }
 
     #[test]
     fn mismatched_end_tag_is_error() {
         let err = p("<a><b></a>").unwrap_err();
-        assert!(matches!(err.kind, ParseErrorKind::Xml { .. }));
+        assert!(matches!(err.kind(), ParseErrorKind::Xml { .. }));
     }
 
     #[test]

@@ -4,10 +4,14 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-/// A failure to read a `.pro6` file.
+/// A failure to read a `.pro6` file. Boxed so `Result<_, ParseError>` stays small.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct ParseError(Box<ParseErrorDetail>);
+
 #[derive(Debug, thiserror::Error)]
 #[error("{file}: {kind} (at {xml_path}{uuid})", file = .file.display(), uuid = UuidSuffix(.uuid.as_deref()))]
-pub struct ParseError {
+pub struct ParseErrorDetail {
     pub file: PathBuf,
     /// Element path such as `RVPresentationDocument/array[groups]/RVSlideGrouping[1]`.
     /// Indices are 0-based among element siblings.
@@ -62,30 +66,44 @@ pub enum ParseErrorKind {
 
 impl ParseError {
     pub(crate) fn new(ctx: &Ctx<'_>, kind: ParseErrorKind) -> Self {
-        let err = ParseError {
+        let d = ParseErrorDetail {
             file: ctx.file.to_path_buf(),
             xml_path: ctx.path.clone(),
             uuid: ctx.uuid.clone(),
             kind,
         };
         tracing::warn!(
-            file = %err.file.display(),
-            xml_path = %err.xml_path,
-            uuid = err.uuid.as_deref().unwrap_or(""),
-            error = %err.kind,
+            file = %d.file.display(),
+            xml_path = %d.xml_path,
+            uuid = d.uuid.as_deref().unwrap_or(""),
+            error = %d.kind,
             "pro6 parse error"
         );
-        err
+        ParseError(Box::new(d))
+    }
+
+    pub fn file(&self) -> &Path {
+        &self.0.file
+    }
+    pub fn xml_path(&self) -> &str {
+        &self.0.xml_path
+    }
+    pub fn uuid(&self) -> Option<&str> {
+        self.0.uuid.as_deref()
+    }
+    pub fn kind(&self) -> &ParseErrorKind {
+        &self.0.kind
     }
 
     /// One plain sentence for the operator, plus what happens next.
     pub fn user_message(&self) -> String {
         let name = self
+            .0
             .file
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.file.display().to_string());
-        let what = match &self.kind {
+            .unwrap_or_else(|| self.0.file.display().to_string());
+        let what = match &self.0.kind {
             ParseErrorKind::Io(e) => match e.kind() {
                 std::io::ErrorKind::NotFound => "the file no longer exists".to_owned(),
                 std::io::ErrorKind::PermissionDenied => {
@@ -121,7 +139,7 @@ impl ParseError {
     fn location_phrase(&self) -> String {
         let mut group = None;
         let mut slide = None;
-        for seg in self.xml_path.split('/') {
+        for seg in self.0.xml_path.split('/') {
             if let Some(i) = index_of(seg, "RVSlideGrouping") {
                 group = Some(i + 1);
             } else if let Some(i) = index_of(seg, "RVDisplaySlide") {
