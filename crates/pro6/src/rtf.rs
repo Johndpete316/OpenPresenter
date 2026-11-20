@@ -254,9 +254,51 @@ const SKIP_DESTINATIONS: &[&str] = &[
 
 /// Control words this reader acts on (not counted as unhandled).
 const HANDLED: &[&str] = &[
-    "rtf", "ansi", "ansicpg", "deff", "fonttbl", "colortbl", "f", "fcharset", "fs", "cf", "b", "i",
-    "ul", "ulnone", "plain", "pard", "par", "line", "tab", "ql", "qc", "qr", "qj", "u", "uc",
-    "red", "green", "blue", "fnil", "froman", "fswiss", "fmodern", "fscript", "fdecor", "ftech",
+    "rtf",
+    "ansi",
+    "ansicpg",
+    "deff",
+    "fonttbl",
+    "colortbl",
+    "f",
+    "fcharset",
+    "fs",
+    "cf",
+    "b",
+    "i",
+    "ul",
+    "ulnone",
+    "plain",
+    "pard",
+    "par",
+    "line",
+    "tab",
+    "ql",
+    "qc",
+    "qr",
+    "qj",
+    "u",
+    "uc",
+    "red",
+    "green",
+    "blue",
+    "rquote",
+    "lquote",
+    "rdblquote",
+    "ldblquote",
+    "emdash",
+    "endash",
+    "bullet",
+    "emspace",
+    "enspace",
+    "qmspace",
+    "fnil",
+    "froman",
+    "fswiss",
+    "fmodern",
+    "fscript",
+    "fdecor",
+    "ftech",
     "fbidi",
 ];
 
@@ -480,6 +522,26 @@ pub fn parse(src: &[u8]) -> Result<RtfDoc, RtfError> {
                         para.align = align; // paragraph props persist until \pard
                     }
                     ("line", _) => emit(&mut doc, &mut para, &st, &mut font_entry, "\n"),
+                    // Typographic symbols (real PP6 files use \rquote for apostrophes).
+                    (
+                        "rquote" | "lquote" | "rdblquote" | "ldblquote" | "emdash" | "endash"
+                        | "bullet" | "emspace" | "enspace" | "qmspace",
+                        _,
+                    ) => {
+                        let ch = match w {
+                            "rquote" => '\u{2019}',
+                            "lquote" => '\u{2018}',
+                            "rdblquote" => '\u{201d}',
+                            "ldblquote" => '\u{201c}',
+                            "emdash" => '\u{2014}',
+                            "endash" => '\u{2013}',
+                            "bullet" => '\u{2022}',
+                            "emspace" => '\u{2003}',
+                            "enspace" => '\u{2002}',
+                            _ => '\u{2005}',
+                        };
+                        emit(&mut doc, &mut para, &st, &mut font_entry, &ch.to_string());
+                    }
                     ("tab", _) => emit(&mut doc, &mut para, &st, &mut font_entry, "\t"),
                     (w, _) => count(&mut doc, w),
                 }
@@ -1022,5 +1084,17 @@ mod tests {
         assert_eq!(out, b"{\\rtf1\\fs1 a}", "font size never reaches 0");
         let (same, none) = scale_sizes(WIN.as_bytes(), 1.0).unwrap();
         assert_eq!((same.as_slice(), none.len()), (WIN.as_bytes(), 0));
+    }
+
+    #[test]
+    fn typographic_symbol_words() {
+        let d = p(
+            r"{\rtf1{\fonttbl{\f0 A;}}\f0 It\rquote s \ldblquote ok\rdblquote  \endash  a\emdash b\bullet}",
+        );
+        assert_eq!(
+            d.plain_text(),
+            "It\u{2019}s \u{201c}ok\u{201d} \u{2013} a\u{2014}b\u{2022}"
+        );
+        assert!(d.unhandled_words.is_empty(), "{:?}", d.unhandled_words);
     }
 }

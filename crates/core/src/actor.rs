@@ -154,6 +154,11 @@ struct Core {
     doc_lru: VecDeque<PathBuf>,
     pending_goto: Option<PendingGoTo>,
     restore_writer: Option<Sender<RestoreState>>,
+    /// Start Loop was asked for while this presentation was still loading.
+    pending_loop: Option<PathBuf>,
+    /// Loop stopped by the operator (Stop / Clear) for this live presentation: don't
+    /// auto-start again until it is put live again or Start Loop is pressed.
+    loop_suppressed: Option<PathBuf>,
 }
 
 impl Core {
@@ -169,6 +174,8 @@ impl Core {
             doc_lru: VecDeque::new(),
             pending_goto: None,
             restore_writer: config.restore_writer,
+            pending_loop: None,
+            loop_suppressed: None,
         };
         if let Some(r) = config.restore {
             core.apply_restore(r);
@@ -349,6 +356,10 @@ impl Core {
                 Arc::make_mut(&mut self.s.docs).insert(path.clone(), doc);
                 self.touch(&path);
                 self.evict();
+                if self.pending_loop.as_ref() == Some(&path) {
+                    self.pending_loop = None;
+                    self.start_loop(Instant::now());
+                }
                 if self.pending_goto.as_ref().is_some_and(|p| p.path == path)
                     && let Some(p) = self.pending_goto.take()
                 {
@@ -405,18 +416,18 @@ impl Core {
             Command::Prev => self.step(false, at),
             Command::ClearText => {
                 self.s.text_visible = false;
-                self.stop_loop("Loop stopped (cleared).");
+                self.stop_loop_by_operator("Loop stopped (cleared).");
             }
             Command::ClearBackground => {
                 self.s.background_visible = false;
                 self.s.background_media = None;
-                self.stop_loop("Loop stopped (cleared).");
+                self.stop_loop_by_operator("Loop stopped (cleared).");
             }
             Command::ClearAll => {
                 self.s.text_visible = false;
                 self.s.background_visible = false;
                 self.s.background_media = None;
-                self.stop_loop("Loop stopped (cleared).");
+                self.stop_loop_by_operator("Loop stopped (cleared).");
             }
             Command::SetBackground { media, next } => {
                 if media.is_some() {
@@ -525,7 +536,7 @@ impl Core {
                 ),
             },
             Command::StartLoop => self.start_loop(at),
-            Command::StopLoop => self.stop_loop("Loop stopped."),
+            Command::StopLoop => self.stop_loop_by_operator("Loop stopped."),
             Command::Revert(path) => {
                 Arc::make_mut(&mut self.s.unsaved).remove(&path);
                 Arc::make_mut(&mut self.s.docs).remove(&path);
@@ -605,40 +616,46 @@ impl Core {
                 return;
             }
         };
+        self.loop_suppressed = None;
         let Some(doc) = self.s.docs.get(&path).cloned() else {
-            self.notice(
-                NoticeLevel::Warning,
-                format!(
-                    "'{}' isn't loaded yet; try again in a moment.",
-                    path.display()
-                ),
-            );
+            // Still loading: start as soon as it's ready.
+            self.request_load(&path);
+            self.pending_loop = Some(path);
             return;
         };
         let Some(timings) = doc.slide_timings() else {
             self.notice(
                 NoticeLevel::Warning,
                 format!(
-                    "'{}' has no slide timing this version can read, so it can't loop on its own yet. Slides can still be advanced by hand.",
+                    "'{}' has no slide timers, so it can't loop on its own. Slides can still be advanced by hand.",
                     path.display()
                 ),
             );
             return;
         };
-        tracing::info!(path = %path.display(), slides_timed = timings.durations.len(), wrap = timings.wrap, "loop started");
-        if !self.s.is_live(&path) {
-            let Some(first) = self.s.order_for(&path).and_then(|o| next_enabled(&o, None)) else {
-                return;
-            };
-            self.go_live(&path, first, Some(at));
+        if self.s.looping.as_ref().is_some_and(|l| l.path == path) {
+            return;
         }
+        tracing::info!(path = %path.display(), timers = timings.timers.len(), "loop started");
         self.s.looping = Some(crate::state::LoopState {
-            path,
+            path: path.clone(),
             timings: Arc::new(timings),
             next_at: None,
             slide_duration: None,
+            loops_back: false,
         });
-        self.restart_loop_timer();
+        if self.s.is_live(&path) {
+            self.restart_loop_timer();
+        } else if let Some(first) = self.s.order_for(&path).and_then(|o| next_enabled(&o, None)) {
+            self.go_live(&path, first, Some(at));
+        }
+    }
+
+    fn stop_loop_by_operator(&mut self, why: &str) {
+        if let Some(l) = self.s.looping.as_ref() {
+            self.loop_suppressed = Some(l.path.clone());
+        }
+        self.stop_loop(why);
     }
 
     fn stop_loop(&mut self, why: &str) {
@@ -657,7 +674,9 @@ impl Core {
             .map(|s| s.uuid.clone())
             .unwrap_or_default();
         if let Some(l) = self.s.looping.as_mut().filter(|l| l.path == live.path) {
-            l.slide_duration = l.timings.durations.get(&uuid).copied();
+            let timer = l.timings.timers.get(&uuid).copied();
+            l.slide_duration = timer.map(|t| t.duration);
+            l.loops_back = timer.is_some_and(|t| t.loop_to_beginning);
             l.next_at = l.slide_duration.map(|d| Instant::now() + d);
         }
     }
@@ -671,19 +690,18 @@ impl Core {
             self.stop_loop("Loop stopped.");
             return;
         };
-        let target = next_enabled(&live.order, live.position).or_else(|| {
-            if l.timings.wrap {
-                next_enabled(&live.order, None)
-            } else {
-                None
-            }
-        });
+        // "Go to Next", or back to the first slide after a loopToBeginning slide.
+        let target = if l.loops_back {
+            next_enabled(&live.order, None)
+        } else {
+            next_enabled(&live.order, live.position)
+        };
         match target {
             Some(t) => {
                 tracing::debug!(position = t, "loop advance");
                 self.go_live(&live.path, t, Some(Instant::now()));
             }
-            None => self.stop_loop("Loop finished (the timeline doesn't repeat)."),
+            None => self.stop_loop("Loop finished (the last slide doesn't loop back)."),
         }
     }
 
@@ -724,6 +742,10 @@ impl Core {
         if self.s.looping.as_ref().is_some_and(|l| &l.path != path) {
             self.stop_loop("Loop stopped: another presentation went live.");
         }
+        // Put live (again) from elsewhere: an earlier Stop/Clear no longer applies.
+        if !self.s.is_live(path) {
+            self.loop_suppressed = None;
+        }
         let arrangement = self.s.arrangement_for(path);
         let order = Arc::new(slide_order(&doc, arrangement.as_deref()));
         let Some(&slide) = order.get(position) else {
@@ -745,6 +767,20 @@ impl Core {
             slide,
         });
         self.s.text_visible = true;
+        // Timed presentations loop on their own, like PP6 (unless the operator stopped it).
+        if self.s.looping.is_none()
+            && self.loop_suppressed.as_ref() != Some(path)
+            && let Some(timings) = self.s.live.as_ref().and_then(|l| l.doc.slide_timings())
+        {
+            tracing::info!(path = %path.display(), timers = timings.timers.len(), "loop started (slide timers)");
+            self.s.looping = Some(crate::state::LoopState {
+                path: path.clone(),
+                timings: Arc::new(timings),
+                next_at: None,
+                slide_duration: None,
+                loops_back: false,
+            });
+        }
         // While looping, every slide change (operator or timer) restarts the timer for it.
         self.restart_loop_timer();
         self.touch(path);

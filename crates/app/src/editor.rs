@@ -133,7 +133,8 @@ pub fn grid_edit(
             for (gi, group) in doc.groups().iter().enumerate() {
                 group_header(ui, st, actions, path, gi, group, n_groups);
                 let spacing = ui.spacing().item_spacing.x;
-                let per_row = (((ui.available_width() + spacing) / (TILE_W as f32 + spacing))
+                let per_row = (((ui.available_width().min(ui.clip_rect().width()) + spacing)
+                    / (TILE_W as f32 + spacing))
                     .floor() as usize)
                     .max(1);
                 let n = group.slides().len();

@@ -81,6 +81,9 @@ struct Args {
     /// With --capture: wait this long after the first slide before capturing.
     #[arg(long, default_value_t = 0)]
     capture_delay_ms: u64,
+    /// Start the loop (auto-advance) after --open (development / testing).
+    #[arg(long)]
+    start_loop: bool,
     /// Start the grid in edit mode, optionally with slide GROUP:SLIDE selected (0-based).
     #[arg(long)]
     edit_mode: bool,
@@ -280,6 +283,9 @@ fn main() -> ExitCode {
             presentation: p.clone(),
             position: 0,
         });
+    }
+    if args.start_loop {
+        core.send(Command::StartLoop);
     }
 
     let mut remote = None;

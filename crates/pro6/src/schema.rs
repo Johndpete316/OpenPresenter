@@ -1,5 +1,6 @@
-//! What the unofficial spec documents. Anything outside these lists is still
-//! parsed and preserved, but reported as "unknown" by `pp6tool report`.
+//! What the unofficial spec documents, plus what has been seen in real PP6 files
+//! (marked below). Anything outside these lists is still parsed and preserved, but
+//! reported as "unknown" by `pp6tool report`.
 
 /// Elements described by the spec.
 pub const KNOWN_ELEMENTS: &[&str] = &[
@@ -15,6 +16,11 @@ pub const KNOWN_ELEMENTS: &[&str] = &[
     "NSColor",
     "NSNumber",
     "NSString",
+    // Seen in real PP6 files (2026-11-20):
+    "RVSongArrangement",
+    "RVSlideTimerCue",
+    "RVImageElement",
+    "RVTransition",
 ];
 
 pub fn is_known_element(name: &str) -> bool {
@@ -42,6 +48,12 @@ pub fn known_attrs(element: &str) -> Option<&'static [&'static str]> {
             "chordChartPath",
             "os",
             "buildNumber",
+            // Seen in real files:
+            "CCLIAuthor",
+            "CCLIArtistCredits",
+            "CCLIPublisher",
+            "CCLICopyrightYear",
+            "CCLISongNumber",
         ],
         "RVTimeline" => &[
             "timeOffset",
@@ -83,7 +95,58 @@ pub fn known_attrs(element: &str) -> Option<&'static [&'static str]> {
             "revealType",
         ],
         "array" | "RVRect3D" | "shadow" | "dictionary" | "NSString" => &["rvXMLIvarName"],
-        "NSColor" | "NSNumber" => &["rvXMLDictionaryKey"],
+        "NSColor" => &["rvXMLDictionaryKey"],
+        "NSNumber" => &["rvXMLDictionaryKey", "hint"],
+        // Seen in real files:
+        "RVSongArrangement" => &["name", "uuid", "color"],
+        "RVSlideTimerCue" => &[
+            "UUID",
+            "displayName",
+            "actionType",
+            "enabled",
+            "timeStamp",
+            "delayTime",
+            "loopToBeginning",
+            "duration",
+        ],
+        "RVImageElement" => &[
+            "displayName",
+            "UUID",
+            "typeID",
+            "displayDelay",
+            "locked",
+            "persistent",
+            "fromTemplate",
+            "opacity",
+            "source",
+            "bezelRadius",
+            "rotation",
+            "drawingFill",
+            "drawingShadow",
+            "drawingStroke",
+            "fillColor",
+            "scaleBehavior",
+            "flippedHorizontally",
+            "flippedVertically",
+            "scaleSize",
+            "imageOffset",
+            "manufactureURL",
+            "manufactureName",
+            "format",
+        ],
+        "RVTransition" => &[
+            "transitionType",
+            "transitionDirection",
+            "transitionDuration",
+            "motionEnabled",
+            "motionDuration",
+            "motionSpeed",
+            "groupIndex",
+            "orderIndex",
+            "slideBuildAction",
+            "slideBuildDelay",
+            "rvXMLIvarName",
+        ],
         _ => return None,
     })
 }

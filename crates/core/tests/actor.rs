@@ -508,37 +508,37 @@ fn edits_follow_the_live_slide_save_and_revert() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// The synthetic announcements fixture with all times divided by 10 (0.3 s, 0.5 s, 0.4 s slides).
-fn fast_announcements(dir: &std::path::Path, wrap: bool) -> PathBuf {
+/// The announcements fixture with slide timers divided by 10 (0.3 s, 0.5 s, 0.4 s, 0.4 s).
+fn fast_announcements(dir: &std::path::Path, loops_back: bool) -> PathBuf {
     let src = std::fs::read_to_string(fixture("announcements_synthetic.pro6")).unwrap();
-    let fast = src
-        .replace(r#"timeStamp="3""#, r#"timeStamp="0.3""#)
-        .replace(r#"timeStamp="8""#, r#"timeStamp="0.8""#)
-        .replace(r#"timeStamp="9""#, r#"timeStamp="0.9""#)
-        .replace(r#"duration="12""#, r#"duration="1.2""#)
-        .replace(
-            r#"loop="true""#,
-            if wrap {
-                r#"loop="true""#
-            } else {
-                r#"loop="false""#
-            },
-        );
+    let mut fast = src
+        .replace(r#"duration="3""#, r#"duration="0.3""#)
+        .replace(r#"duration="5""#, r#"duration="0.5""#)
+        .replace(r#"duration="4""#, r#"duration="0.4""#);
+    if !loops_back {
+        fast = fast.replace(r#"loopToBeginning="true""#, r#"loopToBeginning="false""#);
+    }
     std::fs::create_dir_all(dir).unwrap();
-    let p = dir.join(if wrap { "ann.pro6" } else { "ann-once.pro6" });
+    let p = dir.join(if loops_back {
+        "ann.pro6"
+    } else {
+        "ann-once.pro6"
+    });
     std::fs::write(&p, fast).unwrap();
     p
 }
 
 #[test]
-fn loop_advances_on_its_own_skips_disabled_and_wraps() {
+fn timed_presentation_loops_on_its_own_skips_disabled_and_loops_back() {
     let dir = std::env::temp_dir().join(format!("pp6core-loop-{}", std::process::id()));
     let ann = fast_announcements(&dir, true);
     let (core, rx) = start(CoreConfig::default());
-    core.send(Command::Open(ann.clone()));
-    wait(&rx, "loaded", |s| s.docs.contains_key(&ann));
     let t0 = std::time::Instant::now();
-    core.send(Command::StartLoop);
+    // Going live is enough: slide timers start the loop, like PP6.
+    core.send(Command::GoTo {
+        presentation: ann.clone(),
+        position: 0,
+    });
     let s = wait(&rx, "looping", |s| s.looping.is_some() && pos(s) == Some(0));
     assert_eq!(
         s.looping.as_ref().unwrap().slide_duration,
@@ -550,17 +550,18 @@ fn loop_advances_on_its_own_skips_disabled_and_wraps() {
     };
     let (_, t1) = at(1);
     assert!(
-        t1 >= Duration::from_millis(290) && t1 < Duration::from_millis(600),
+        t1 >= Duration::from_millis(290) && t1 < Duration::from_millis(650),
         "{t1:?}"
     );
-    let (_, t2) = at(3); // position 2 is disabled
+    let (s, t2) = at(3); // position 2 is disabled
     assert!(
-        t2 >= Duration::from_millis(790) && t2 < Duration::from_millis(1200),
+        t2 >= Duration::from_millis(790) && t2 < Duration::from_millis(1250),
         "{t2:?}"
     );
-    let (s, t3) = at(0); // wraps: RVTimeline loop="true"
+    assert!(s.looping.as_ref().unwrap().loops_back);
+    let (s, t3) = at(0); // last slide has loopToBeginning="true"
     assert!(
-        t3 >= Duration::from_millis(1190) && t3 < Duration::from_millis(1700),
+        t3 >= Duration::from_millis(1190) && t3 < Duration::from_millis(1750),
         "{t3:?}"
     );
     assert!(s.looping.is_some());
@@ -581,9 +582,10 @@ fn loop_rules_next_restarts_clear_stops_other_live_stops_select_keeps() {
         s.docs.contains_key(&ann) && s.docs.contains_key(&song)
     });
 
-    // Next/Prev step as usual and restart the timer for the slide they land on.
+    // Start Loop with nothing live puts the presentation live and loops.
     core.send(Command::StartLoop);
-    wait(&rx, "looping", |s| s.looping.is_some());
+    wait(&rx, "looping", |s| s.looping.is_some() && s.is_live(&ann));
+    // Next/Prev step as usual and restart the timer for the slide they land on.
     core.send(Command::Next);
     let s = wait(&rx, "next", |s| pos(s) == Some(1));
     let l = s.looping.as_ref().unwrap();
@@ -617,18 +619,25 @@ fn loop_rules_next_restarts_clear_stops_other_live_stops_select_keeps() {
             .contains("another presentation went live")
     );
 
-    // Clear stops it too.
+    // Coming back starts it again; Clear stops it, and Next doesn't restart it.
     core.send(Command::GoTo {
         presentation: ann.clone(),
         position: 0,
     });
-    core.send(Command::StartLoop);
-    wait(&rx, "looping again", |s| s.looping.is_some());
+    wait(&rx, "looping again", |s| {
+        s.looping.is_some() && s.is_live(&ann)
+    });
     core.send(Command::ClearText);
     let s = wait(&rx, "cleared", |s| !s.text_visible);
     assert!(s.looping.is_none());
+    core.send(Command::Next);
+    let s = wait(&rx, "next after clear", |s| pos(s) == Some(1));
+    assert!(s.looping.is_none(), "a cleared loop stays stopped");
+    core.send(Command::StartLoop);
+    let s = wait(&rx, "resumed", |s| s.looping.is_some());
+    assert!(s.looping.as_ref().unwrap().next_at.is_some());
 
-    // No timing in the file: refuses with a clear message.
+    // No timers: refuses with a clear message.
     core.send(Command::GoTo {
         presentation: song.clone(),
         position: 0,
@@ -637,26 +646,23 @@ fn loop_rules_next_restarts_clear_stops_other_live_stops_select_keeps() {
     let s = wait(&rx, "refused", |s| {
         s.notices
             .last()
-            .is_some_and(|n| n.text.contains("no slide timing"))
+            .is_some_and(|n| n.text.contains("no slide timers"))
     });
     assert!(s.looping.is_none());
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
-fn non_repeating_timeline_stops_at_the_end() {
+fn start_loop_waits_for_loading_and_stops_at_end_without_loop_back() {
     let dir = std::env::temp_dir().join(format!("pp6core-loop-once-{}", std::process::id()));
     let ann = fast_announcements(&dir, false);
     let (core, rx) = start(CoreConfig::default());
-    core.send(Command::GoTo {
-        presentation: ann.clone(),
-        position: 3,
-    });
-    wait(&rx, "last slide", |s| pos(s) == Some(3));
+    // Start Loop before the file is loaded: starts once it is.
+    core.send(Command::Open(ann.clone()));
     core.send(Command::StartLoop);
-    wait(&rx, "looping", |s| s.looping.is_some());
+    wait(&rx, "looping", |s| s.looping.is_some() && pos(s) == Some(0));
     let s = wait(&rx, "finished", |s| s.looping.is_none());
-    assert_eq!(pos(&s), Some(3), "doesn't wrap");
+    assert_eq!(pos(&s), Some(3), "stays on the last slide");
     assert!(s.notices.last().unwrap().text.contains("Loop finished"));
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -145,8 +145,9 @@ pub fn draw(
     egui::Panel::right("right")
         .resizable(true)
         .default_size(PREVIEW_W as f32 + 24.0)
+        .size_range(PREVIEW_W as f32 + 16.0..=PREVIEW_W as f32 * 2.0)
         .show(ui, |ui| {
-            preview(ui, st, show, thumbs);
+            preview(ui, st, show, thumbs, &mut actions);
             ui.separator();
             media_bin(ui, st, show, settings, &mut actions);
         });
@@ -523,10 +524,12 @@ fn grid(
             .is_some_and(|t| t.time_cue_count() + t.media_track_count() > 0)
             || doc.slides().any(|s| s.cue_count() > 0)
         {
-            ui.colored_label(
-                Color32::YELLOW,
-                "! media cues / auto-advance not supported yet",
-            );
+            let msg = if doc.slide_timings().is_some() {
+                "! slide timing read with an unverified format; media cues not supported yet"
+            } else {
+                "! media cues / auto-advance not supported yet"
+            };
+            ui.colored_label(Color32::YELLOW, msg);
         }
     });
     let order: Vec<SlideRef> = pp6core::slide_order(&doc, arrangement.as_deref());
@@ -551,8 +554,9 @@ fn grid(
                 });
             });
             let spacing = ui.spacing().item_spacing.x;
-            let per_row = (((ui.available_width() + spacing) / (TILE_W as f32 + spacing)).floor()
-                as usize)
+            let per_row = (((ui.available_width().min(ui.clip_rect().width()) + spacing)
+                / (TILE_W as f32 + spacing))
+                .floor() as usize)
                 .max(1);
             let positions: Vec<usize> = (i..end).collect();
             for row in positions.chunks(per_row) {
@@ -602,8 +606,15 @@ fn grid(
     });
 }
 
-fn preview(ui: &mut egui::Ui, st: &mut UiState, show: &ShowState, thumbs: &Sender<ThumbRequest>) {
+fn preview(
+    ui: &mut egui::Ui,
+    st: &mut UiState,
+    show: &ShowState,
+    thumbs: &Sender<ThumbRequest>,
+    actions: &mut Vec<UiAction>,
+) {
     ui.heading("Preview");
+    loop_panel(ui, show, actions);
     let Some(l) = &show.live else {
         let (r, _) = ui.allocate_exact_size(
             Vec2::new(PREVIEW_W as f32, PREVIEW_W as f32 * 0.75),
@@ -639,6 +650,75 @@ fn preview(ui: &mut egui::Ui, st: &mut UiState, show: &ShowState, thumbs: &Sende
         let small_h = PREVIEW_W as f32 / 2.0 * doc.canvas.height as f32 / doc.canvas.width as f32;
         let (_, tex) = st.thumb(thumbs, &doc, flat, PREVIEW_W / 2);
         tile_image(ui, tex, Vec2::new(PREVIEW_W as f32 / 2.0, small_h));
+    }
+}
+
+/// Loop indicator + Start/Stop, shown near the preview.
+fn loop_panel(ui: &mut egui::Ui, show: &ShowState, actions: &mut Vec<UiAction>) {
+    if let Some(l) = &show.looping {
+        egui::Frame::new()
+            .stroke(Stroke::new(2.0, Color32::from_rgb(255, 150, 30)))
+            .fill(Color32::from_rgb(50, 32, 10))
+            .inner_margin(6.0)
+            .corner_radius(4.0)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("LOOP RUNNING")
+                            .strong()
+                            .color(Color32::from_rgb(255, 170, 60)),
+                    );
+                    let left = match l.next_at {
+                        Some(t) => {
+                            let secs = t
+                                .saturating_duration_since(std::time::Instant::now())
+                                .as_secs_f32();
+                            format!("next slide in {:.0} s", secs.ceil())
+                        }
+                        None => "this slide has no stored time: waiting".to_owned(),
+                    };
+                    ui.label(left);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Stop loop").clicked() {
+                            actions.push(UiAction::Core(Command::StopLoop));
+                        }
+                    });
+                });
+                ui.label(RichText::new(title(&l.path)).small().weak());
+            });
+        // Keep the countdown moving.
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(250));
+        return;
+    }
+    let candidate = show
+        .live
+        .as_ref()
+        .map(|l| l.path.clone())
+        .or_else(|| show.selected.clone());
+    if let Some(path) = candidate
+        && show
+            .docs
+            .get(&path)
+            .is_some_and(|d| d.slide_timings().is_some())
+    {
+        ui.horizontal(|ui| {
+            if ui
+                .button("Start loop")
+                .on_hover_text("Advance on its own using the slide timing stored in the file")
+                .clicked()
+            {
+                actions.push(UiAction::Core(Command::StartLoop));
+            }
+            ui.label(
+                RichText::new(format!(
+                    "{} has slide timing (format unverified)",
+                    title(&path)
+                ))
+                .small()
+                .weak(),
+            );
+        });
     }
 }
 

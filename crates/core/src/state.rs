@@ -33,6 +33,8 @@ pub struct LoopState {
     pub next_at: Option<Instant>,
     /// How long the current slide stays up.
     pub slide_duration: Option<std::time::Duration>,
+    /// After the current slide, go back to the first slide (`loopToBeginning`).
+    pub loops_back: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,21 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- SYNTHETIC FIXTURE for M8. The timeCues structure (SyntheticTimeCue with timeStamp + a slide UUID) is an
-     ASSUMPTION used to exercise the tolerant timing reader; it is NOT verified PP6 XML. -->
+<!-- M8 fixture. Slide text is invented; the timer structure (RVSlideTimerCue in each slide's cues, last slide
+     loopToBeginning="true", empty timeline) matches real PP6 files (verified 2026-11-20). -->
 <RVPresentationDocument height="768" width="1024" docType="0" versionNumber="600" usedCount="0" backgroundColor="0 0 0 1" drawingBackgroundColor="false" CCLIDisplay="false" lastDateUsed="" selectedArrangementID="" category="Presentation" resourcesDirectory="" notes="" CCLISongTitle="" chordChartPath="" os="1" buildNumber="6016">
-  <RVTimeline timeOffset="0" duration="12" selectedMediaTrackIndex="-1" loop="true" rvXMLIvarName="timeline">
-    <array rvXMLIvarName="timeCues">
-      <SyntheticTimeCue timeStamp="0" slideUUID="A0000000-0005-4000-8000-000000000001" />
-      <SyntheticTimeCue timeStamp="3"><NSString rvXMLIvarName="slideUUID">A0000000-0005-4000-8000-000000000002</NSString></SyntheticTimeCue>
-      <SyntheticTimeCue timeStamp="8" slideUUID="A0000000-0005-4000-8000-000000000004" />
-      <SyntheticTimeCue timeStamp="9" slideUUID="not-a-slide" />
-    </array>
+  <RVTimeline timeOffset="0" duration="0" selectedMediaTrackIndex="-1" loop="false" rvXMLIvarName="timeline">
+    <array rvXMLIvarName="timeCues" />
     <array rvXMLIvarName="mediaTracks" />
   </RVTimeline>
   <array rvXMLIvarName="groups">
     <RVSlideGrouping name="Announcements" uuid="B0000000-0005-4000-8000-000000000001" color="1 0.6 0 1">
       <array rvXMLIvarName="slides">
         <RVDisplaySlide backgroundColor="0 0 0 1" highlightColor="" drawingBackgroundColor="false" enabled="true" hotKey="" label="" notes="" UUID="A0000000-0005-4000-8000-000000000001" chordChartPath="">
-          <array rvXMLIvarName="cues" />
+          <array rvXMLIvarName="cues">
+            <RVSlideTimerCue UUID="C0000000-0005-4000-8000-000000000001" displayName="Go to Next" actionType="9" enabled="1" timeStamp="0" delayTime="0" loopToBeginning="false" duration="3" />
+          </array>
           <array rvXMLIvarName="displayElements">
             <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000001" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="1" revealType="0">
               <RVRect3D rvXMLIvarName="position">{112 84 0 800 600}</RVRect3D>
@@ -25,7 +22,9 @@
           </array>
         </RVDisplaySlide>
         <RVDisplaySlide backgroundColor="0 0 0 1" highlightColor="" drawingBackgroundColor="false" enabled="true" hotKey="" label="" notes="" UUID="A0000000-0005-4000-8000-000000000002" chordChartPath="">
-          <array rvXMLIvarName="cues" />
+          <array rvXMLIvarName="cues">
+            <RVSlideTimerCue UUID="C0000000-0005-4000-8000-000000000002" displayName="Go to Next" actionType="9" enabled="1" timeStamp="0" delayTime="0" loopToBeginning="false" duration="5" />
+          </array>
           <array rvXMLIvarName="displayElements">
             <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000002" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="1" revealType="0">
               <RVRect3D rvXMLIvarName="position">{112 84 0 800 600}</RVRect3D>
@@ -35,7 +34,9 @@
           </array>
         </RVDisplaySlide>
         <RVDisplaySlide backgroundColor="0 0 0 1" highlightColor="" drawingBackgroundColor="false" enabled="false" hotKey="" label="" notes="" UUID="A0000000-0005-4000-8000-000000000003" chordChartPath="">
-          <array rvXMLIvarName="cues" />
+          <array rvXMLIvarName="cues">
+            <RVSlideTimerCue UUID="C0000000-0005-4000-8000-000000000003" displayName="Go to Next" actionType="9" enabled="1" timeStamp="0" delayTime="0" loopToBeginning="false" duration="4" />
+          </array>
           <array rvXMLIvarName="displayElements">
             <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000003" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="1" revealType="0">
               <RVRect3D rvXMLIvarName="position">{112 84 0 800 600}</RVRect3D>
@@ -45,7 +46,9 @@
           </array>
         </RVDisplaySlide>
         <RVDisplaySlide backgroundColor="0 0 0 1" highlightColor="" drawingBackgroundColor="false" enabled="true" hotKey="" label="" notes="" UUID="A0000000-0005-4000-8000-000000000004" chordChartPath="">
-          <array rvXMLIvarName="cues" />
+          <array rvXMLIvarName="cues">
+            <RVSlideTimerCue UUID="C0000000-0005-4000-8000-000000000004" displayName="Go to Next" actionType="9" enabled="1" timeStamp="0" delayTime="0" loopToBeginning="true" duration="4" />
+          </array>
           <array rvXMLIvarName="displayElements">
             <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000004" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="1" revealType="0">
               <RVRect3D rvXMLIvarName="position">{112 84 0 800 600}</RVRect3D>

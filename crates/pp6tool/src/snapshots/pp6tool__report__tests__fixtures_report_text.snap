@@ -55,8 +55,8 @@ ELEMENTS AND ATTRIBUTES (count; * = not in spec; includes files that failed afte
       @rvXMLDictionaryKey  11
   <NSNumber>  11
       @rvXMLDictionaryKey  11
-  <NSString>  46
-      @rvXMLIvarName  39
+  <NSString>  45
+      @rvXMLIvarName  38
   <RVDisplaySlide>  20
       @UUID  20
       @backgroundColor  16
@@ -95,10 +95,19 @@ ELEMENTS AND ATTRIBUTES (count; * = not in spec; includes files that failed afte
       @futureGroupAttr  1  *
       @name  12
       @uuid  12
-  <RVSongArrangement>  2  *
-      @color  2  *
-      @name  2  *
-      @uuid  2  *
+  <RVSlideTimerCue>  4
+      @UUID  4
+      @actionType  4
+      @delayTime  4
+      @displayName  4
+      @duration  4
+      @enabled  4
+      @loopToBeginning  4
+      @timeStamp  4
+  <RVSongArrangement>  2
+      @color  2
+      @name  2
+      @uuid  2
   <RVTextElement>  20
       @UUID  20
       @adjustsHeightToFit  16
@@ -142,9 +151,9 @@ ELEMENTS AND ATTRIBUTES (count; * = not in spec; includes files that failed afte
   <SyntheticMediaTrack>  1  *
       @path  1  *
   <SyntheticRootChild>  1  *
-  <SyntheticTimeCue>  5  *
-      @slideUUID  4  *
-      @timeStamp  5  *
+  <SyntheticTimeCue>  1  *
+      @slideUUID  1  *
+      @timeStamp  1  *
   <array>  76
       @rvXMLIvarName  76
   <dictionary>  11
@@ -159,7 +168,7 @@ UNHANDLED RTF CONTROL WORDS (count)
   \tx  1
 
 FILES WITH MEDIA / CUES (not supported until M8)
-  announcements_synthetic.pro6  slide cues 0, timeCues 4, mediaTracks 0
+  announcements_synthetic.pro6  slide cues 4, timeCues 0, mediaTracks 0
   unknowns.pro6  slide cues 1, timeCues 1, mediaTracks 1
 
 DISABLED SLIDES: 2

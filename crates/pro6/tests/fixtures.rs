@@ -345,32 +345,37 @@ fn arrangements_view() {
 }
 
 #[test]
-fn slide_timings_from_timeline_cues() {
+fn slide_timers_from_slide_cues() {
     use std::time::Duration;
     let doc = load("announcements_synthetic.pro6");
     let t = doc.slide_timings().unwrap();
-    assert!(t.wrap);
-    assert_eq!(
-        (t.cues, t.unreadable),
-        (3, 1),
-        "the cue pointing at no slide is counted, not guessed"
-    );
-    let d = |n: u32| {
-        t.durations
+    let get = |n: u32| {
+        t.timers
             .get(&format!("A0000000-0005-4000-8000-00000000000{n}"))
             .copied()
+            .unwrap()
     };
-    assert_eq!(d(1), Some(Duration::from_secs(3)));
-    assert_eq!(
-        d(2),
-        Some(Duration::from_secs(5)),
-        "nested NSString reference"
-    );
-    assert_eq!(d(3), None, "disabled slide has no cue");
-    assert_eq!(
-        d(4),
-        Some(Duration::from_secs(4)),
-        "last cue runs to the timeline duration"
-    );
+    assert_eq!(get(1).duration, Duration::from_secs(3));
+    assert_eq!(get(2).duration, Duration::from_secs(5));
+    assert!(!get(3).loop_to_beginning);
+    assert!(get(4).loop_to_beginning, "last slide loops back");
+    assert_eq!((t.other_cues, t.with_delay), (0, 0));
     assert!(load("song_1024x768.pro6").slide_timings().is_none());
+    // The synthetic cue in unknowns.pro6 isn't a timer: counted, not used.
+    assert!(load("unknowns.pro6").slide_timings().is_none());
+}
+
+/// Real PP6 files (not in the repo; put them in `pp6-examples/` to run this).
+#[test]
+fn real_welcome_file_timers() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../pp6-examples/AA001 Welcome.pro6");
+    if !path.exists() {
+        eprintln!("pp6-examples not present; skipping");
+        return;
+    }
+    let doc = pro6::load(&path).unwrap();
+    let t = doc.slide_timings().unwrap();
+    assert_eq!(t.timers.len(), 14);
+    assert_eq!(t.timers.values().filter(|x| x.loop_to_beginning).count(), 1);
 }

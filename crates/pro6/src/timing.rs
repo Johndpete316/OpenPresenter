@@ -1,106 +1,73 @@
-//! Per-slide auto-advance timing.
+//! Per-slide auto-advance timers.
 //!
-//! **Assumed, unverified** (docs/PLAN.md Unknowns; needs the real Announcements
-//! file): timing lives in `RVTimeline`'s `timeCues`. Each cue carries a
-//! `timeStamp` attribute (seconds) and, somewhere below it (an attribute value
-//! or an `NSString`), the UUID of the slide it triggers. A slide's duration is
-//! the gap to the next cue; the last slide runs until the timeline `duration`.
-//! The reading is tolerant (element names aren't checked) and anything it can't
-//! interpret is counted, never guessed.
+//! **Verified against real PP6 files** (2026-11-20, `AA001 Welcome.pro6`): each
+//! slide's `cues` array holds an
+//! `<RVSlideTimerCue displayName="Go to Next" actionType="9" enabled="1" timeStamp="0"
+//! delayTime="0" loopToBeginning="false" duration="10" />`. The slide stays up for
+//! `duration` seconds and then goes to the next slide; with `loopToBeginning="true"`
+//! (set on the last slide) it goes back to the first slide instead. The timeline
+//! (`RVTimeline`) is empty in that file.
+//!
+//! Only enabled "Go to Next" timers (`actionType="9"`) are used. `delayTime` was 0
+//! in every sample, so its meaning is unverified; a non-zero value is reported.
+//! Other cue types are counted, never guessed.
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::model::Document;
-use crate::raw::{RawElement, RawNode};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SlideTimer {
+    pub duration: Duration,
+    /// After this slide, go back to the first slide instead of the next.
+    pub loop_to_beginning: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SlideTimings {
-    /// Slide UUID → how long it stays up before advancing.
-    pub durations: HashMap<String, Duration>,
-    /// `RVTimeline@loop`: wrap from the last slide back to the first.
-    pub wrap: bool,
-    /// Cues that were understood (time + slide).
-    pub cues: usize,
-    /// Cues without a usable time or slide reference.
-    pub unreadable: usize,
+    /// Slide UUID → its timer.
+    pub timers: HashMap<String, SlideTimer>,
+    /// Cues that aren't enabled "Go to Next" timers (other cue types, disabled, bad values).
+    pub other_cues: usize,
+    /// Timers with a non-zero `delayTime` (meaning unverified; the delay is not applied).
+    pub with_delay: usize,
 }
 
 impl Document {
-    /// Auto-advance timing, if the timeline has any this reader understands.
+    /// Slide timers, if any slide has one.
     pub fn slide_timings(&self) -> Option<SlideTimings> {
-        let tl = self.timeline.as_ref()?;
-        let cues = tl.extra.find_ivar("timeCues")?;
-        let slide_ids: Vec<&str> = self
-            .slides()
-            .map(|s| s.uuid.as_str())
-            .filter(|u| !u.is_empty())
-            .collect();
-        let mut points: Vec<(f64, String)> = Vec::new();
-        let mut unreadable = 0;
-        for (_, cue) in cues.elements() {
-            let time = cue
-                .attr("timeStamp")
-                .and_then(|a| a.raw_value.trim().parse::<f64>().ok())
-                .filter(|t| t.is_finite() && *t >= 0.0);
-            let slide = find_slide_ref(cue, &slide_ids);
-            match (time, slide) {
-                (Some(t), Some(s)) => points.push((t, s)),
-                _ => unreadable += 1,
-            }
-        }
-        if points.is_empty() {
-            return None;
-        }
-        points.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut durations = HashMap::new();
-        for (i, (t, uuid)) in points.iter().enumerate() {
-            let end = points.get(i + 1).map_or(tl.duration, |n| n.0);
-            let d = end - t;
-            if d > 0.0 {
-                durations
-                    .entry(uuid.clone())
-                    .or_insert(Duration::from_secs_f64(d));
-            }
-        }
-        if durations.is_empty() {
-            return None;
-        }
-        Some(SlideTimings {
-            durations,
-            wrap: tl.loop_,
-            cues: points.len(),
-            unreadable,
-        })
-    }
-}
-
-/// First slide UUID mentioned anywhere in the cue (attribute value or text).
-fn find_slide_ref(el: &RawElement, ids: &[&str]) -> Option<String> {
-    let hit = |v: &str| {
-        ids.iter()
-            .find(|id| id.eq_ignore_ascii_case(v.trim()))
-            .map(|id| (*id).to_owned())
-    };
-    for a in &el.attrs {
-        if let Some(h) = hit(&a.raw_value) {
-            return Some(h);
-        }
-    }
-    for c in &el.children {
-        match c {
-            RawNode::Text(t) => {
-                if let Some(h) = hit(t) {
-                    return Some(h);
+        let mut t = SlideTimings::default();
+        for slide in self.slides() {
+            let Some(cues) = slide.cues_raw() else {
+                continue;
+            };
+            for (_, cue) in cues.elements() {
+                let attr = |n: &str| cue.attr(n).map(|a| a.raw_value.trim().to_owned());
+                let is_timer = cue.name == "RVSlideTimerCue"
+                    && attr("actionType").as_deref() == Some("9")
+                    && matches!(attr("enabled").as_deref(), Some("1" | "true") | None);
+                let duration = attr("duration")
+                    .and_then(|d| d.parse::<f64>().ok())
+                    .filter(|d| d.is_finite() && *d > 0.0);
+                match (is_timer, duration) {
+                    (true, Some(d)) => {
+                        if attr("delayTime")
+                            .and_then(|v| v.parse::<f64>().ok())
+                            .is_some_and(|v| v != 0.0)
+                        {
+                            t.with_delay += 1;
+                        }
+                        let loop_to_beginning = attr("loopToBeginning").as_deref() == Some("true");
+                        t.timers.entry(slide.uuid.clone()).or_insert(SlideTimer {
+                            duration: Duration::from_secs_f64(d),
+                            loop_to_beginning,
+                        });
+                    }
+                    _ => t.other_cues += 1,
                 }
             }
-            RawNode::Element(e) => {
-                if let Some(h) = find_slide_ref(e, ids) {
-                    return Some(h);
-                }
-            }
-            _ => {}
         }
+        (!t.timers.is_empty()).then_some(t)
     }
-    None
 }
