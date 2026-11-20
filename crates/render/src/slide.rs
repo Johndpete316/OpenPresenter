@@ -42,6 +42,8 @@ pub fn render_slide(
     };
     for el in slide.elements() {
         match el {
+            // PP6's "Double-click to edit" placeholder is never shown (blank slides).
+            DisplayElement::Text(t) if t.is_placeholder(&doc.path) => {}
             DisplayElement::Text(t) => render_text(fonts, doc, slide, t, &mut frame)?,
             DisplayElement::Other(raw) => frame.warnings.push(RenderWarning {
                 element_uuid: pro6::raw::RawElement::attr(raw, "UUID")

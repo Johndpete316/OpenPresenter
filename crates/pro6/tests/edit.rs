@@ -163,3 +163,19 @@ fn refuses_without_style() {
         "no partial edit"
     );
 }
+
+#[test]
+fn pp6_placeholder_text_is_recognised() {
+    let path = fixture("song_1024x768.pro6");
+    let mut doc = load("song_1024x768.pro6");
+    let t = first_text_mut(&mut doc, 0, 1);
+    assert!(!t.is_placeholder(&path));
+    t.set_text("Double-click to edit", WinPayloads::Drop, &path)
+        .unwrap();
+    assert!(t.is_placeholder(&path));
+    t.plain_text = None; // falls back to the RTF text
+    assert!(t.is_placeholder(&path));
+    t.set_text("Double-click to edit me", WinPayloads::Drop, &path)
+        .unwrap();
+    assert!(!t.is_placeholder(&path));
+}

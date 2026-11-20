@@ -48,6 +48,8 @@ fn slide_text(doc: &pro6::Document, g: usize, s: usize) -> String {
         .get(g)
         .and_then(|gr| gr.slides().get(s))
         .and_then(|sl| sl.text_elements().next())
+        // A blank slide's placeholder edits as empty text.
+        .filter(|t| !t.is_placeholder(&doc.path))
         .map(|t| match t.rtf_doc(&doc.path) {
             Ok(Some(r)) => r.plain_text(),
             _ => t

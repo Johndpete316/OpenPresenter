@@ -13,7 +13,7 @@ use render::{Fonts, render_slide};
 use crate::UserEvent;
 
 /// Bump when rendering changes so stale disk thumbnails are ignored.
-const RENDER_VERSION: u32 = 2;
+const RENDER_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ThumbKey {

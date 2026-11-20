@@ -105,6 +105,7 @@ pub fn slide_text(doc: &pro6::Document, flat: usize) -> String {
     };
     slide
         .text_elements()
+        .filter(|t| !t.is_placeholder(&doc.path))
         .map(|t| match t.rtf_doc(&doc.path) {
             Ok(Some(r)) => r.plain_text(),
             _ => t

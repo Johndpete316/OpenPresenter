@@ -26,6 +26,8 @@ pub struct OperatorWindow {
     surface: Surface<WindowSurface>,
     pub egui: egui_glow::EguiGlow,
     gl: Arc<glow::Context>,
+    /// The last make-current failed (logged once until it works again).
+    current_failed: bool,
 }
 
 impl OperatorWindow {
@@ -86,6 +88,7 @@ impl OperatorWindow {
             surface,
             egui,
             gl,
+            current_failed: false,
         })
     }
 
@@ -97,10 +100,7 @@ impl OperatorWindow {
 
     /// Run one UI frame and present it. With `capture`, the frame is also saved as PNG.
     pub fn frame(&mut self, run_ui: impl FnMut(&mut egui::Ui), capture: Option<&std::path::Path>) {
-        // Creating another GL context on this thread (the output window, on Windows/WGL)
-        // can leave no context current; make ours current before every frame.
-        if let Err(e) = self.ctx.make_current(&self.surface) {
-            tracing::error!(error = %e, "operator window: couldn't make GL context current");
+        if !self.ensure_current() {
             return;
         }
         self.egui.run(&self.window, run_ui);
@@ -137,7 +137,33 @@ impl OperatorWindow {
         }
     }
 
+    /// Opening an output window builds a new GL display on this thread, and on
+    /// Windows (WGL) that leaves no context current. Re-make ours current only when
+    /// it was lost: calling `wglMakeCurrent` every frame fails now and then, because
+    /// winit windows don't own their device context, and each failure skipped a frame.
+    fn ensure_current(&mut self) -> bool {
+        if self.ctx.is_current() {
+            return true;
+        }
+        match self.ctx.make_current(&self.surface) {
+            Ok(()) => {
+                self.current_failed = false;
+                true
+            }
+            Err(e) => {
+                if !self.current_failed {
+                    tracing::error!(error = %e, "operator window: couldn't make GL context current");
+                }
+                self.current_failed = true;
+                // Try again on the next frame.
+                self.window.request_redraw();
+                false
+            }
+        }
+    }
+
     pub fn destroy(&mut self) {
+        let _ = self.ensure_current();
         self.egui.destroy();
     }
 }

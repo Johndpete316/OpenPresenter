@@ -9,7 +9,7 @@ use std::time::{Instant, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IndexEntry {
@@ -174,7 +174,7 @@ fn index_file(path: &Path, modified_ms: u64, size: u64) -> IndexEntry {
     match pro6::load(path) {
         Ok(doc) => {
             let mut text = String::new();
-            for el in doc.text_elements() {
+            for el in doc.text_elements().filter(|e| !e.is_placeholder(path)) {
                 match el.rtf_doc(path) {
                     Ok(Some(rtf)) => text.push_str(&rtf.plain_text()),
                     _ => {

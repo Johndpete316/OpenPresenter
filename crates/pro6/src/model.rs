@@ -192,7 +192,24 @@ pub struct TextElement {
     pub extra: Extra,
 }
 
+/// Text PP6 puts in a new, empty text box. PP6 doesn't show it, so blank slides made
+/// on purpose keep it in the file (verified 2026-11-20 on the real hymn files).
+pub const PLACEHOLDER_TEXT: &str = "Double-click to edit";
+
 impl TextElement {
+    /// True if this element only holds PP6's "Double-click to edit" placeholder, which
+    /// PP6 doesn't display. Checked on `PlainText`, or the RTF text if that's missing.
+    pub fn is_placeholder(&self, file: &Path) -> bool {
+        let text = match &self.plain_text {
+            Some(p) => p.value.text(),
+            None => match self.rtf_doc(file) {
+                Ok(Some(r)) => r.plain_text(),
+                _ => return false,
+            },
+        };
+        text.trim() == PLACEHOLDER_TEXT
+    }
+
     /// Parse the `RTFData` payload. `Ok(None)` if the element has no RTF.
     /// `file` is used only for error context.
     pub fn rtf_doc(&self, file: &Path) -> Result<Option<crate::rtf::RtfDoc>, ParseError> {

@@ -139,8 +139,10 @@ pub fn save_with_backup(doc: &Document) -> Result<(), String> {
 
 struct PendingGoTo {
     path: PathBuf,
-    /// `None` = the first enabled slide (known once the presentation is loaded).
+    /// `None` = the first enabled slide (known once the presentation is loaded), or the
+    /// last one with `from_end`.
     position: Option<usize>,
+    from_end: bool,
     at: Option<Instant>,
     text_visible: bool,
     background_visible: bool,
@@ -206,6 +208,7 @@ impl Core {
                 self.pending_goto = Some(PendingGoTo {
                     path: l.path,
                     position: Some(l.position),
+                    from_end: false,
                     at: None,
                     text_visible: l.text_visible,
                     background_visible: l.background_visible,
@@ -364,9 +367,13 @@ impl Core {
                     && let Some(p) = self.pending_goto.take()
                 {
                     let position = p.position.or_else(|| {
-                        self.s
-                            .order_for(&p.path)
-                            .and_then(|o| next_enabled(&o, None))
+                        self.s.order_for(&p.path).and_then(|o| {
+                            if p.from_end {
+                                prev_enabled(&o, o.len())
+                            } else {
+                                next_enabled(&o, None)
+                            }
+                        })
                     });
                     match position {
                         Some(pos) => {
@@ -447,6 +454,7 @@ impl Core {
                     self.pending_goto = Some(PendingGoTo {
                         path: presentation,
                         position: Some(position),
+                        from_end: false,
                         at: Some(at),
                         text_visible: true,
                         background_visible: self.s.background_visible,
@@ -805,11 +813,10 @@ impl Core {
             if let Some(t) = target {
                 let path = live.path.clone();
                 self.go_live(&path, t, Some(at));
-            } else if forward {
-                // Past the last slide: continue with the next playlist item.
-                self.next_playlist_item(at);
             } else {
-                tracing::debug!("at the first slide; nothing before it");
+                // Past the last slide: the next playlist item's first slide. Before the
+                // first slide: the previous item's last slide.
+                self.adjacent_playlist_item(forward, at);
             }
             return;
         }
@@ -823,9 +830,10 @@ impl Core {
         }
     }
 
-    /// Go live on the first enabled slide of the playlist item after the live one.
-    /// If it isn't loaded yet, it goes live as soon as it is (the core never waits).
-    fn next_playlist_item(&mut self, at: Instant) {
+    /// Go live on the playlist item after the live one (its first enabled slide) or,
+    /// with `forward == false`, before it (its last enabled slide). If it isn't loaded
+    /// yet, it goes live as soon as it is (the core never waits).
+    fn adjacent_playlist_item(&mut self, forward: bool, at: Instant) {
         let Some(live) = &self.s.live else { return };
         let items = &self.s.playlist.items;
         // Prefer the selected item if it is the live one (a presentation can appear twice).
@@ -833,21 +841,39 @@ impl Core {
             Some(i) if items.get(i).is_some_and(|it| it.path == live.path) => Some(i),
             _ => items.iter().position(|it| it.path == live.path),
         };
-        let Some(next) = current.and_then(|i| items.get(i + 1).cloned()) else {
-            tracing::debug!("at the end of the presentation and the playlist; nothing to step to");
+        let index = match (current, forward) {
+            (None, _) => {
+                tracing::debug!(
+                    "live presentation isn't in the playlist; no next/previous item to step to"
+                );
+                return;
+            }
+            (Some(i), true) => i + 1,
+            (Some(i), false) => match i.checked_sub(1) {
+                Some(p) => p,
+                None => {
+                    tracing::debug!("at the first slide of the first playlist item");
+                    return;
+                }
+            },
+        };
+        let Some(next) = items.get(index).cloned() else {
+            tracing::debug!("at the end of the last playlist item");
             return;
         };
-        let index = current.map_or(0, |i| i + 1);
         if let Some(a) = &next.arrangement {
             Arc::make_mut(&mut self.s.arrangements).insert(next.path.clone(), Some(a.clone()));
         }
         self.s.playlist_item = Some(index);
         self.s.selected = Some(next.path.clone());
-        if let Some(first) = self
-            .s
-            .order_for(&next.path)
-            .and_then(|o| next_enabled(&o, None))
-        {
+        let target = self.s.order_for(&next.path).and_then(|o| {
+            if forward {
+                next_enabled(&o, None)
+            } else {
+                prev_enabled(&o, o.len())
+            }
+        });
+        if let Some(first) = target {
             self.go_live(&next.path, first, Some(at));
             self.s.playlist_item = Some(index);
         } else if self.s.docs.contains_key(&next.path) {
@@ -860,6 +886,7 @@ impl Core {
             self.pending_goto = Some(PendingGoTo {
                 path: next.path,
                 position: None,
+                from_end: !forward,
                 at: Some(at),
                 text_visible: true,
                 background_visible: self.s.background_visible,

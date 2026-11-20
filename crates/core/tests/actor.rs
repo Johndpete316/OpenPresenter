@@ -299,11 +299,21 @@ fn next_past_the_last_slide_moves_to_the_next_playlist_item() {
     );
     assert!(s.text_visible);
 
-    // Prev on the first slide stays put (only Next crosses items).
+    // Prev on the first slide goes back to the previous item's last enabled slide.
+    core.send(Command::Prev);
+    let s = wait(&rx, "previous item", |s| s.is_live(&song));
+    assert_eq!((pos(&s), s.playlist_item), (Some(5), Some(0)));
+
+    // Prev on the first slide of the first item stays put.
+    core.send(Command::GoTo {
+        presentation: song.clone(),
+        position: 0,
+    });
+    wait(&rx, "song start", |s| pos(s) == Some(0) && s.is_live(&song));
     core.send(Command::Prev);
     core.send(Command::ClearBackground); // marker
     let s = wait(&rx, "prev processed", |s| !s.background_visible);
-    assert!(s.is_live(&render) && pos(&s) == Some(0));
+    assert!(s.is_live(&song) && pos(&s) == Some(0));
 
     // Into an item that may not be loaded yet: goes live when it is.
     core.send(Command::GoTo {
