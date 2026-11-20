@@ -1,0 +1,22 @@
+[package]
+name = "pp6tool"
+description = "CLI for .pro6 corpus reports, round-trip checks and bulk tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.9", features = ["derive"] }
+pro6.workspace = true
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+insta = "1.49.0"

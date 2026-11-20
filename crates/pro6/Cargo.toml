@@ -1,0 +1,21 @@
+[package]
+name = "pro6"
+description = "ProPresenter 6 .pro6 model, parser and RTF handling (no GUI deps)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64 = "0.23.1"
+encoding_rs = "0.8.44"
+quick-xml = "0.42.0"
+thiserror = "2.0.21"
+tracing = "0.1.44"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+insta = "1.49.0"
+pretty_assertions = "1.4.1"

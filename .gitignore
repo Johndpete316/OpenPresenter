@@ -1,0 +1,4 @@
+/target
+*.pro6.bak
+*.pending-snap
+*.snap.new
