@@ -166,6 +166,8 @@ pub enum DisplayElement {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextElement {
+    /// Element path in the file, for error messages.
+    pub xml_path: String,
     pub uuid: String,
     pub display_name: String,
     pub opacity: f64,
@@ -188,6 +190,26 @@ pub struct TextElement {
     pub win_flow: Option<Leaf<Payload>>,
     pub win_font: Option<Leaf<Payload>>,
     pub extra: Extra,
+}
+
+impl TextElement {
+    /// Parse the `RTFData` payload. `Ok(None)` if the element has no RTF.
+    /// `file` is used only for error context.
+    pub fn rtf_doc(&self, file: &Path) -> Result<Option<crate::rtf::RtfDoc>, ParseError> {
+        let Some(rtf) = &self.rtf else {
+            return Ok(None);
+        };
+        crate::rtf::parse(&rtf.value.bytes).map(Some).map_err(|e| {
+            Ctx {
+                file,
+                path: self.xml_path.clone(),
+                uuid: Some(self.uuid.clone()).filter(|u| !u.is_empty()),
+            }
+            .err(ParseErrorKind::Rtf {
+                message: e.to_string(),
+            })
+        })
+    }
 }
 
 /// `RVRect3D` text `{x y z w h}`. Field order is assumed (see docs/PLAN.md Unknowns).
@@ -588,6 +610,7 @@ fn text_element_from(c: Claimed<'_>, p: &mut P<'_>) -> Result<TextElement, Parse
     }
 
     Ok(TextElement {
+        xml_path: ctx_owned.path.clone(),
         uuid,
         display_name,
         opacity,

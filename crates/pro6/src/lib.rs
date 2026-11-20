@@ -10,6 +10,7 @@ pub mod error;
 pub mod extra;
 pub mod model;
 pub mod raw;
+pub mod rtf;
 pub mod schema;
 
 use std::path::Path;
