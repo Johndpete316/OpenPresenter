@@ -48,6 +48,10 @@ pub struct ShowState {
     pub text_visible: bool,
     pub background_visible: bool,
     pub output_enabled: bool,
+    /// Background media playing under the text (when the background layer is visible).
+    pub background_media: Option<PathBuf>,
+    /// Media to pre-load for an instant switch.
+    pub background_next: Option<PathBuf>,
     /// Presentation shown in the operator's grid (selected in library or playlist).
     pub selected: Option<PathBuf>,
     pub playlist: Arc<Playlist>,
@@ -69,6 +73,8 @@ impl Default for ShowState {
             text_visible: true,
             background_visible: true,
             output_enabled: true,
+            background_media: None,
+            background_next: None,
             selected: None,
             playlist: Arc::new(Playlist::default()),
             playlist_path: None,
@@ -124,8 +130,8 @@ impl ShowState {
         }
         let _ = writeln!(
             s,
-            "text visible {}, background visible {}, output enabled {}",
-            self.text_visible, self.background_visible, self.output_enabled
+            "text visible {}, background visible {}, output enabled {}, background media {:?}",
+            self.text_visible, self.background_visible, self.output_enabled, self.background_media
         );
         let _ = writeln!(
             s,

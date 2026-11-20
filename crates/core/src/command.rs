@@ -26,6 +26,12 @@ pub enum Command {
     /// Load a presentation (for display in the grid) without changing the output.
     Open(PathBuf),
     OutputEnable(bool),
+    /// Background media (image or video, looping) under the slide text; `None` clears
+    /// it. `next` is pre-loaded so triggering it later is instant.
+    SetBackground {
+        media: Option<PathBuf>,
+        next: Option<PathBuf>,
+    },
     PlaylistNew,
     PlaylistLoad(PathBuf),
     /// Save to the given path, or the current playlist file.

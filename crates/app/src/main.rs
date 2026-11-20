@@ -54,6 +54,9 @@ struct Args {
     /// Output in a normal window instead of fullscreen (development).
     #[arg(long)]
     windowed_output: bool,
+    /// Size of the --windowed-output window, WIDTHxHEIGHT.
+    #[arg(long, value_parser = parse_size, default_value = "960x720")]
+    output_size: (u32, u32),
     /// Ignore the crash-restore file.
     #[arg(long)]
     no_restore: bool,
@@ -65,6 +68,21 @@ struct Args {
     /// After the first slide is on screen, save the output's pixels to this PNG and exit.
     #[arg(long)]
     capture: Option<PathBuf>,
+    /// Start with this background media (image or video) under the text.
+    #[arg(long)]
+    background: Option<PathBuf>,
+    /// Pre-load this media as the next background (development / testing).
+    #[arg(long)]
+    background_next: Option<PathBuf>,
+    /// Switch to --background-next this long after startup (development / testing).
+    #[arg(long)]
+    switch_background_ms: Option<u64>,
+    /// With --capture: wait this long after the first slide before capturing.
+    #[arg(long, default_value_t = 0)]
+    capture_delay_ms: u64,
+    /// Open the Settings window at startup.
+    #[arg(long)]
+    open_settings: bool,
     /// Save the operator window as PNG 3 s after it opens, then exit.
     #[arg(long)]
     capture_ui: Option<PathBuf>,
@@ -99,6 +117,16 @@ pub enum UserEvent {
         result: Result<(), String>,
     },
     Library(Box<LibraryIndex>, String),
+    MediaFailed(String),
+    AudioDevices(Result<Vec<media::AudioDevice>, String>),
+}
+
+fn parse_size(s: &str) -> Result<(u32, u32), String> {
+    let (w, h) = s.split_once(['x', 'X']).ok_or("expected WIDTHxHEIGHT")?;
+    match (w.trim().parse::<u32>(), h.trim().parse::<u32>()) {
+        (Ok(w), Ok(h)) if w > 0 && h > 0 => Ok((w, h)),
+        _ => Err(format!("bad size {s:?}")),
+    }
 }
 
 struct Paths {
@@ -234,6 +262,12 @@ fn main() -> ExitCode {
             }
         };
 
+    if let Some(b) = &args.background {
+        core.send(Command::SetBackground {
+            media: Some(b.clone()),
+            next: args.background_next.clone(),
+        });
+    }
     if let Some(p) = &args.open {
         core.send(Command::Open(p.clone()));
         core.send(Command::GoTo {
@@ -242,6 +276,13 @@ fn main() -> ExitCode {
         });
     }
 
+    let audio_proxy = proxy.clone();
+    let _ = std::thread::Builder::new()
+        .name("audio-devices".into())
+        .spawn(move || {
+            let r = media::audio_devices().map_err(|e| e.user_message());
+            let _ = audio_proxy.send_event(UserEvent::AudioDevices(r));
+        });
     let media_files = list_media(&settings.media_dirs);
     let mut app = App {
         started,
@@ -250,6 +291,8 @@ fn main() -> ExitCode {
             library_status: "Checking library…".into(),
             media_files,
             app_notices,
+            settings_path: paths.settings.display().to_string(),
+            settings_open: args.open_settings,
             ..UiState::default()
         },
         show: Arc::new(ShowState::default()),
@@ -269,7 +312,14 @@ fn main() -> ExitCode {
         sent_size: None,
         monitor_override: args.monitor,
         windowed_output: args.windowed_output,
+        output_size: args.output_size,
         capture: args.capture,
+        capture_delay: Duration::from_millis(args.capture_delay_ms),
+        capture_due: None,
+        switch_background: args
+            .switch_background_ms
+            .zip(args.background_next.clone())
+            .map(|(ms, p)| (started + Duration::from_millis(ms), p)),
         capture_ui: args.capture_ui.map(|p| (p, None)),
         bench: args.bench.map(|n| Bench {
             remaining: n,
@@ -335,7 +385,12 @@ struct App {
     sent_size: Option<(u32, u32)>,
     monitor_override: Option<usize>,
     windowed_output: bool,
+    output_size: (u32, u32),
     capture: Option<PathBuf>,
+    capture_delay: Duration,
+    capture_due: Option<Instant>,
+    /// (when, media) for --switch-background-ms.
+    switch_background: Option<(Instant, PathBuf)>,
     /// Operator-window capture path and when to take it.
     capture_ui: Option<(PathBuf, Option<Instant>)>,
     bench: Option<Bench>,
@@ -379,8 +434,14 @@ impl App {
         if self.output.is_some() {
             return;
         }
-        let windowed = self.windowed_output.then_some((960, 720));
-        match OutputWindow::create(el, self.monitor_choice(), windowed, self.proxy.clone()) {
+        let windowed = self.windowed_output.then_some(self.output_size);
+        match OutputWindow::create(
+            el,
+            self.monitor_choice(),
+            windowed,
+            self.settings.audio_device.clone(),
+            self.proxy.clone(),
+        ) {
             Ok(o) => {
                 if let Ok(mut l) = self.link.lock() {
                     *l = Some(o.tx.clone());
@@ -542,6 +603,26 @@ impl App {
                     self.send(Command::PlaylistSave(Some(p)));
                 }
             }
+            UiAction::SetAudioDevice(d) => {
+                self.settings.audio_device = d.clone();
+                self.save_settings();
+                if let Some(o) = &self.output {
+                    let _ = o.tx.send(RenderCmd::AudioDevice(d));
+                }
+            }
+            UiAction::RemoveLibraryFolder(i) => {
+                if i < self.settings.library_dirs.len() {
+                    self.settings.library_dirs.remove(i);
+                    self.save_settings();
+                }
+            }
+            UiAction::RemoveMediaFolder(i) => {
+                if i < self.settings.media_dirs.len() {
+                    self.settings.media_dirs.remove(i);
+                    self.save_settings();
+                    self.ui.media_files = list_media(&self.settings.media_dirs);
+                }
+            }
             UiAction::ChooseMonitor(i) => {
                 let name = el.available_monitors().nth(i).and_then(|m| m.name());
                 self.settings.output.monitor_name = name;
@@ -692,6 +773,20 @@ impl ApplicationHandler<UserEvent> for App {
                 self.ui.library_status = status;
                 self.request_redraw();
             }
+            UserEvent::MediaFailed(msg) => {
+                self.ui.app_notices.push(msg);
+                if self.ui.app_notices.len() > 20 {
+                    self.ui.app_notices.remove(0);
+                }
+                self.request_redraw();
+            }
+            UserEvent::AudioDevices(r) => {
+                match r {
+                    Ok(d) => self.ui.audio_devices = d,
+                    Err(e) => self.ui.app_notices.push(e),
+                }
+                self.request_redraw();
+            }
             UserEvent::FontsReady { elapsed, faces } => {
                 tracing::info!(faces, elapsed_ms = ms(elapsed), "fonts ready")
             }
@@ -719,8 +814,8 @@ impl ApplicationHandler<UserEvent> for App {
                         "cold start (process start → first slide presented): {:.1} ms",
                         ms(cold)
                     );
-                    if let (Some(path), Some(out)) = (self.capture.take(), self.output.as_ref()) {
-                        let _ = out.tx.send(RenderCmd::Capture(path));
+                    if self.capture.is_some() {
+                        self.capture_due = Some(Instant::now() + self.capture_delay);
                     }
                     if let Some(b) = &mut self.bench {
                         b.next_at = Some(Instant::now() + b.interval);
@@ -774,6 +869,28 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        if let Some((due, media)) = self.switch_background.clone() {
+            if Instant::now() >= due {
+                self.switch_background = None;
+                self.send(Command::SetBackground {
+                    media: Some(media),
+                    next: None,
+                });
+            } else {
+                el.set_control_flow(ControlFlow::WaitUntil(due));
+            }
+        }
+        if let Some(due) = self.capture_due {
+            if Instant::now() >= due {
+                self.capture_due = None;
+                if let (Some(path), Some(out)) = (self.capture.take(), self.output.as_ref()) {
+                    let _ = out.tx.send(RenderCmd::Capture(path));
+                }
+            } else {
+                el.set_control_flow(ControlFlow::WaitUntil(due));
+                return;
+            }
+        }
         if let Some((_, Some(due))) = &self.capture_ui {
             if Instant::now() >= *due {
                 self.request_redraw();

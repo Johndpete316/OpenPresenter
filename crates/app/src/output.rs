@@ -105,6 +105,7 @@ impl OutputWindow {
         event_loop: &ActiveEventLoop,
         choice: MonitorChoice,
         windowed: Option<(u32, u32)>,
+        audio_device: Option<String>,
         events: EventLoopProxy<UserEvent>,
     ) -> Result<OutputWindow, OutputError> {
         let (index, monitor) = pick_monitor(event_loop, &choice)?;
@@ -160,14 +161,16 @@ impl OutputWindow {
             .map_err(|e| OutputError::Gl(e.to_string()))?;
 
         let size = window.inner_size();
+        let (tx, rx) = crossbeam_channel::unbounded();
         let parts = GlParts {
             context,
             surface,
             display,
             width: size.width.max(1),
             height: size.height.max(1),
+            self_tx: tx.clone(),
+            audio_device,
         };
-        let (tx, rx) = crossbeam_channel::unbounded();
         let thread = std::thread::Builder::new()
             .name("output-render".into())
             .spawn(move || gl::run(parts, &rx, &events))

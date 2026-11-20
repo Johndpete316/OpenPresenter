@@ -59,8 +59,9 @@ pub fn render_slide(
     Ok(frame)
 }
 
-/// Slide background if the slide draws one, else the document's, else black.
-fn background(doc: &Document, slide: &Slide) -> [u8; 4] {
+/// Slide background if the slide draws one, else the document's, else `None`
+/// (black, or background media when there is some).
+fn background(doc: &Document, slide: &Slide) -> Option<[u8; 4]> {
     let draws = |e: &pro6::Extra| {
         e.element
             .attr("drawingBackgroundColor")
@@ -73,7 +74,7 @@ fn background(doc: &Document, slide: &Slide) -> [u8; 4] {
     } else {
         None
     };
-    c.map_or([0, 0, 0, 255], to_rgba8)
+    c.map(to_rgba8)
 }
 
 fn to_rgba8(c: Rgba) -> [u8; 4] {

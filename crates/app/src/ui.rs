@@ -24,6 +24,10 @@ pub enum UiAction {
     SavePlaylistAs,
     /// Output display chosen by description index (see `UiState::monitors`).
     ChooseMonitor(usize),
+    /// mpv audio device name; `None` = system default.
+    SetAudioDevice(Option<String>),
+    RemoveLibraryFolder(usize),
+    RemoveMediaFolder(usize),
 }
 
 #[derive(Default)]
@@ -34,6 +38,9 @@ pub struct UiState {
     pub monitors: Vec<String>,
     pub media_files: Vec<PathBuf>,
     pub app_notices: Vec<String>,
+    pub audio_devices: Vec<media::AudioDevice>,
+    pub settings_open: bool,
+    pub settings_path: String,
     pub(crate) textures: HashMap<ThumbKey, Result<TextureHandle, String>>,
     pub(crate) requested: HashSet<ThumbKey>,
 }
@@ -117,9 +124,10 @@ pub fn draw(
         .show(ui, |ui| {
             preview(ui, st, show, thumbs);
             ui.separator();
-            media_bin(ui, st, settings, &mut actions);
+            media_bin(ui, st, show, settings, &mut actions);
         });
     egui::CentralPanel::default().show(ui, |ui| grid(ui, st, show, thumbs, &mut actions));
+    settings_window(ui.ctx(), st, show, settings, &mut actions);
     actions
 }
 
@@ -136,7 +144,7 @@ fn title(path: &Path) -> String {
 
 fn toolbar(
     ui: &mut egui::Ui,
-    st: &UiState,
+    st: &mut UiState,
     show: &ShowState,
     settings: &Settings,
     actions: &mut Vec<UiAction>,
@@ -198,6 +206,9 @@ fn toolbar(
                         }
                     }
                 });
+            if ui.button("Settings").clicked() {
+                st.settings_open = !st.settings_open;
+            }
             ui.separator();
             match &show.live {
                 Some(l) => {
@@ -558,32 +569,198 @@ fn preview(ui: &mut egui::Ui, st: &mut UiState, show: &ShowState, thumbs: &Sende
     }
 }
 
-fn media_bin(ui: &mut egui::Ui, st: &UiState, settings: &Settings, actions: &mut Vec<UiAction>) {
+fn media_bin(
+    ui: &mut egui::Ui,
+    st: &UiState,
+    show: &ShowState,
+    settings: &Settings,
+    actions: &mut Vec<UiAction>,
+) {
     ui.horizontal(|ui| {
         ui.heading("Media");
         if ui.small_button("Add folder…").clicked() {
             actions.push(UiAction::AddMediaFolder);
         }
+        if show.background_media.is_some() && ui.small_button("Stop background").clicked() {
+            actions.push(UiAction::Core(Command::SetBackground {
+                media: None,
+                next: None,
+            }));
+        }
     });
+    if settings.media_dirs.is_empty() {
+        ui.label(
+            RichText::new("Add a folder of background images and videos.")
+                .small()
+                .italics(),
+        );
+        return;
+    }
     ui.label(
-        RichText::new("Backgrounds and video arrive in M5.")
+        RichText::new("Click to show as the background (loops under the text).")
             .small()
             .weak(),
     );
-    if settings.media_dirs.is_empty() {
-        return;
-    }
     egui::ScrollArea::vertical()
         .id_salt("media")
         .show(ui, |ui| {
-            for f in &st.media_files {
-                ui.label(
-                    f.file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
-                );
+            for (i, f) in st.media_files.iter().enumerate() {
+                let name = f
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let live = show.background_media.as_deref() == Some(f.as_path());
+                let text = if live {
+                    RichText::new(&name)
+                        .color(Color32::from_rgb(255, 170, 60))
+                        .strong()
+                } else {
+                    RichText::new(&name)
+                };
+                if ui.selectable_label(live, text).clicked() {
+                    // Pre-load the next file in the list so moving on is instant.
+                    let next = st.media_files.get(i + 1).cloned();
+                    actions.push(UiAction::Core(Command::SetBackground {
+                        media: Some(f.clone()),
+                        next,
+                    }));
+                }
             }
         });
+}
+
+fn settings_window(
+    ctx: &egui::Context,
+    st: &mut UiState,
+    show: &ShowState,
+    settings: &Settings,
+    actions: &mut Vec<UiAction>,
+) {
+    let mut open = st.settings_open;
+    egui::Window::new("Settings")
+        .open(&mut open)
+        .default_width(420.0)
+        .show(ctx, |ui| {
+            ui.heading("Output");
+            let mut on = show.output_enabled;
+            if ui.checkbox(&mut on, "Output enabled").changed() {
+                actions.push(UiAction::Core(Command::OutputEnable(on)));
+            }
+            let current = settings
+                .output
+                .monitor_name
+                .clone()
+                .unwrap_or_else(|| "automatic (not the operator's display)".into());
+            egui::ComboBox::from_id_salt("settings-monitor")
+                .selected_text(current)
+                .width(380.0)
+                .show_ui(ui, |ui| {
+                    for (i, m) in st.monitors.iter().enumerate() {
+                        if ui.selectable_label(false, m).clicked() {
+                            actions.push(UiAction::ChooseMonitor(i));
+                        }
+                    }
+                });
+            ui.separator();
+            ui.heading("Audio");
+            let label = |d: &media::AudioDevice| {
+                if d.description.is_empty() {
+                    d.name.clone()
+                } else {
+                    format!("{} ({})", d.description, d.name)
+                }
+            };
+            let selected = settings
+                .audio_device
+                .as_ref()
+                .map(|n| {
+                    st.audio_devices
+                        .iter()
+                        .find(|d| &d.name == n)
+                        .map_or_else(|| n.clone(), label)
+                })
+                .unwrap_or_else(|| "System default".into());
+            egui::ComboBox::from_id_salt("audio")
+                .selected_text(selected)
+                .width(380.0)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(settings.audio_device.is_none(), "System default")
+                        .clicked()
+                    {
+                        actions.push(UiAction::SetAudioDevice(None));
+                    }
+                    for d in &st.audio_devices {
+                        if ui
+                            .selectable_label(
+                                settings.audio_device.as_deref() == Some(d.name.as_str()),
+                                label(d),
+                            )
+                            .clicked()
+                        {
+                            actions.push(UiAction::SetAudioDevice(Some(d.name.clone())));
+                        }
+                    }
+                });
+            if st.audio_devices.is_empty() {
+                ui.label(
+                    RichText::new("No audio devices listed (is mpv-2.dll installed?).")
+                        .small()
+                        .weak(),
+                );
+            }
+            ui.separator();
+            ui.heading("Folders");
+            ui.label("Library (.pro6):");
+            for (i, d) in settings.library_dirs.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    if ui.small_button("Remove").clicked() {
+                        actions.push(UiAction::RemoveLibraryFolder(i));
+                    }
+                    ui.label(d.display().to_string());
+                });
+            }
+            if ui.small_button("Add library folder…").clicked() {
+                actions.push(UiAction::AddLibraryFolder);
+            }
+            ui.label("Media:");
+            for (i, d) in settings.media_dirs.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    if ui.small_button("Remove").clicked() {
+                        actions.push(UiAction::RemoveMediaFolder(i));
+                    }
+                    ui.label(d.display().to_string());
+                });
+            }
+            if ui.small_button("Add media folder…").clicked() {
+                actions.push(UiAction::AddMediaFolder);
+            }
+            ui.separator();
+            ui.heading("Keys");
+            let k = &settings.keys;
+            egui::Grid::new("keys").num_columns(2).show(ui, |ui| {
+                for (name, list) in [
+                    ("Next", &k.next),
+                    ("Previous", &k.prev),
+                    ("Clear Text", &k.clear_text),
+                    ("Clear Background", &k.clear_background),
+                    ("Clear All", &k.clear_all),
+                ] {
+                    ui.label(name);
+                    ui.label(list.join(", "));
+                    ui.end_row();
+                }
+            });
+            ui.label(
+                RichText::new(format!(
+                    "To change keys, edit [keys] in {}",
+                    st.settings_path
+                ))
+                .small()
+                .weak(),
+            );
+        });
+    st.settings_open = open;
 }
 
 fn messages(ui: &mut egui::Ui, st: &UiState, show: &ShowState, log_lines: &[String]) {

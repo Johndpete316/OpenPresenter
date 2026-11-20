@@ -213,6 +213,7 @@ fn restore_recent_session_goes_live() {
             text_visible: false,
             background_visible: true,
         }),
+        background_media: None,
     };
     let (_core, rx) = start(CoreConfig {
         restore: Some(restore.clone()),
@@ -235,4 +236,27 @@ fn restore_recent_session_goes_live() {
     assert!(s.live.is_none());
     assert_eq!(s.playlist_item, Some(0));
     core.shutdown();
+}
+
+#[test]
+fn background_media_and_clears() {
+    let (core, rx) = start(CoreConfig::default());
+    core.send(Command::ClearBackground);
+    wait(&rx, "bg hidden", |s| !s.background_visible);
+    core.send(Command::SetBackground {
+        media: Some("/m/loop.mp4".into()),
+        next: Some("/m/next.mp4".into()),
+    });
+    let s = wait(&rx, "bg set", |s| s.background_media.is_some());
+    assert!(
+        s.background_visible,
+        "setting media shows the background layer"
+    );
+    assert_eq!(
+        s.background_next.as_deref(),
+        Some(std::path::Path::new("/m/next.mp4"))
+    );
+    core.send(Command::ClearAll);
+    let s = wait(&rx, "cleared", |s| s.background_media.is_none());
+    assert!(!s.background_visible && !s.text_visible);
 }

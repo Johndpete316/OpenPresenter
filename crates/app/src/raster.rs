@@ -52,6 +52,14 @@ pub enum RenderCmd {
         height: u32,
     },
     Redraw,
+    /// Background media to show (and to pre-load next).
+    Media {
+        current: Option<PathBuf>,
+        next: Option<PathBuf>,
+    },
+    /// mpv has a new frame (posted from mpv's thread).
+    MediaFrame,
+    AudioDevice(Option<String>),
     /// Read back what's on screen and save it as PNG (verification tool).
     Capture(PathBuf),
     Stop,
@@ -115,6 +123,7 @@ pub fn spawn(
 struct Sent {
     live: Option<(usize, usize)>,
     layers: Option<(bool, bool)>,
+    media: Option<(Option<PathBuf>, Option<PathBuf>)>,
 }
 
 /// A rendered frame, or the operator message for a slide that can't be drawn.
@@ -165,11 +174,27 @@ impl Worker {
     }
 
     /// Bring the output in line with `s`. `force` re-sends everything (new window/size).
+    /// The live slide goes first so background media never delays it.
     fn apply(&mut self, s: &ShowState, force: bool) {
-        let Some(size) = self.size else { return };
+        if self.size.is_none() {
+            return;
+        }
         if force {
             self.sent = Sent::default();
         }
+        self.apply_live(s, force);
+        let media = (s.background_media.clone(), s.background_next.clone());
+        if self.sent.media.as_ref() != Some(&media) {
+            self.send(RenderCmd::Media {
+                current: media.0.clone(),
+                next: media.1.clone(),
+            });
+            self.sent.media = Some(media);
+        }
+    }
+
+    fn apply_live(&mut self, s: &ShowState, force: bool) {
+        let Some(size) = self.size else { return };
         let layers = (s.text_visible, s.background_visible);
         if self.sent.layers != Some(layers) {
             self.sent.layers = Some(layers);

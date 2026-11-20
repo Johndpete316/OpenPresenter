@@ -20,6 +20,8 @@ pub struct RestoreState {
     pub playlist: Playlist,
     pub playlist_item: Option<usize>,
     pub live: Option<LiveRestore>,
+    #[serde(default)]
+    pub background_media: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

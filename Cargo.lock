@@ -141,6 +141,7 @@ dependencies = [
  "glutin",
  "glutin-winit",
  "image",
+ "media",
  "pp6core",
  "pro6",
  "raw-window-handle",

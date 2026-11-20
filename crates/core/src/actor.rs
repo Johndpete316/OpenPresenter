@@ -155,6 +155,9 @@ impl Core {
             "restoring previous session"
         );
         let go_live = r.restore_live();
+        if go_live {
+            self.s.background_media = r.background_media.clone();
+        }
         self.s.playlist = Arc::new(r.playlist);
         self.s.playlist_path = r.playlist_path;
         if let Some(i) = r.playlist_item {
@@ -245,6 +248,7 @@ impl Core {
                 playlist: (*self.s.playlist).clone(),
                 playlist_item: self.s.playlist_item,
                 live,
+                background_media: self.s.background_media.clone(),
             });
         }
     }
@@ -334,10 +338,21 @@ impl Core {
             Command::Next => self.step(true, at),
             Command::Prev => self.step(false, at),
             Command::ClearText => self.s.text_visible = false,
-            Command::ClearBackground => self.s.background_visible = false,
+            Command::ClearBackground => {
+                self.s.background_visible = false;
+                self.s.background_media = None;
+            }
             Command::ClearAll => {
                 self.s.text_visible = false;
                 self.s.background_visible = false;
+                self.s.background_media = None;
+            }
+            Command::SetBackground { media, next } => {
+                if media.is_some() {
+                    self.s.background_visible = true;
+                }
+                self.s.background_media = media;
+                self.s.background_next = next;
             }
             Command::GoTo {
                 presentation,

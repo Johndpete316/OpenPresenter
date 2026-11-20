@@ -58,8 +58,9 @@ pub struct SlideFrame {
     pub width: u32,
     pub height: u32,
     pub placement: Placement,
-    /// Slide background colour (straight RGBA), drawn inside the canvas rect only.
-    pub background: [u8; 4],
+    /// Slide background colour (straight RGBA) when the slide or document draws one,
+    /// inside the canvas rect only. `None` = nothing (black, or background media).
+    pub background: Option<[u8; 4]>,
     /// Text layer, `width × height`, premultiplied RGBA, transparent where empty.
     pub text: Vec<u8>,
     pub warnings: Vec<RenderWarning>,
@@ -76,8 +77,7 @@ impl SlideFrame {
     pub fn composite_layers(&self, background: bool, text: bool) -> image::RgbaImage {
         let mut img =
             image::RgbaImage::from_pixel(self.width, self.height, image::Rgba([0, 0, 0, 255]));
-        if background {
-            let [r, g, b, a] = self.background;
+        if background && let Some([r, g, b, a]) = self.background {
             let bg = [mul(r, a), mul(g, a), mul(b, a), 255];
             let c = self.placement.canvas;
             for y in c.y..c.y + c.height {

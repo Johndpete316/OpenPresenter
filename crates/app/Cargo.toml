@@ -21,6 +21,7 @@ glow = "0.17"
 glutin = "0.32"
 glutin-winit = "0.5"
 image = { version = "0.25", default-features = false, features = ["png"] }
+media.workspace = true
 pp6core.workspace = true
 pro6.workspace = true
 raw-window-handle = "0.6"

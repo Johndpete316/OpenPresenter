@@ -312,7 +312,14 @@ impl Player {
             internal_format: 0,
         };
         let mut flip: c_int = c_int::from(flip_y);
+        // Never wait for the frame's display time: the output thread must stay responsive
+        // to slide changes; vsync on swap paces presentation instead.
+        let mut block: c_int = 0;
         let mut params = [
+            ffi::mpv_render_param {
+                type_: ffi::MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME,
+                data: &mut block as *mut _ as *mut c_void,
+            },
             ffi::mpv_render_param {
                 type_: ffi::MPV_RENDER_PARAM_OPENGL_FBO,
                 data: &mut target as *mut _ as *mut c_void,
@@ -337,6 +344,9 @@ impl Player {
 
 impl Drop for Player {
     fn drop(&mut self) {
+        // Stop first so freeing the render context isn't reported as a playback failure.
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = self.command(&["stop"]);
         if !self.render.is_null() {
             // SAFETY: freed on the GL thread (documented contract) before the handle.
             unsafe { (self.api.render_context_free)(self.render) };
@@ -372,6 +382,7 @@ fn event_loop(
         let ev = unsafe { &*(api.wait_event)(handle.0, -1.0) };
         match ev.event_id {
             ffi::MPV_EVENT_SHUTDOWN => return,
+            _ if stop.load(Ordering::SeqCst) => return,
             ffi::MPV_EVENT_FILE_LOADED => {
                 tracing::debug!(path = %path().display(), "media loaded");
                 on_event(MediaEvent::Loaded(path()));
