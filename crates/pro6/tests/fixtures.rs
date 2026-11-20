@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Parse every hand-written fixture and check the facts it was written to cover.
 
 use std::path::PathBuf;

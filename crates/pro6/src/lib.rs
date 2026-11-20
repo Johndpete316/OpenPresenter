@@ -12,6 +12,7 @@ pub mod model;
 pub mod raw;
 pub mod rtf;
 pub mod schema;
+pub mod write;
 
 use std::path::Path;
 use std::time::Instant;
@@ -23,6 +24,7 @@ pub use model::{
     TextElement, Timeline,
 };
 pub use raw::RawDocument;
+pub use write::{WriteError, save, to_raw, write_string};
 
 use error::Ctx;
 
