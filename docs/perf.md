@@ -39,6 +39,20 @@ output render thread. The operator window (egui) runs on the event-loop thread a
 | 2026-11-20 | M3 release | Linux / RTX 3080 / Wayland | Cold start | 147–169 ms | operator window + output window + core + font load |
 | 2026-11-20 | M3 release | Linux / RTX 3080 / Wayland | Slide change (cached) | median 0.59–0.68 ms, p95 0.72–0.78 ms, max 0.73–0.84 ms | command sent → buffer swap |
 
+## M5 (2026-11-20): with a looping video background
+
+Same machine; 640×480 H.264 test video looping under the text (`--background`), 30 changes at
+150 ms intervals, 3 runs. The first background trigger creates the two mpv players (≈170 ms of
+GL setup). In normal use that happens when the output is idle after startup; with
+`--background` at startup, the first change waits for it.
+
+| Date | Build | Machine | Metric | Value | Notes |
+|---|---|---|---|---|---|
+| 2026-11-20 | M5 release | Linux / RTX 3080 / Wayland | Cold start, video background | 181–207 ms | first slide is sent before media, so mpv setup doesn't delay it |
+| 2026-11-20 | M5 release | Linux / RTX 3080 / Wayland | Slide change, video playing | median 1.1–1.3 ms; most ≤ 3 ms; some 15–17 ms while playback starts (one vsync wait) | first change after startup ≈ 80 ms while players are created |
+| 2026-11-20 | M5 release | Linux / RTX 3080 / Wayland | mpv player setup | ≈ 110 ms first, ≈ 60 ms second | `mpv_render_context_create`; mpv_create itself ≈ 2 ms |
+| 2026-11-20 | M5 release | Linux / RTX 3080 / Wayland | Slide change, no media | median 0.70 ms, max 0.85 ms | |
+
 **Not yet measured:** Windows (the production host), fullscreen on a second display, and real
 `.pro6` files. The Windows numbers matter most. Fonts load differently there, and on a library
 PC with hundreds of fonts installed, font loading may dominate cold start.

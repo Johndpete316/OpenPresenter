@@ -141,11 +141,17 @@ pp6/
   - WinFlowData/WinFontData of rescaled text are dropped by default (`--keep-win-payloads` keeps them); same unknown as M1.
 
 ### M5 — Media + Settings
-- [ ] `media`: libmpv render API into output FBO; text composited above
-- [ ] Layers: background (colour/image/video) → slide text; each layer clearable independently (`ClearText` / `ClearBackground` / `ClearAll`)
-- [ ] Media bin: backgrounds and videos; pre-decode next
-- [ ] Settings: output monitor select / disable; audio device from mpv `audio-device-list`
+- [x] `media`: libmpv render API into output FBO; text composited above
+- [x] Layers: background (colour/image/video) → slide text; each layer clearable independently (`ClearText` / `ClearBackground` / `ClearAll`)
+- [x] Media bin: backgrounds and videos; pre-decode next
+- [x] Settings: output monitor select / disable; audio device from mpv `audio-device-list`
 - **Accept:** looping video background under slide text on Windows; audio routed to chosen device.
+- **Status (2026-11-20):** built and verified on Linux. Output captures show an image and a looping video under the text, inside the canvas area with black bars, right side up. Looping is confirmed past the clip end, the pre-loaded switch is instant, and the audio device list loads. **Still to do for acceptance:** a Windows run with `mpv-2.dll`, plus a check of audio routing by ear (see docs/windows-setup.md). Notes:
+  - libmpv is loaded **at runtime** (`libloading`) instead of the `libmpv2` crate. A missing DLL becomes an operator message rather than a failed start, and building for Windows needs no `mpv.lib`.
+  - Images go through mpv too (`image-display-duration=inf`), so there is one code path.
+  - Background media fits inside the canvas area (mpv keeps aspect); fill/stretch options aren't implemented.
+  - The operator Preview pane shows the slide text only, not the background media.
+  - CI doesn't bundle `mpv-2.dll` (it isn't vendored); add it next to the exe when installing.
 
 ### M6 — Web Remote
 - [ ] axum on its own tokio thread, bound to LAN interface
@@ -202,6 +208,7 @@ Track findings here as real files arrive. "M0:" notes say how the parser current
 - [ ] Text overflow beyond the element box (`adjustsHeightToFit`, shrink-to-fit?). M2: draws past the box (clipped to canvas) with a warning.
 - [ ] `drawingBackgroundColor` semantics (slide vs document). M2: slide colour if the slide's flag is true, else the document's if its flag is true, else black.
 - [ ] Shadow, stroke (outline), rotation, underline, and fill corner radius: not drawn in M2 (each produces a render warning).
+- [ ] How PP6 layers slide background colour vs background media, and its media scaling (fit/fill). M5: media under an optional slide colour; media fits the canvas area.
 - [ ] Arrangement XML structure. M3 reads `uuid`/`name`/`color` plus NSString group UUIDs below each arrangement (tolerant, read-only); verify with a real file.
 - [ ] Next/Prev at the end of a presentation: stay put (current) or move to the next playlist item? **Ask John.**
 - [ ] Characters missing from the slide's font: cosmic-text draws them from another font. M2 reports a warning; decide whether that is acceptable or should be an error.
