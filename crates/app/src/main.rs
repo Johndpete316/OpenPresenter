@@ -7,6 +7,7 @@ mod editor;
 mod error;
 mod gl;
 mod keys;
+mod media_scan;
 mod operator;
 mod output;
 mod raster;
@@ -128,6 +129,7 @@ pub enum UserEvent {
     },
     Library(Box<LibraryIndex>, String),
     MediaFailed(String),
+    Media(Box<media_scan::MediaScan>),
     AudioDevices(Result<Vec<media::AudioDevice>, String>),
 }
 
@@ -296,7 +298,7 @@ fn main() -> ExitCode {
             Err(msg) => app_notices.push(msg),
         }
     }
-    let media_files = list_media(&settings.media_dirs);
+    scan_media(settings.media_dirs.clone(), proxy.clone());
     let mut ui_state_edit = editor::EditState::default();
     if args.edit_mode {
         ui_state_edit.on = true;
@@ -311,7 +313,7 @@ fn main() -> ExitCode {
         ui: UiState {
             library: cached,
             library_status: "Checking library…".into(),
-            media_files,
+            media_scanning: true,
             app_notices,
             settings_path: paths.settings.display().to_string(),
             settings_open: args.open_settings,
@@ -364,23 +366,18 @@ fn main() -> ExitCode {
     app.exit_code
 }
 
-fn list_media(dirs: &[PathBuf]) -> Vec<PathBuf> {
-    const EXT: &[&str] = &[
-        "png", "jpg", "jpeg", "bmp", "gif", "mp4", "mov", "m4v", "mkv", "avi", "wmv", "webm",
-    ];
-    let mut files: Vec<PathBuf> = dirs
-        .iter()
-        .filter_map(|d| std::fs::read_dir(d).ok())
-        .flatten()
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
-            p.extension()
-                .is_some_and(|e| EXT.iter().any(|x| e.eq_ignore_ascii_case(x)))
-        })
-        .collect();
-    files.sort();
-    files
+/// Scan the media folders on a background thread (they can be large or on a slow
+/// drive); the result arrives as `UserEvent::Media`.
+fn scan_media(dirs: Vec<PathBuf>, proxy: EventLoopProxy<UserEvent>) {
+    let spawned = std::thread::Builder::new()
+        .name("media-scan".into())
+        .spawn(move || {
+            let scan = media_scan::scan(&dirs);
+            let _ = proxy.send_event(UserEvent::Media(Box::new(scan)));
+        });
+    if let Err(e) = spawned {
+        tracing::error!(error = %e, "couldn't start the media folder scan");
+    }
 }
 
 fn start_remote(core: &CoreHandle, settings: &Settings) -> Result<web::WebRemote, String> {
@@ -675,7 +672,8 @@ impl App {
                         self.settings.media_dirs.push(d);
                         self.save_settings();
                     }
-                    self.ui.media_files = list_media(&self.settings.media_dirs);
+                    self.ui.media_scanning = true;
+                    scan_media(self.settings.media_dirs.clone(), self.proxy.clone());
                 }
             }
             UiAction::OpenPlaylist => {
@@ -731,7 +729,8 @@ impl App {
                 if i < self.settings.media_dirs.len() {
                     self.settings.media_dirs.remove(i);
                     self.save_settings();
-                    self.ui.media_files = list_media(&self.settings.media_dirs);
+                    self.ui.media_scanning = true;
+                    scan_media(self.settings.media_dirs.clone(), self.proxy.clone());
                 }
             }
             UiAction::ChooseMonitor(i) => {
@@ -894,6 +893,28 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Library(idx, status) => {
                 self.ui.library = *idx;
                 self.ui.library_status = status;
+                self.request_redraw();
+            }
+            UserEvent::Media(scan) => {
+                if !scan.unreadable.is_empty() {
+                    let names: Vec<String> = scan
+                        .unreadable
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect();
+                    self.ui.app_notices.push(format!(
+                        "Some media folders couldn't be read: {}. Their files aren't listed; check the drive is connected and you have access.",
+                        names.join(", ")
+                    ));
+                }
+                if scan.truncated {
+                    self.ui.app_notices.push(
+                        "The media folders hold more than 50,000 files; only the first 50,000 are listed. Choose smaller folders."
+                            .into(),
+                    );
+                }
+                self.ui.media = *scan;
+                self.ui.media_scanning = false;
                 self.request_redraw();
             }
             UserEvent::MediaFailed(msg) => {

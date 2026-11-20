@@ -79,7 +79,9 @@ pub struct UiState {
     pub library: LibraryIndex,
     pub library_status: String,
     pub monitors: Vec<String>,
-    pub media_files: Vec<PathBuf>,
+    /// Media folders, scanned recursively (see `media_scan`).
+    pub media: crate::media_scan::MediaScan,
+    pub media_scanning: bool,
     pub app_notices: Vec<String>,
     pub audio_devices: Vec<media::AudioDevice>,
     pub settings_open: bool,
@@ -89,8 +91,8 @@ pub struct UiState {
     pub edit: crate::editor::EditState,
     /// Video/Image panel hidden (toolbar toggle).
     pub media_hidden: bool,
-    /// Media folder shown in the Video/Image panel (`None` = all).
-    pub media_bin: Option<usize>,
+    /// Folder shown in the Video/Image panel (`None` = everything).
+    pub media_bin: Option<PathBuf>,
     /// Slide tile width in the grid (0 = default).
     pub tile_w: f32,
     /// Problems up to this time have been seen in Settings → Log.
@@ -1246,77 +1248,160 @@ fn media_panel(
         });
         return;
     }
-    if st.media_bin.is_some_and(|b| b >= settings.media_dirs.len()) {
+    // A folder that disappeared (removed, or no media left in it) falls back to all.
+    if let Some(sel) = &st.media_bin
+        && !st.media.files.iter().any(|f| f.starts_with(sel))
+    {
         st.media_bin = None;
     }
-    // Folder list on the left (like PP6's media playlists).
+    // Folder tree on the left, mirroring the folders on disk.
     egui::Panel::left("media-bins")
         .resizable(true)
-        .default_size(160.0)
-        .size_range(100.0..=320.0)
+        .default_size(180.0)
+        .size_range(110.0..=380.0)
         .frame(egui::Frame::new().fill(color::PANEL).inner_margin(4))
         .show(ui, |ui| {
-            egui::ScrollArea::vertical()
+            egui::ScrollArea::both()
                 .id_salt("media-bins")
+                .auto_shrink(false)
                 .show(ui, |ui| {
-                    if ui.selectable_label(st.media_bin.is_none(), "All").clicked() {
+                    let all = format!("All ({})", st.media.files.len());
+                    if ui.selectable_label(st.media_bin.is_none(), all).clicked() {
                         st.media_bin = None;
                     }
-                    for (i, d) in settings.media_dirs.iter().enumerate() {
-                        let name = d.file_name().map_or_else(
-                            || d.display().to_string(),
-                            |n| n.to_string_lossy().into(),
-                        );
-                        if ui
-                            .selectable_label(st.media_bin == Some(i), name)
-                            .on_hover_text(d.display().to_string())
-                            .clicked()
-                        {
-                            st.media_bin = Some(i);
-                        }
+                    let roots = st.media.roots.clone();
+                    for root in &roots {
+                        folder_node(ui, &mut st.media_bin, root, true);
+                    }
+                    if st.media_scanning {
+                        ui.label(RichText::new("Scanning folders…").small().weak());
                     }
                 });
         });
-    let files: Vec<&PathBuf> = match st.media_bin.and_then(|b| settings.media_dirs.get(b)) {
-        Some(dir) => st
-            .media_files
-            .iter()
-            .filter(|f| f.starts_with(dir))
-            .collect(),
-        None => st.media_files.iter().collect(),
-    };
+    let groups = crate::media_scan::grouped(&st.media.files, st.media_bin.as_deref());
+    // Click order for pre-loading "next": the order shown.
+    let shown: Vec<&PathBuf> = groups.iter().flat_map(|(_, v)| v.iter().copied()).collect();
+    let base = st.media_bin.clone();
     egui::ScrollArea::vertical()
         .id_salt("media")
         .auto_shrink(false)
         .show(ui, |ui| {
             ui.add_space(6.0);
-            if files.is_empty() {
-                ui.label(RichText::new("No images or videos in this folder.").weak());
+            if shown.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    let msg = if st.media_scanning {
+                        "Scanning folders…"
+                    } else {
+                        "No images or videos here."
+                    };
+                    ui.label(RichText::new(msg).weak());
+                });
             }
             let (w, h) = (128.0, 72.0);
             let gap = 8.0;
             let per_row = ((ui.available_width() - 12.0 + gap) / (w + gap))
                 .floor()
                 .max(1.0) as usize;
-            for (ri, row) in files.chunks(per_row).enumerate() {
-                ui.horizontal(|ui| {
-                    ui.add_space(6.0);
-                    ui.spacing_mut().item_spacing.x = gap;
-                    for (j, f) in row.iter().enumerate() {
-                        let idx = ri * per_row + j;
-                        let live = show.background_media.as_deref() == Some(f.as_path());
-                        let resp = media_tile(ui, f, Vec2::new(w, h), live);
-                        if resp.clicked() {
-                            // Pre-load the next file in the list so moving on is instant.
-                            let next = files.get(idx + 1).map(|p| (*p).clone());
-                            actions.push(UiAction::Core(Command::SetBackground {
-                                media: Some((*f).clone()),
-                                next,
-                            }));
+            let mut idx = 0;
+            for (folder, files) in &groups {
+                // Sub-folder heading (the selected folder's own files need none).
+                if Some(folder) != base.as_ref() {
+                    let label = folder_label(folder, base.as_deref(), &st.media.roots);
+                    ui.horizontal(|ui| {
+                        ui.add_space(8.0);
+                        ui.label(theme::icon_text(icon::FOLDER_OPEN, 12.0).color(Color32::GRAY));
+                        ui.label(RichText::new(label).strong().color(Color32::from_gray(200)))
+                            .on_hover_text(folder.display().to_string());
+                    });
+                    ui.add_space(2.0);
+                }
+                for row in files.chunks(per_row) {
+                    ui.horizontal(|ui| {
+                        ui.add_space(6.0);
+                        ui.spacing_mut().item_spacing.x = gap;
+                        for f in row {
+                            let live = show.background_media.as_deref() == Some(f.as_path());
+                            let resp = media_tile(ui, f, Vec2::new(w, h), live);
+                            if resp.clicked() {
+                                // Pre-load the next file shown so moving on is instant.
+                                let next = shown.get(idx + 1).map(|p| (*p).clone());
+                                actions.push(UiAction::Core(Command::SetBackground {
+                                    media: Some((*f).clone()),
+                                    next,
+                                }));
+                            }
+                            idx += 1;
                         }
-                    }
-                });
-                ui.add_space(gap);
+                    });
+                    ui.add_space(gap);
+                }
+            }
+        });
+}
+
+/// Heading for a group of files: its path below the selected folder, or (showing
+/// everything) below its media folder, prefixed with that folder's name.
+fn folder_label(
+    folder: &Path,
+    base: Option<&Path>,
+    roots: &[crate::media_scan::MediaNode],
+) -> String {
+    let join = |rel: &Path| {
+        rel.components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" / ")
+    };
+    if let Some(rel) = base.and_then(|b| folder.strip_prefix(b).ok()) {
+        return join(rel);
+    }
+    match roots
+        .iter()
+        .find_map(|r| folder.strip_prefix(&r.path).ok().map(|rel| (r, rel)))
+    {
+        Some((r, rel)) if rel.as_os_str().is_empty() => r.name.clone(),
+        Some((r, rel)) => format!("{} / {}", r.name, join(rel)),
+        None => folder.display().to_string(),
+    }
+}
+
+/// One folder in the media tree: click to show it; the arrow opens its sub-folders.
+fn folder_node(
+    ui: &mut egui::Ui,
+    selected: &mut Option<PathBuf>,
+    node: &crate::media_scan::MediaNode,
+    top: bool,
+) {
+    let label = format!("{} ({})", node.name, node.total);
+    let is_sel = selected.as_deref() == Some(node.path.as_path());
+    if node.children.is_empty() {
+        ui.horizontal(|ui| {
+            ui.add_space(18.0); // line up with folders that have an arrow
+            if ui
+                .selectable_label(is_sel, label)
+                .on_hover_text(node.path.display().to_string())
+                .clicked()
+            {
+                *selected = Some(node.path.clone());
+            }
+        });
+        return;
+    }
+    let id = ui.make_persistent_id(("media-folder", &node.path));
+    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, top)
+        .show_header(ui, |ui| {
+            if ui
+                .selectable_label(is_sel, label)
+                .on_hover_text(node.path.display().to_string())
+                .clicked()
+            {
+                *selected = Some(node.path.clone());
+            }
+        })
+        .body(|ui| {
+            for c in &node.children {
+                folder_node(ui, selected, c, false);
             }
         });
 }

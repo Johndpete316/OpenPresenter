@@ -63,8 +63,12 @@ pp6.exe --open "C:\path\to\song.pro6" --monitor 1
 
 ## M5: looping video under text, audio routing
 
-1. Settings → Folders → add a media folder with a video that has sound.
-2. Click the video in the Media panel: it plays looping under the slide text, inside the slide
+1. Settings → Folders (or the folder button on the Video/Image panel) → add your media
+   **root** folder. It's scanned with all its sub-folders; the left of the Video/Image panel
+   shows the same folder tree (with file counts), and clicking a folder shows its files,
+   grouped by sub-folder. Nothing is copied, moved or written. Hidden and system folders
+   are skipped; an unreadable folder is reported.
+2. Click a video with sound in the Video/Image panel: it plays looping under the slide text, inside the slide
    area (black bars outside).
 3. Settings → Audio: pick the output device; the video's sound should move to it.
 4. Clear Background (F2) removes the video; Clear Text (F3) leaves it playing.
