@@ -6,6 +6,7 @@
 //! typed view on top of it. Every node keeps what the typed model doesn't understand
 //! in an [`Extra`], so nothing in the file is ever dropped.
 
+pub mod arrangement;
 pub mod diff;
 pub mod edit;
 pub mod error;
@@ -19,6 +20,7 @@ pub mod write;
 use std::path::Path;
 use std::time::Instant;
 
+pub use arrangement::Arrangement;
 pub use edit::{EditError, WinPayloads};
 pub use error::{ParseError, ParseErrorDetail, ParseErrorKind};
 pub use extra::{Extra, Leaf, TypedArray, Warning};

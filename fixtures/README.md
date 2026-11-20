@@ -20,7 +20,7 @@ fixtures/encode.sh
 
 | File | Canvas | Covers |
 |---|---|---|
-| `song_1024x768.pro6` | 1024×768 | Groups **Verse 1** (2 slides), **Chorus** (2 slides, 2nd `enabled="false"`), **Verse 2** (1 slide, 4 lines). Windows-style RTF, Arial `\fs110`, centred, white. Shadow with a long float (`0.3333333432674408`) for round-trip. |
+| `song_1024x768.pro6` | 1024×768 | Groups **Verse 1** (2 slides), **Chorus** (2 slides, 2nd `enabled="false"`), **Verse 2** (1 slide, 4 lines). Windows-style RTF, Arial `\fs110`, centred, white. Shadow with a long float (`0.3333333432674408`) for round-trip. Arrangements **Default** (V1 C V2 C, selected) and **Short** (V1 C) in the *assumed* `RVSongArrangement`/`groupIDs` structure. |
 | `two_fonts_1920x1080.pro6` | 1920×1080 | One element with **Arial `\fs120`** + **Georgia `\fs80`**, two colours, Cocoa-style RTF (`\` + newline), `\'e9` and `\u8212?` escapes. Unnamed group with transparent colour; group **Ref**. Spec shadow example, stroke width 2, `&amp;` in an attribute. |
 | `unknowns.pro6` | 1024×768 | **Synthetic** structure: unknown root/group/text attributes, unknown root child, a non-group item in `groups`, a non-text display element, a populated `arrangements` array, a non-empty slide `cues` array, timeline `timeCues`/`mediaTracks` (loop on, 30 s), `WinFlowData`/`WinFontData`. Element names prefixed `Synthetic` are invented and not real PP6. |
 | `render_1024x768.pro6` | 1024×768 | Uses the **bundled fonts** below. Slide 1 centred + middle; slide 2 left/right paragraphs, sans + serif, white + yellow, top; slide 3 bold, bottom, `drawingShadow="true"` (warning); slide 4 uses **Futura PT**, deliberately missing (`MissingFont`). |

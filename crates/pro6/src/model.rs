@@ -76,7 +76,7 @@ impl Document {
         self.groups.as_ref().map_or(&[], |g| &g.items)
     }
 
-    /// `arrangements` array, kept raw until its structure is verified (see docs/PLAN.md Unknowns).
+    /// `arrangements` array as raw XML (see `Document::arrangements` for the parsed view).
     pub fn arrangements_raw(&self) -> Option<&RawElement> {
         self.extra.find_ivar("arrangements")
     }

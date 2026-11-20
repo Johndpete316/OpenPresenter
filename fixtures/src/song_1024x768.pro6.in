@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<RVPresentationDocument height="768" width="1024" docType="0" versionNumber="600" usedCount="0" backgroundColor="0 0 0 1" drawingBackgroundColor="false" CCLIDisplay="false" lastDateUsed="2026-11-15T10:30:00+00:00" selectedArrangementID="" category="Song" resourcesDirectory="" notes="" CCLISongTitle="Amazing Grace" chordChartPath="" os="1" buildNumber="6016">
+<RVPresentationDocument height="768" width="1024" docType="0" versionNumber="600" usedCount="0" backgroundColor="0 0 0 1" drawingBackgroundColor="false" CCLIDisplay="false" lastDateUsed="2026-11-15T10:30:00+00:00" selectedArrangementID="AA000000-0001-4000-8000-000000000001" category="Song" resourcesDirectory="" notes="" CCLISongTitle="Amazing Grace" chordChartPath="" os="1" buildNumber="6016">
   <RVTimeline timeOffset="0" duration="0" selectedMediaTrackIndex="-1" loop="false" rvXMLIvarName="timeline">
     <array rvXMLIvarName="timeCues" />
     <array rvXMLIvarName="mediaTracks" />
@@ -93,5 +93,21 @@
       </array>
     </RVSlideGrouping>
   </array>
-  <array rvXMLIvarName="arrangements" />
+  <!-- Arrangements use the ASSUMED PP6 structure (RVSongArrangement + groupIDs); unverified. -->
+  <array rvXMLIvarName="arrangements">
+    <RVSongArrangement name="Default" uuid="AA000000-0001-4000-8000-000000000001" color="0 0 0 0">
+      <array rvXMLIvarName="groupIDs">
+        <NSString>6C3E1A52-0B2D-4C1F-9E5A-1F0D2B3C4A51</NSString>
+        <NSString>6C3E1A52-0B2D-4C1F-9E5A-1F0D2B3C4A52</NSString>
+        <NSString>6C3E1A52-0B2D-4C1F-9E5A-1F0D2B3C4A53</NSString>
+        <NSString>6C3E1A52-0B2D-4C1F-9E5A-1F0D2B3C4A52</NSString>
+      </array>
+    </RVSongArrangement>
+    <RVSongArrangement name="Short" uuid="AA000000-0001-4000-8000-000000000002" color="0 0 0 0">
+      <array rvXMLIvarName="groupIDs">
+        <NSString>6C3E1A52-0B2D-4C1F-9E5A-1F0D2B3C4A51</NSString>
+        <NSString>6C3E1A52-0B2D-4C1F-9E5A-1F0D2B3C4A52</NSString>
+      </array>
+    </RVSongArrangement>
+  </array>
 </RVPresentationDocument>

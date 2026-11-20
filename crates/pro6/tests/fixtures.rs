@@ -27,7 +27,17 @@ fn song_1024x768() {
         }
     );
     assert_eq!(doc.ccli_song_title, "Amazing Grace");
-    assert_eq!(doc.selected_arrangement_id, None);
+    assert_eq!(
+        doc.selected_arrangement_id.as_deref(),
+        Some("AA000000-0001-4000-8000-000000000001")
+    );
+    let arr = doc.arrangements();
+    assert_eq!(
+        arr.iter()
+            .map(|a| (a.name.as_str(), a.groups.clone()))
+            .collect::<Vec<_>>(),
+        [("Default", vec![0, 1, 2, 1]), ("Short", vec![0, 1])]
+    );
     assert_eq!(
         doc.background_color,
         Some(Rgba {
@@ -317,4 +327,19 @@ fn user_messages() {
         .map(|n| format!("{n}: {}", invalid(n).user_message()))
         .collect();
     insta::assert_snapshot!(msgs.join("\n"));
+}
+
+#[test]
+fn arrangements_view() {
+    let doc = load("unknowns.pro6");
+    let a = doc.arrangements();
+    assert_eq!(a.len(), 1);
+    assert_eq!(a[0].name, "Main");
+    assert_eq!(a[0].groups, [0]);
+    assert!(a[0].unknown_group_ids.is_empty());
+    assert_eq!(
+        doc.selected_arrangement().unwrap().uuid,
+        "9F8E7D6C-0003-4000-8000-0000000000A1"
+    );
+    assert!(load("render_1024x768.pro6").arrangements().is_empty());
 }
