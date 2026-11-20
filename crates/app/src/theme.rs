@@ -29,10 +29,12 @@ pub mod icon {
     pub const FILE_PLUS: char = '\u{E236}';
     pub const FOLDER_OPEN: char = '\u{E256}';
     pub const FOLDER_PLUS: char = '\u{E258}';
-    pub const FLOPPY_DISK: char = '\u{E248}';
+    pub const CARET_RIGHT: char = '\u{E13A}';
+    pub const CARET_DOWN: char = '\u{E136}';
     pub const MAGNIFYING_GLASS: char = '\u{E30C}';
     pub const STOP: char = '\u{E46C}';
     pub const SQUARES_FOUR: char = '\u{E464}';
+    pub const LIST: char = '\u{E2F0}';
 }
 
 /// Colours shared by the panels.

@@ -51,7 +51,13 @@ pp6.exe --open "C:\path\to\song.pro6" --monitor 1
 ## M3: run a service with a clicker
 
 1. Settings → Folders → add the library folder. The library fills in the background.
-2. Build a playlist with `+`, then **Save As…**.
+2. Playlists: click **+** on the Playlists header (type a name, Enter). Make two (e.g. AM and
+   PM). Drag songs from the library onto a playlist (or double-click / +: it goes into the
+   playlist you last clicked). Drag items to reorder, or onto the other playlist to move them.
+   Right-click a playlist to rename or delete it. Everything saves automatically (one file per
+   playlist under the data folder's `playlists`; Settings → Folders shows where).
+   Next past a song's last slide goes to the next song **in the same playlist**; Prev on the
+   first slide goes to the previous song's last slide.
 3. Close the operator window focus, click into the output (or leave the operator focused) and
    use the clicker: PageDown/PageUp (or arrows) step through slides, skipping disabled ones; the
    clicker's blank button (`.` or `b`) is Clear All. F1/F2/F3 = Clear All / Background / Text.

@@ -13,8 +13,7 @@ use pro6::Document;
 
 use crate::command::Command;
 use crate::order::{SlideRef, find_nearest, next_enabled, prev_enabled, slide_order};
-use crate::playlist::{Playlist, PlaylistItem};
-use crate::restore::{LiveRestore, RestoreState};
+use crate::playlist::{ItemRef, Playlist, PlaylistFile, PlaylistItem, new_file_name};
 use crate::state::{Live, Notice, NoticeLevel, ShowState};
 
 /// Presentations kept loaded (beyond the live one and the playlist's).
@@ -38,6 +37,8 @@ enum IoJob {
     Load(PathBuf),
     LoadPlaylist(PathBuf),
     SavePlaylist(Playlist, PathBuf),
+    /// Move a deleted playlist's file into `deleted/` (kept, not destroyed).
+    DeletePlaylist(PathBuf),
     SaveDocument(Arc<Document>),
 }
 
@@ -67,9 +68,26 @@ impl CoreHandle {
 
 #[derive(Default)]
 pub struct CoreConfig {
-    pub restore: Option<RestoreState>,
-    pub restore_writer: Option<Sender<RestoreState>>,
+    /// Where playlists live (one TOML file each); `None` keeps them in memory only.
+    pub playlists_dir: Option<PathBuf>,
     pub output_enabled: bool,
+}
+
+/// `dir/deleted/<name>` (with a number if that exists).
+fn move_to_deleted(path: &std::path::Path) -> std::io::Result<()> {
+    let dir = path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("deleted");
+    std::fs::create_dir_all(&dir)?;
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let mut target = dir.join(&*name);
+    let mut n = 2;
+    while target.exists() {
+        target = dir.join(format!("{n} {name}"));
+        n += 1;
+    }
+    std::fs::rename(path, target)
 }
 
 pub fn spawn(config: CoreConfig) -> std::io::Result<(CoreHandle, JoinHandle<()>)> {
@@ -109,10 +127,19 @@ fn io_worker(rx: &Receiver<IoJob>, back: &Sender<Msg>) {
                 let r = p.save(&path).map_err(|e| e.user_message());
                 Msg::PlaylistSaved(path, r)
             }
+            IoJob::DeletePlaylist(path) => {
+                let r = move_to_deleted(&path).map_err(|e| {
+                    format!(
+                        "The deleted playlist's file '{}' couldn't be moved aside ({e}); it may reappear next time.",
+                        path.display()
+                    )
+                });
+                Msg::PlaylistSaved(path, r)
+            }
         };
-        if back.send(msg).is_err() {
-            return;
-        }
+        // The core may already have stopped (quitting); keep going so queued saves
+        // still reach the disk. The loop ends when the queue is empty and closed.
+        let _ = back.send(msg);
     }
 }
 
@@ -157,7 +184,7 @@ struct Core {
     pending_goto: Option<PendingGoTo>,
     /// Presentation the "not in the playlist" hint was last shown for.
     edge_hint_for: Option<PathBuf>,
-    restore_writer: Option<Sender<RestoreState>>,
+    playlists_dir: Option<PathBuf>,
     /// Start Loop was asked for while this presentation was still loading.
     pending_loop: Option<PathBuf>,
     /// Loop stopped by the operator (Stop / Clear) for this live presentation: don't
@@ -178,46 +205,20 @@ impl Core {
             doc_lru: VecDeque::new(),
             pending_goto: None,
             edge_hint_for: None,
-            restore_writer: config.restore_writer,
+            playlists_dir: config.playlists_dir.clone(),
             pending_loop: None,
             loop_suppressed: None,
         };
-        if let Some(r) = config.restore {
-            core.apply_restore(r);
+        if let Some(dir) = &config.playlists_dir {
+            let (playlists, errors) = crate::playlist::load_dir(dir);
+            tracing::info!(dir = %dir.display(), playlists = playlists.len(), "playlists loaded");
+            core.s.playlists = Arc::new(playlists);
+            for e in errors {
+                core.notice(NoticeLevel::Warning, e.user_message());
+            }
+            core.preload_playlist_heads();
         }
         core
-    }
-
-    fn apply_restore(&mut self, r: RestoreState) {
-        tracing::info!(
-            age_s = r.age().as_secs(),
-            live = r.restore_live(),
-            "restoring previous session"
-        );
-        let go_live = r.restore_live();
-        if go_live {
-            self.s.background_media = r.background_media.clone();
-        }
-        self.s.playlist = Arc::new(r.playlist);
-        self.s.playlist_path = r.playlist_path;
-        if let Some(i) = r.playlist_item {
-            self.select_item(i);
-        }
-        if let Some(l) = r.live {
-            Arc::make_mut(&mut self.s.arrangements).insert(l.path.clone(), l.arrangement.clone());
-            self.s.selected = Some(l.path.clone());
-            self.request_load(&l.path);
-            if go_live {
-                self.pending_goto = Some(PendingGoTo {
-                    path: l.path,
-                    position: Some(l.position),
-                    from_end: false,
-                    at: None,
-                    text_visible: l.text_visible,
-                    background_visible: l.background_visible,
-                });
-            }
-        }
     }
 
     fn run(&mut self, rx: &Receiver<Msg>) {
@@ -254,11 +255,16 @@ impl Core {
                 }
                 Msg::Loaded(path, result) => self.loaded(path, result),
                 Msg::PlaylistLoaded(path, result) => match result {
-                    Ok(p) => {
-                        self.s.playlist = Arc::new(p);
-                        self.s.playlist_path = Some(path);
-                        self.s.playlist_item = None;
-                        self.preload_playlist_head();
+                    Ok(mut p) => {
+                        if p.name.trim().is_empty() {
+                            p.name = path
+                                .file_stem()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| "Playlist".into());
+                        }
+                        let i = self.add_playlist(p);
+                        self.save_playlist(i);
+                        self.preload_playlist_heads();
                     }
                     Err(e) => self.notice(NoticeLevel::Error, e),
                 },
@@ -269,14 +275,9 @@ impl Core {
                     }
                     Err(e) => self.notice(NoticeLevel::Error, e),
                 },
+                // Playlists save on every change; only failures are worth a notice.
                 Msg::PlaylistSaved(path, result) => match result {
-                    Ok(()) => {
-                        self.s.playlist_path = Some(path.clone());
-                        self.notice(
-                            NoticeLevel::Info,
-                            format!("Playlist saved to {}", path.display()),
-                        );
-                    }
+                    Ok(()) => tracing::debug!(path = %path.display(), "playlist saved"),
                     Err(e) => self.notice(NoticeLevel::Error, e),
                 },
                 Msg::Shutdown => {
@@ -298,23 +299,6 @@ impl Core {
             }
             ok
         });
-        if let Some(w) = &self.restore_writer {
-            let live = self.s.live.as_ref().map(|l| LiveRestore {
-                path: l.path.clone(),
-                arrangement: l.arrangement.clone(),
-                position: l.position.unwrap_or(0),
-                text_visible: self.s.text_visible,
-                background_visible: self.s.background_visible,
-            });
-            let _ = w.send(RestoreState {
-                saved_at_unix: 0,
-                playlist_path: self.s.playlist_path.clone(),
-                playlist: (*self.s.playlist).clone(),
-                playlist_item: self.s.playlist_item,
-                live,
-                background_media: self.s.background_media.clone(),
-            });
-        }
     }
 
     fn notice(&mut self, level: NoticeLevel, text: String) {
@@ -409,7 +393,7 @@ impl Core {
                 s.is_live(p)
                     || s.unsaved.contains(p)
                     || s.selected.as_ref() == Some(p)
-                    || s.playlist.items.iter().any(|i| &i.path == p)
+                    || s.in_any_playlist(p)
             };
             let Some(pos) = self.doc_lru.iter().position(|p| !keep(p, &self.s)) else {
                 break;
@@ -423,28 +407,30 @@ impl Core {
     fn command(&mut self, cmd: Command, at: Instant) {
         let playlist_edit = matches!(
             cmd,
-            Command::PlaylistNew
+            Command::PlaylistCreate(_)
+                | Command::PlaylistRename { .. }
+                | Command::PlaylistDelete(_)
                 | Command::PlaylistAdd { .. }
                 | Command::PlaylistRemove(_)
                 | Command::PlaylistMove { .. }
-                | Command::PlaylistLoad(_)
         );
         self.command_inner(cmd, at);
         if playlist_edit {
-            let titles: Vec<String> = self
-                .s
-                .playlist
-                .items
-                .iter()
-                .map(|i| {
-                    i.path
-                        .file_stem()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned()
-                })
-                .collect();
-            tracing::info!(items = ?titles, "playlist changed");
+            for p in self.s.playlists.iter() {
+                let titles: Vec<String> = p
+                    .playlist
+                    .items
+                    .iter()
+                    .map(|i| {
+                        i.path
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                    .collect();
+                tracing::info!(playlist = %p.playlist.name, items = ?titles, "playlist");
+            }
         }
     }
 
@@ -506,64 +492,105 @@ impl Core {
                 self.request_load(&path);
             }
             Command::OutputEnable(on) => self.s.output_enabled = on,
-            Command::PlaylistNew => {
-                self.s.playlist = Arc::new(Playlist::default());
-                self.s.playlist_path = None;
-                self.s.playlist_item = None;
+            Command::PlaylistCreate(name) => {
+                let i = self.add_playlist(Playlist {
+                    name,
+                    items: Vec::new(),
+                });
+                self.save_playlist(i);
             }
-            Command::PlaylistLoad(path) => {
-                let _ = self.io.send(IoJob::LoadPlaylist(path));
-            }
-            Command::PlaylistSave(path) => match path.or_else(|| self.s.playlist_path.clone()) {
-                Some(p) => {
-                    let _ = self
-                        .io
-                        .send(IoJob::SavePlaylist((*self.s.playlist).clone(), p));
+            Command::PlaylistRename { playlist, name } => {
+                if let Some(p) = Arc::make_mut(&mut self.s.playlists).get_mut(playlist) {
+                    p.playlist.name = name;
+                    self.save_playlist(playlist);
                 }
-                None => self.notice(
-                    NoticeLevel::Warning,
-                    "Choose where to save the playlist first.".into(),
-                ),
-            },
-            Command::PlaylistAdd { path, arrangement } => {
-                Arc::make_mut(&mut self.s.playlist)
-                    .items
-                    .push(PlaylistItem {
-                        path: path.clone(),
-                        arrangement,
-                    });
-                self.request_load(&path);
             }
-            Command::PlaylistRemove(i) => {
-                let items = &mut Arc::make_mut(&mut self.s.playlist).items;
-                if i < items.len() {
-                    items.remove(i);
+            Command::PlaylistDelete(playlist) => {
+                if playlist < self.s.playlists.len() {
+                    let removed = Arc::make_mut(&mut self.s.playlists).remove(playlist);
+                    if let Some(f) = removed.file {
+                        let _ = self.io.send(IoJob::DeletePlaylist(f));
+                    }
                     self.s.playlist_item = match self.s.playlist_item {
-                        Some(sel) if sel == i => None,
-                        Some(sel) if sel > i => Some(sel - 1),
+                        Some(r) if r.playlist == playlist => None,
+                        Some(r) if r.playlist > playlist => Some(ItemRef {
+                            playlist: r.playlist - 1,
+                            item: r.item,
+                        }),
                         other => other,
                     };
                 }
             }
-            Command::PlaylistMove { from, to } => {
-                let items = &mut Arc::make_mut(&mut self.s.playlist).items;
-                if from < items.len() && to < items.len() && from != to {
-                    let item = items.remove(from);
-                    items.insert(to, item);
-                    self.s.playlist_item = self.s.playlist_item.map(|sel| {
-                        if sel == from {
-                            to
-                        } else if from < sel && sel <= to {
-                            sel - 1
-                        } else if to <= sel && sel < from {
-                            sel + 1
-                        } else {
-                            sel
-                        }
+            Command::PlaylistImport(path) => {
+                let _ = self.io.send(IoJob::LoadPlaylist(path));
+            }
+            Command::PlaylistAdd {
+                playlist,
+                path,
+                arrangement,
+            } => {
+                let playlist = if self.s.playlists.is_empty() {
+                    self.add_playlist(Playlist {
+                        name: "Playlist".into(),
+                        items: Vec::new(),
+                    })
+                } else {
+                    playlist
+                };
+                if let Some(p) = Arc::make_mut(&mut self.s.playlists).get_mut(playlist) {
+                    p.playlist.items.push(PlaylistItem {
+                        path: path.clone(),
+                        arrangement,
                     });
+                    self.save_playlist(playlist);
+                    self.request_load(&path);
                 }
             }
-            Command::PlaylistSelect(i) => self.select_item(i),
+            Command::PlaylistRemove(r) => {
+                if let Some(p) = Arc::make_mut(&mut self.s.playlists).get_mut(r.playlist)
+                    && r.item < p.playlist.items.len()
+                {
+                    p.playlist.items.remove(r.item);
+                    self.s.playlist_item = match self.s.playlist_item {
+                        Some(sel) if sel == r => None,
+                        Some(sel) if sel.playlist == r.playlist && sel.item > r.item => {
+                            Some(ItemRef {
+                                playlist: sel.playlist,
+                                item: sel.item - 1,
+                            })
+                        }
+                        other => other,
+                    };
+                    self.save_playlist(r.playlist);
+                }
+            }
+            Command::PlaylistMove { playlist, from, to } => {
+                if let Some(p) = Arc::make_mut(&mut self.s.playlists).get_mut(playlist) {
+                    let items = &mut p.playlist.items;
+                    if from < items.len() && to < items.len() && from != to {
+                        let item = items.remove(from);
+                        items.insert(to, item);
+                        self.s.playlist_item = self.s.playlist_item.map(|sel| {
+                            if sel.playlist != playlist {
+                                return sel;
+                            }
+                            let i = sel.item;
+                            let item = if i == from {
+                                to
+                            } else if from < i && i <= to {
+                                i - 1
+                            } else if to <= i && i < from {
+                                i + 1
+                            } else {
+                                i
+                            };
+                            ItemRef { playlist, item }
+                        });
+                        self.save_playlist(playlist);
+                    }
+                }
+            }
+            Command::PlaylistSelect(r) => self.select_item(r),
             Command::Edit { presentation, op } => self.edit(presentation, &op),
             Command::Save(path) => match self.s.docs.get(&path) {
                 Some(doc) => {
@@ -753,30 +780,56 @@ impl Core {
         }
     }
 
-    fn select_item(&mut self, i: usize) {
-        let Some(item) = self.s.playlist.items.get(i).cloned() else {
+    fn select_item(&mut self, r: ItemRef) {
+        let Some(item) = self.s.item(r).cloned() else {
             return;
         };
-        self.s.playlist_item = Some(i);
+        self.s.playlist_item = Some(r);
         self.s.selected = Some(item.path.clone());
         if let Some(a) = item.arrangement {
             Arc::make_mut(&mut self.s.arrangements).insert(item.path.clone(), Some(a));
         }
         self.request_load(&item.path);
         // Pre-parse the next item so moving on is instant.
-        if let Some(next) = self.s.playlist.items.get(i + 1).map(|n| n.path.clone()) {
+        if let Some(next) = self.s.item(ItemRef {
+            playlist: r.playlist,
+            item: r.item + 1,
+        }) {
+            let next = next.path.clone();
             self.request_load(&next);
         }
     }
 
-    fn preload_playlist_head(&mut self) {
+    fn add_playlist(&mut self, playlist: Playlist) -> usize {
+        let file = self
+            .playlists_dir
+            .as_ref()
+            .map(|d| new_file_name(d, &playlist.name));
+        let list = Arc::make_mut(&mut self.s.playlists);
+        list.push(PlaylistFile { file, playlist });
+        list.len() - 1
+    }
+
+    /// Save a playlist to its file (on the I/O thread). Every edit saves.
+    fn save_playlist(&mut self, i: usize) {
+        if let Some(PlaylistFile {
+            file: Some(f),
+            playlist,
+        }) = self.s.playlists.get(i)
+        {
+            let _ = self
+                .io
+                .send(IoJob::SavePlaylist(playlist.clone(), f.clone()));
+        }
+    }
+
+    /// Parse the first two items of each playlist ahead of time.
+    fn preload_playlist_heads(&mut self) {
         let first: Vec<PathBuf> = self
             .s
-            .playlist
-            .items
+            .playlists
             .iter()
-            .take(2)
-            .map(|i| i.path.clone())
+            .flat_map(|p| p.playlist.items.iter().take(2).map(|i| i.path.clone()))
             .collect();
         for p in first {
             self.request_load(&p);
@@ -833,11 +886,15 @@ impl Core {
         self.restart_loop_timer();
         self.touch(path);
         // If this presentation is a playlist item, follow it and pre-parse the next one.
-        if let Some(i) = self.s.playlist.items.iter().position(|it| &it.path == path)
-            && self.s.playlist_item != Some(i)
+        if let Some(r) = self.s.playlist_ref_of(path)
+            && self.s.playlist_item != Some(r)
         {
-            self.s.playlist_item = Some(i);
-            if let Some(next) = self.s.playlist.items.get(i + 1).map(|n| n.path.clone()) {
+            self.s.playlist_item = Some(r);
+            if let Some(next) = self.s.item(ItemRef {
+                playlist: r.playlist,
+                item: r.item + 1,
+            }) {
+                let next = next.path.clone();
                 self.request_load(&next);
             }
         }
@@ -875,13 +932,10 @@ impl Core {
     /// yet, it goes live as soon as it is (the core never waits).
     fn adjacent_playlist_item(&mut self, forward: bool, at: Instant) {
         let Some(live) = &self.s.live else { return };
-        let items = &self.s.playlist.items;
-        // Prefer the selected item if it is the live one (a presentation can appear twice).
-        let current = match self.s.playlist_item {
-            Some(i) if items.get(i).is_some_and(|it| it.path == live.path) => Some(i),
-            _ => items.iter().position(|it| it.path == live.path),
-        };
-        let index = match (current, forward) {
+        // Only within the live presentation's own playlist.
+        let current = self.s.playlist_ref_of(&live.path);
+        let pl = current.map_or(0, |r| r.playlist);
+        let index = match (current.map(|r| r.item), forward) {
             (None, _) => {
                 tracing::debug!(
                     "live presentation isn't in the playlist; no next/previous item to step to"
@@ -914,9 +968,20 @@ impl Core {
                 }
             },
         };
-        let Some(next) = items.get(index).cloned() else {
-            tracing::debug!("at the end of the last playlist item");
+        let Some(next) = self
+            .s
+            .item(ItemRef {
+                playlist: pl,
+                item: index,
+            })
+            .cloned()
+        else {
+            tracing::debug!("at the end of the playlist");
             return;
+        };
+        let index = ItemRef {
+            playlist: pl,
+            item: index,
         };
         if let Some(a) = &next.arrangement {
             Arc::make_mut(&mut self.s.arrangements).insert(next.path.clone(), Some(a.clone()));
@@ -953,15 +1018,14 @@ impl Core {
 
     fn select_arrangement(&mut self, path: PathBuf, arrangement: Option<String>) {
         Arc::make_mut(&mut self.s.arrangements).insert(path.clone(), arrangement.clone());
-        if let Some(i) = self.s.playlist_item
-            && self
-                .s
-                .playlist
-                .items
-                .get(i)
-                .is_some_and(|it| it.path == path)
+        if let Some(r) = self.s.playlist_item
+            && self.s.item(r).is_some_and(|it| it.path == path)
         {
-            Arc::make_mut(&mut self.s.playlist).items[i].arrangement = arrangement.clone();
+            Arc::make_mut(&mut self.s.playlists)[r.playlist]
+                .playlist
+                .items[r.item]
+                .arrangement = arrangement.clone();
+            self.save_playlist(r.playlist);
         }
         if let Some(live) = self.s.live.as_mut().filter(|l| l.path == path) {
             let order: Vec<SlideRef> = slide_order(&live.doc, arrangement.as_deref());

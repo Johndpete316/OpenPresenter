@@ -146,6 +146,7 @@ struct Paths {
     logs: PathBuf,
     library_cache: PathBuf,
     thumbs: PathBuf,
+    playlists: PathBuf,
 }
 
 fn paths(data_dir: Option<PathBuf>) -> Paths {
@@ -167,6 +168,7 @@ fn paths(data_dir: Option<PathBuf>) -> Paths {
         settings: config.join("settings.toml"),
         logs: data.join("logs"),
         library_cache: cache.join("library.json"),
+        playlists: data.join("playlists"),
         thumbs: cache.join("thumbnails"),
     }
 }
@@ -199,8 +201,7 @@ fn main() -> ExitCode {
     // Start blank (John, 2026-11-20): nothing live, nothing on the output.
     let _ = args.no_restore;
     let (core, _core_thread) = match pp6core::spawn(pp6core::CoreConfig {
-        restore: None,
-        restore_writer: None,
+        playlists_dir: Some(paths.playlists.clone()),
         output_enabled: settings.output.enabled,
     }) {
         Ok(v) => v,
@@ -274,6 +275,8 @@ fn main() -> ExitCode {
         });
     }
     if let Some(p) = &args.open {
+        // Absolute, like library and playlist paths, so they compare equal.
+        let p = std::path::absolute(p).unwrap_or_else(|_| p.clone());
         core.send(Command::Open(p.clone()));
         core.send(Command::GoTo {
             presentation: p.clone(),
@@ -309,6 +312,7 @@ fn main() -> ExitCode {
             media_scanning: true,
             app_notices,
             settings_path: paths.settings.display().to_string(),
+            playlists_path: paths.playlists.display().to_string(),
             settings_open: args.open_settings,
             edit: ui_state_edit,
             ..UiState::default()
@@ -669,24 +673,37 @@ impl App {
                     scan_media(self.settings.media_dirs.clone(), self.proxy.clone());
                 }
             }
-            UiAction::OpenPlaylist => {
+            UiAction::ImportPlaylist => {
                 if let Some(p) = rfd::FileDialog::new()
+                    .set_title("Import a playlist")
                     .add_filter("Playlist", &["toml"])
                     .pick_file()
                 {
-                    self.send(Command::PlaylistLoad(p));
+                    self.send(Command::PlaylistImport(p));
                 }
             }
-            UiAction::SavePlaylistAs => {
-                if let Some(mut p) = rfd::FileDialog::new()
-                    .add_filter("Playlist", &["toml"])
-                    .set_file_name("playlist.toml")
-                    .save_file()
+            UiAction::DeletePlaylist(i) => {
+                let name = self
+                    .show
+                    .playlists
+                    .get(i)
+                    .map(|p| p.playlist.name.clone())
+                    .unwrap_or_default();
+                let answer = rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Warning)
+                    .set_title("Delete playlist")
+                    .set_description(format!(
+                        "Delete the playlist '{name}'? The presentations themselves aren't touched. (The playlist file is kept in the 'deleted' folder.)"
+                    ))
+                    .set_buttons(rfd::MessageButtons::OkCancelCustom(
+                        "Delete".into(),
+                        "Cancel".into(),
+                    ))
+                    .show();
+                if matches!(answer, rfd::MessageDialogResult::Custom(ref b) if b == "Delete")
+                    || matches!(answer, rfd::MessageDialogResult::Ok)
                 {
-                    if p.extension().is_none() {
-                        p.set_extension("toml");
-                    }
-                    self.send(Command::PlaylistSave(Some(p)));
+                    self.send(Command::PlaylistDelete(i));
                 }
             }
             UiAction::NewPin => {

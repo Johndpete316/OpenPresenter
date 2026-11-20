@@ -32,21 +32,31 @@ pub enum Command {
         media: Option<PathBuf>,
         next: Option<PathBuf>,
     },
-    PlaylistNew,
-    PlaylistLoad(PathBuf),
-    /// Save to the given path, or the current playlist file.
-    PlaylistSave(Option<PathBuf>),
+    /// A new, empty playlist (saved automatically in the playlists folder).
+    PlaylistCreate(String),
+    PlaylistRename {
+        playlist: usize,
+        name: String,
+    },
+    /// Remove a playlist. Its file is moved into the playlists folder's `deleted`
+    /// sub-folder, not destroyed.
+    PlaylistDelete(usize),
+    /// Copy a playlist file in as a new playlist.
+    PlaylistImport(PathBuf),
+    /// Append to `playlist`. With no playlists at all, one is created first.
     PlaylistAdd {
+        playlist: usize,
         path: PathBuf,
         arrangement: Option<String>,
     },
-    PlaylistRemove(usize),
+    PlaylistRemove(crate::ItemRef),
     PlaylistMove {
+        playlist: usize,
         from: usize,
         to: usize,
     },
     /// Select a playlist item (loads it; the next item is pre-parsed).
-    PlaylistSelect(usize),
+    PlaylistSelect(crate::ItemRef),
     /// Edit a loaded presentation (in memory; marks it unsaved).
     Edit {
         presentation: PathBuf,

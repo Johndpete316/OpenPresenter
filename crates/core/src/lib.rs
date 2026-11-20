@@ -1,4 +1,4 @@
-//! Show core: state, commands, play order, playlists, settings, crash-restore and the
+//! Show core: state, commands, play order, playlists, settings and the
 //! library index. No GUI, GPU or media dependencies.
 
 mod actor;
@@ -6,7 +6,6 @@ mod command;
 pub mod library;
 mod order;
 mod playlist;
-pub mod restore;
 mod settings;
 mod state;
 
@@ -16,8 +15,9 @@ use std::path::Path;
 pub use actor::{CoreConfig, CoreHandle, save_with_backup, spawn};
 pub use command::Command;
 pub use order::{SlideRef, find_nearest, next_enabled, prev_enabled, slide_order};
-pub use playlist::{Playlist, PlaylistError, PlaylistItem};
-pub use restore::{LiveRestore, RestoreState};
+pub use playlist::{
+    ItemRef, Playlist, PlaylistError, PlaylistFile, PlaylistItem, load_dir as load_playlists,
+};
 pub use settings::{KeyBindings, OutputSettings, Settings, SettingsError, WebSettings};
 pub use state::{Live, LoopState, Notice, NoticeLevel, ShowState};
 

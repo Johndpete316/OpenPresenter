@@ -24,7 +24,7 @@ use egui::{
     TextureHandle, Vec2,
 };
 use pp6core::library::LibraryIndex;
-use pp6core::{Command, NoticeLevel, Settings, ShowState, SlideRef};
+use pp6core::{Command, ItemRef, NoticeLevel, Settings, ShowState, SlideRef};
 
 use crate::theme::{self, color, icon, section_header, small_icon, tool_button};
 use crate::thumbs::{ThumbKey, ThumbRequest, ThumbResult};
@@ -42,8 +42,10 @@ pub enum UiAction {
     Core(Command),
     AddLibraryFolder,
     AddMediaFolder,
-    OpenPlaylist,
-    SavePlaylistAs,
+    /// Pick a playlist file and copy it in.
+    ImportPlaylist,
+    /// Delete a playlist (after asking).
+    DeletePlaylist(usize),
     /// Output display chosen by description index (see `UiState::monitors`).
     ChooseMonitor(usize),
     /// mpv audio device name; `None` = system default.
@@ -87,6 +89,11 @@ pub struct UiState {
     pub settings_open: bool,
     pub settings_tab: SettingsTab,
     pub settings_path: String,
+    pub playlists_path: String,
+    /// Playlist whose name is being edited, and the text so far.
+    pub renaming: Option<(usize, String)>,
+    /// Playlist that library double-click / + adds to (the last one used).
+    pub target_playlist: usize,
     pub remote: RemoteStatus,
     pub edit: crate::editor::EditState,
     /// Video/Image panel hidden (toolbar toggle).
@@ -108,6 +115,18 @@ pub struct UiState {
 }
 
 impl UiState {
+    /// Where library double-click / + adds: the playlist of the selected item, else the
+    /// last playlist clicked, else the first.
+    fn add_target(&self, show: &ShowState) -> usize {
+        show.playlist_item
+            .map(|r| r.playlist)
+            .filter(|&p| p < show.playlists.len())
+            .unwrap_or(
+                self.target_playlist
+                    .min(show.playlists.len().saturating_sub(1)),
+            )
+    }
+
     /// Take finished thumbnails into egui textures.
     pub fn receive_thumbs(
         &mut self,
@@ -226,7 +245,7 @@ pub fn draw(
                 .default_size(half)
                 .size_range(110.0..=(ui.available_height() - 110.0).max(120.0))
                 .frame(egui::Frame::new().fill(color::LIST))
-                .show(ui, |ui| playlist(ui, show, &mut actions));
+                .show(ui, |ui| playlists(ui, st, show, &mut actions));
             egui::CentralPanel::default()
                 .frame(egui::Frame::new().fill(color::LIST))
                 .show(ui, |ui| library(ui, st, show, settings, &mut actions));
@@ -731,6 +750,7 @@ fn library(
         });
         return;
     }
+    let target = st.add_target(show);
     let results = st.library.search(&st.search);
     let status = if st.search.trim().is_empty() {
         st.library_status.clone()
@@ -816,21 +836,29 @@ fn library(
                     Some(err) => resp.on_hover_text(err),
                     None => resp,
                 };
-                let add_to_playlist = || {
+                let add_to = |playlist: usize| {
                     UiAction::Core(Command::PlaylistAdd {
+                        playlist,
                         path: e.path.clone(),
                         arrangement: None,
                     })
                 };
+                let add_to_playlist = || add_to(target);
                 if add.clicked() || resp.double_clicked() {
                     actions.push(add_to_playlist());
                 } else if resp.clicked() {
                     actions.push(UiAction::Core(Command::Open(e.path.clone())));
                 }
                 resp.context_menu(|ui| {
-                    if ui.button("Add to playlist").clicked() {
-                        actions.push(add_to_playlist());
+                    if show.playlists.is_empty() && ui.button("Add to a new playlist").clicked() {
+                        actions.push(add_to(0));
                         ui.close();
+                    }
+                    for (pi, p) in show.playlists.iter().enumerate() {
+                        if ui.button(format!("Add to '{}'", p.playlist.name)).clicked() {
+                            actions.push(add_to(pi));
+                            ui.close();
+                        }
                     }
                 });
             }
@@ -839,15 +867,16 @@ fn library(
 
 // ───────────────────────────── playlist ─────────────────────────────
 
-fn playlist(ui: &mut egui::Ui, show: &ShowState, actions: &mut Vec<UiAction>) {
-    let name = show
-        .playlist_path
-        .as_deref()
-        .map_or_else(|| "unsaved".to_owned(), title);
-    section_header(ui, "Playlist", |ui| {
-        ui.label(RichText::new(name).small().weak());
+fn playlists(ui: &mut egui::Ui, st: &mut UiState, show: &ShowState, actions: &mut Vec<UiAction>) {
+    section_header(ui, "Playlists", |ui| {
+        if small_icon(ui, icon::PLUS, "New playlist").clicked() {
+            actions.push(UiAction::Core(Command::PlaylistCreate(
+                "New playlist".into(),
+            )));
+            // Name it straight away (it appears at the end once the core has it).
+            st.renaming = Some((show.playlists.len(), "New playlist".into()));
+        }
     });
-    // Footer first so the list fills what's left.
     egui::Panel::bottom("playlist-footer")
         .exact_size(26.0)
         .frame(
@@ -858,132 +887,56 @@ fn playlist(ui: &mut egui::Ui, show: &ShowState, actions: &mut Vec<UiAction>) {
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 if small_icon(ui, icon::FILE_PLUS, "New playlist").clicked() {
-                    actions.push(UiAction::Core(Command::PlaylistNew));
+                    actions.push(UiAction::Core(Command::PlaylistCreate(
+                        "New playlist".into(),
+                    )));
+                    st.renaming = Some((show.playlists.len(), "New playlist".into()));
                 }
-                if small_icon(ui, icon::FOLDER_OPEN, "Open playlist…").clicked() {
-                    actions.push(UiAction::OpenPlaylist);
+                if small_icon(ui, icon::FOLDER_OPEN, "Import a playlist file…").clicked() {
+                    actions.push(UiAction::ImportPlaylist);
                 }
-                if small_icon(ui, icon::FLOPPY_DISK, "Save playlist").clicked() {
-                    if show.playlist_path.is_some() {
-                        actions.push(UiAction::Core(Command::PlaylistSave(None)));
-                    } else {
-                        actions.push(UiAction::SavePlaylistAs);
-                    }
-                }
-                if ui.small_button("Save As…").clicked() {
-                    actions.push(UiAction::SavePlaylistAs);
-                }
+                ui.label(RichText::new("Saved automatically").small().weak());
             });
         });
     egui::ScrollArea::vertical()
-        .id_salt("playlist")
+        .id_salt("playlists")
         .auto_shrink(false)
         .show(ui, |ui| {
-            let n = show.playlist.items.len();
-            for (i, item) in show.playlist.items.iter().enumerate() {
-                let live = show.is_live(&item.path);
-                let selected = show.playlist_item == Some(i);
-                let (rect, resp) = ui.allocate_exact_size(
-                    Vec2::new(ui.available_width(), 22.0),
-                    Sense::click_and_drag(),
-                );
-                resp.dnd_set_drag_payload(PlaylistDrag::Item(i));
-                // Dropping on a row inserts above or below it (whichever half).
-                let below = ui
-                    .ctx()
-                    .pointer_interact_pos()
-                    .is_some_and(|p| p.y > rect.center().y);
-                if resp.dnd_hover_payload::<PlaylistDrag>().is_some() {
-                    let y = if below { rect.bottom() } else { rect.top() };
-                    ui.painter()
-                        .hline(rect.x_range(), y, Stroke::new(2.0, color::LIVE));
-                }
-                if let Some(p) = resp.dnd_release_payload::<PlaylistDrag>() {
-                    drop_into_playlist(&p, i + usize::from(below), n, actions);
-                }
-                let p = ui.painter();
-                if selected {
-                    p.rect_filled(rect, 0.0, color::ACCENT);
-                } else if resp.hovered() {
-                    p.rect_filled(rect, 0.0, Color32::from_gray(55));
-                } else if i % 2 == 1 {
-                    p.rect_filled(rect, 0.0, Color32::from_rgb(39, 39, 42));
-                }
-                if live {
-                    p.rect_filled(
-                        Rect::from_min_size(rect.min, Vec2::new(4.0, rect.height())),
-                        0.0,
-                        color::LIVE,
-                    );
-                }
-                let text_color = if show.load_errors.contains_key(&item.path) {
-                    Color32::LIGHT_RED
-                } else if live {
-                    color::LIVE_TEXT
-                } else {
-                    Color32::from_gray(225)
-                };
-                p.with_clip_rect(Rect::from_min_max(
-                    rect.min,
-                    rect.max - Vec2::new(70.0, 0.0),
-                ))
-                .text(
-                    rect.left_center() + Vec2::new(10.0, 0.0),
-                    Align2::LEFT_CENTER,
-                    format!("{}. {}", i + 1, title(&item.path)),
-                    FontId::proportional(13.0),
-                    text_color,
-                );
-                if resp.clicked() {
-                    actions.push(UiAction::Core(Command::PlaylistSelect(i)));
-                }
-                // Row controls (shown on hover / selection).
-                if resp.hovered() || selected || ui.rect_contains_pointer(rect) {
-                    let mut child = ui.new_child(
-                        egui::UiBuilder::new()
-                            .max_rect(rect.shrink2(Vec2::new(4.0, 1.0)))
-                            .layout(Layout::right_to_left(Align::Center)),
-                    );
-                    if small_icon(&mut child, icon::TRASH, "Remove from playlist").clicked() {
-                        actions.push(UiAction::Core(Command::PlaylistRemove(i)));
-                    }
-                    if i + 1 < n && small_icon(&mut child, icon::ARROW_DOWN, "Move down").clicked()
-                    {
-                        actions.push(UiAction::Core(Command::PlaylistMove { from: i, to: i + 1 }));
-                    }
-                    if i > 0 && small_icon(&mut child, icon::ARROW_UP, "Move up").clicked() {
-                        actions.push(UiAction::Core(Command::PlaylistMove { from: i, to: i - 1 }));
-                    }
-                }
+            for (pi, p) in show.playlists.iter().enumerate() {
+                playlist_node(ui, st, show, pi, p, actions);
             }
-            // The space below the items: dropping there adds at the end.
+            // The space below: dropping there adds to the last playlist (or a new one).
             let h = ui.available_height().max(48.0);
             let (rest, rest_resp) =
                 ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::hover());
             let dragging = rest_resp.dnd_hover_payload::<PlaylistDrag>().is_some();
+            let last = show.playlists.len().checked_sub(1);
             if dragging {
                 ui.painter()
                     .hline(rest.x_range(), rest.top(), Stroke::new(2.0, color::LIVE));
             }
-            if let Some(p) = rest_resp.dnd_release_payload::<PlaylistDrag>() {
-                drop_into_playlist(&p, n, n, actions);
+            if let Some(d) = rest_resp.dnd_release_payload::<PlaylistDrag>() {
+                let pl = last.unwrap_or(0);
+                let n = show.playlists.get(pl).map_or(0, |p| p.playlist.items.len());
+                drop_into_playlist(&d, pl, n, n, show, actions);
             }
-            if n == 0 {
-                ui.painter().text(
+            if show.playlists.is_empty() {
+                let painter = ui.painter();
+                painter.text(
                     rest.center_top() + Vec2::new(0.0, 24.0),
                     Align2::CENTER_CENTER,
                     if dragging {
-                        "Drop to add"
+                        "Drop to start a playlist"
                     } else {
-                        "Drag presentations here from the library"
+                        "No playlists yet: click + to make one"
                     },
                     FontId::proportional(13.0),
                     Color32::from_gray(140),
                 );
-                ui.painter().text(
+                painter.text(
                     rest.center_top() + Vec2::new(0.0, 44.0),
                     Align2::CENTER_CENTER,
-                    "(or double-click them, or use +)",
+                    "(or drag a presentation here from the library)",
                     FontId::proportional(11.0),
                     Color32::from_gray(110),
                 );
@@ -991,31 +944,285 @@ fn playlist(ui: &mut egui::Ui, show: &ShowState, actions: &mut Vec<UiAction>) {
         });
 }
 
+/// One playlist: a collapsible header (name, count) with its items under it.
+fn playlist_node(
+    ui: &mut egui::Ui,
+    st: &mut UiState,
+    show: &ShowState,
+    pi: usize,
+    p: &pp6core::PlaylistFile,
+    actions: &mut Vec<UiAction>,
+) {
+    let items = &p.playlist.items;
+    let n = items.len();
+    let has_live = items.iter().any(|it| show.is_live(&it.path));
+    let id = ui.make_persistent_id(("playlist", pi, p.file.as_deref()));
+    let mut state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
+    let open = state.is_open();
+    // Header row.
+    let (rect, head) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::click());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 0.0, Color32::from_rgb(48, 48, 52));
+    painter.text(
+        rect.left_center() + Vec2::new(10.0, 0.0),
+        Align2::CENTER_CENTER,
+        if open {
+            icon::CARET_DOWN
+        } else {
+            icon::CARET_RIGHT
+        },
+        theme::icon_font(11.0),
+        Color32::from_gray(180),
+    );
+    painter.text(
+        rect.left_center() + Vec2::new(22.0, 0.0),
+        Align2::LEFT_CENTER,
+        icon::LIST,
+        theme::icon_font(13.0),
+        if has_live {
+            color::LIVE
+        } else {
+            Color32::from_gray(170)
+        },
+    );
+    let renaming = st.renaming.as_ref().is_some_and(|(i, _)| *i == pi);
+    if renaming {
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(Rect::from_min_max(
+                    rect.min + Vec2::new(40.0, 2.0),
+                    rect.max - Vec2::new(6.0, 2.0),
+                ))
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        if let Some((_, text)) = st.renaming.as_mut() {
+            let edit = child.add(egui::TextEdit::singleline(text).desired_width(f32::INFINITY));
+            if !edit.has_focus() && !edit.lost_focus() {
+                edit.request_focus();
+            }
+            let enter = child.input(|i| i.key_pressed(egui::Key::Enter));
+            let escape = child.input(|i| i.key_pressed(egui::Key::Escape));
+            if escape {
+                st.renaming = None;
+            } else if enter || edit.lost_focus() {
+                let name = text.trim().to_owned();
+                if !name.is_empty() && name != p.playlist.name {
+                    actions.push(UiAction::Core(Command::PlaylistRename {
+                        playlist: pi,
+                        name,
+                    }));
+                }
+                st.renaming = None;
+            }
+        }
+    } else {
+        painter
+            .with_clip_rect(Rect::from_min_max(
+                rect.min,
+                rect.max - Vec2::new(36.0, 0.0),
+            ))
+            .text(
+                rect.left_center() + Vec2::new(40.0, 0.0),
+                Align2::LEFT_CENTER,
+                &p.playlist.name,
+                FontId::proportional(13.5),
+                Color32::from_gray(235),
+            );
+        painter.text(
+            rect.right_center() - Vec2::new(8.0, 0.0),
+            Align2::RIGHT_CENTER,
+            n.to_string(),
+            FontId::proportional(11.0),
+            Color32::from_gray(140),
+        );
+    }
+    if head.clicked() && !renaming {
+        state.toggle(ui);
+        st.target_playlist = pi;
+    }
+    if head.double_clicked() {
+        st.renaming = Some((pi, p.playlist.name.clone()));
+    }
+    head.context_menu(|ui| {
+        if ui.button("Rename").clicked() {
+            st.renaming = Some((pi, p.playlist.name.clone()));
+            ui.close();
+        }
+        if ui.button("Delete…").clicked() {
+            actions.push(UiAction::DeletePlaylist(pi));
+            ui.close();
+        }
+    });
+    // Dropping on the header adds to the end of this playlist.
+    if head.dnd_hover_payload::<PlaylistDrag>().is_some() {
+        ui.painter()
+            .rect_stroke(rect, 2.0, Stroke::new(2.0, color::LIVE), StrokeKind::Inside);
+    }
+    if let Some(d) = head.dnd_release_payload::<PlaylistDrag>() {
+        drop_into_playlist(&d, pi, n, n, show, actions);
+    }
+    state.store(ui.ctx());
+    if !open {
+        return;
+    }
+
+    for (i, item) in items.iter().enumerate() {
+        let me = ItemRef {
+            playlist: pi,
+            item: i,
+        };
+        let live = show.is_live(&item.path) && show.playlist_ref_of(&item.path) == Some(me);
+        let selected = show.playlist_item == Some(me);
+        let (rect, resp) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), 22.0),
+            Sense::click_and_drag(),
+        );
+        resp.dnd_set_drag_payload(PlaylistDrag::Item(me));
+        // Dropping on a row inserts above or below it (whichever half).
+        let below = ui
+            .ctx()
+            .pointer_interact_pos()
+            .is_some_and(|p| p.y > rect.center().y);
+        let p = ui.painter();
+        if selected {
+            p.rect_filled(rect, 0.0, color::ACCENT);
+        } else if resp.hovered() {
+            p.rect_filled(rect, 0.0, Color32::from_gray(55));
+        } else if i % 2 == 1 {
+            p.rect_filled(rect, 0.0, Color32::from_rgb(39, 39, 42));
+        }
+        if live {
+            p.rect_filled(
+                Rect::from_min_size(
+                    rect.min + Vec2::new(14.0, 0.0),
+                    Vec2::new(4.0, rect.height()),
+                ),
+                0.0,
+                color::LIVE,
+            );
+        }
+        let text_color = if show.load_errors.contains_key(&item.path) {
+            Color32::LIGHT_RED
+        } else if live {
+            color::LIVE_TEXT
+        } else {
+            Color32::from_gray(225)
+        };
+        p.with_clip_rect(Rect::from_min_max(
+            rect.min,
+            rect.max - Vec2::new(70.0, 0.0),
+        ))
+        .text(
+            rect.left_center() + Vec2::new(24.0, 0.0),
+            Align2::LEFT_CENTER,
+            format!("{}. {}", i + 1, title(&item.path)),
+            FontId::proportional(13.0),
+            text_color,
+        );
+        if resp.dnd_hover_payload::<PlaylistDrag>().is_some() {
+            let y = if below { rect.bottom() } else { rect.top() };
+            ui.painter()
+                .hline(rect.x_range(), y, Stroke::new(2.0, color::LIVE));
+        }
+        if let Some(d) = resp.dnd_release_payload::<PlaylistDrag>() {
+            drop_into_playlist(&d, pi, i + usize::from(below), n, show, actions);
+        }
+        if resp.clicked() {
+            st.target_playlist = pi;
+            actions.push(UiAction::Core(Command::PlaylistSelect(me)));
+        }
+        // Row controls (shown on hover / selection).
+        if resp.hovered() || selected || ui.rect_contains_pointer(rect) {
+            let mut child = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(rect.shrink2(Vec2::new(4.0, 1.0)))
+                    .layout(Layout::right_to_left(Align::Center)),
+            );
+            if small_icon(&mut child, icon::TRASH, "Remove from playlist").clicked() {
+                actions.push(UiAction::Core(Command::PlaylistRemove(me)));
+            }
+            if i + 1 < n && small_icon(&mut child, icon::ARROW_DOWN, "Move down").clicked() {
+                actions.push(UiAction::Core(Command::PlaylistMove {
+                    playlist: pi,
+                    from: i,
+                    to: i + 1,
+                }));
+            }
+            if i > 0 && small_icon(&mut child, icon::ARROW_UP, "Move up").clicked() {
+                actions.push(UiAction::Core(Command::PlaylistMove {
+                    playlist: pi,
+                    from: i,
+                    to: i - 1,
+                }));
+            }
+        }
+    }
+    if n == 0 {
+        ui.horizontal(|ui| {
+            ui.add_space(26.0);
+            ui.label(
+                RichText::new("Empty: drag presentations here")
+                    .small()
+                    .italics()
+                    .weak(),
+            );
+        });
+    }
+    ui.add_space(2.0);
+}
+
 /// What's being dragged onto the playlist.
 #[derive(Debug, Clone)]
 enum PlaylistDrag {
     /// A presentation from the library.
     Library(PathBuf),
-    /// An existing playlist item (reorder).
-    Item(usize),
+    /// An existing playlist item (reorder, or move to another playlist).
+    Item(ItemRef),
 }
 
-/// Put the dragged thing at `index` (0..=n) of a playlist with `n` items.
-fn drop_into_playlist(p: &PlaylistDrag, index: usize, n: usize, actions: &mut Vec<UiAction>) {
-    match p {
-        PlaylistDrag::Library(path) => {
-            actions.push(UiAction::Core(Command::PlaylistAdd {
-                path: path.clone(),
-                arrangement: None,
+/// Put the dragged thing at `index` (0..=n) of playlist `pl`, which has `n` items.
+fn drop_into_playlist(
+    d: &PlaylistDrag,
+    pl: usize,
+    index: usize,
+    n: usize,
+    show: &ShowState,
+    actions: &mut Vec<UiAction>,
+) {
+    let add = |path: PathBuf, arrangement: Option<String>, actions: &mut Vec<UiAction>| {
+        actions.push(UiAction::Core(Command::PlaylistAdd {
+            playlist: pl,
+            path,
+            arrangement,
+        }));
+        if index < n {
+            actions.push(UiAction::Core(Command::PlaylistMove {
+                playlist: pl,
+                from: n,
+                to: index,
             }));
-            if index < n {
-                actions.push(UiAction::Core(Command::PlaylistMove { from: n, to: index }));
+        }
+    };
+    match d {
+        PlaylistDrag::Library(path) => add(path.clone(), None, actions),
+        // Within the same playlist: reorder.
+        &PlaylistDrag::Item(from) if from.playlist == pl => {
+            let to = if index > from.item { index - 1 } else { index };
+            if to != from.item && to < n {
+                actions.push(UiAction::Core(Command::PlaylistMove {
+                    playlist: pl,
+                    from: from.item,
+                    to,
+                }));
             }
         }
+        // To another playlist: move it (keeping its arrangement).
         &PlaylistDrag::Item(from) => {
-            let to = if index > from { index - 1 } else { index };
-            if to != from && to < n {
-                actions.push(UiAction::Core(Command::PlaylistMove { from, to }));
+            if let Some(item) = show.item(from) {
+                add(item.path.clone(), item.arrangement.clone(), actions);
+                actions.push(UiAction::Core(Command::PlaylistRemove(from)));
             }
         }
     }
@@ -1031,12 +1238,7 @@ fn drag_label(ctx: &egui::Context, show: &ShowState) {
     };
     let text = match &*p {
         PlaylistDrag::Library(path) => title(path),
-        PlaylistDrag::Item(i) => show
-            .playlist
-            .items
-            .get(*i)
-            .map(|it| title(&it.path))
-            .unwrap_or_default(),
+        PlaylistDrag::Item(r) => show.item(*r).map(|it| title(&it.path)).unwrap_or_default(),
     };
     egui::Area::new(egui::Id::unique("drag-label"))
         .order(egui::Order::Tooltip)
@@ -1574,7 +1776,7 @@ fn settings_window(
             ui.separator();
             match st.settings_tab {
                 SettingsTab::General => settings_general(ui, st, show, settings, actions),
-                SettingsTab::Folders => settings_folders(ui, settings, actions),
+                SettingsTab::Folders => settings_folders(ui, st, settings, actions),
                 SettingsTab::Keys => settings_keys(ui, st, settings),
                 SettingsTab::Log => {
                     st.mark_seen(show);
@@ -1688,7 +1890,12 @@ fn settings_general(
     );
 }
 
-fn settings_folders(ui: &mut egui::Ui, settings: &Settings, actions: &mut Vec<UiAction>) {
+fn settings_folders(
+    ui: &mut egui::Ui,
+    st: &UiState,
+    settings: &Settings,
+    actions: &mut Vec<UiAction>,
+) {
     ui.heading("Library (.pro6)");
     for (i, d) in settings.library_dirs.iter().enumerate() {
         ui.horizontal(|ui| {
@@ -1714,6 +1921,16 @@ fn settings_folders(ui: &mut egui::Ui, settings: &Settings, actions: &mut Vec<Ui
     if ui.button("Add media folder…").clicked() {
         actions.push(UiAction::AddMediaFolder);
     }
+    ui.separator();
+    ui.heading("Playlists");
+    ui.label(
+        RichText::new(format!(
+            "Saved automatically, one file each, in {} (deleted ones go to its 'deleted' folder).",
+            st.playlists_path
+        ))
+        .small()
+        .weak(),
+    );
 }
 
 fn settings_keys(ui: &mut egui::Ui, st: &UiState, settings: &Settings) {
@@ -1931,6 +2148,27 @@ mod interaction_tests {
         }
     }
 
+    /// "AM" with A, B and "PM" with C.
+    fn two_playlists() -> ShowState {
+        let pl = |name: &str, items: &[&str]| pp6core::PlaylistFile {
+            file: None,
+            playlist: pp6core::Playlist {
+                name: name.into(),
+                items: items
+                    .iter()
+                    .map(|t| pp6core::PlaylistItem {
+                        path: PathBuf::from(format!("/lib/{t}.pro6")),
+                        arrangement: None,
+                    })
+                    .collect(),
+            },
+        };
+        ShowState {
+            playlists: Arc::new(vec![pl("AM", &["A", "B"]), pl("PM", &["C"])]),
+            ..Default::default()
+        }
+    }
+
     fn added(actions: &[UiAction]) -> Vec<PathBuf> {
         actions
             .iter()
@@ -1977,36 +2215,57 @@ mod interaction_tests {
     #[test]
     fn drop_positions() {
         let mut a = Vec::new();
-        drop_into_playlist(&PlaylistDrag::Library("/x".into()), 1, 3, &mut a);
+        let show = two_playlists();
+        let r = |playlist, item| ItemRef { playlist, item };
+        drop_into_playlist(&PlaylistDrag::Library("/x".into()), 0, 1, 2, &show, &mut a);
         assert!(matches!(
             a.as_slice(),
             [
-                UiAction::Core(Command::PlaylistAdd { .. }),
-                UiAction::Core(Command::PlaylistMove { from: 3, to: 1 })
+                UiAction::Core(Command::PlaylistAdd { playlist: 0, .. }),
+                UiAction::Core(Command::PlaylistMove {
+                    playlist: 0,
+                    from: 2,
+                    to: 1
+                })
             ]
         ));
         let mut a = Vec::new();
-        drop_into_playlist(&PlaylistDrag::Item(0), 3, 3, &mut a); // to the end
+        drop_into_playlist(&PlaylistDrag::Item(r(0, 0)), 0, 2, 2, &show, &mut a); // to the end
         assert!(matches!(
             a.as_slice(),
-            [UiAction::Core(Command::PlaylistMove { from: 0, to: 2 })]
+            [UiAction::Core(Command::PlaylistMove {
+                playlist: 0,
+                from: 0,
+                to: 1
+            })]
         ));
         let mut a = Vec::new();
-        drop_into_playlist(&PlaylistDrag::Item(1), 1, 3, &mut a); // onto itself
+        drop_into_playlist(&PlaylistDrag::Item(r(0, 1)), 0, 1, 2, &show, &mut a); // onto itself
         assert!(a.is_empty());
+        // Into the other playlist: added there (top), removed here.
+        let mut a = Vec::new();
+        drop_into_playlist(&PlaylistDrag::Item(r(0, 1)), 1, 0, 1, &show, &mut a);
+        assert!(matches!(
+            a.as_slice(),
+            [
+                UiAction::Core(Command::PlaylistAdd { playlist: 1, .. }),
+                UiAction::Core(Command::PlaylistMove {
+                    playlist: 1,
+                    from: 1,
+                    to: 0
+                }),
+                UiAction::Core(Command::PlaylistRemove(ItemRef {
+                    playlist: 0,
+                    item: 1
+                }))
+            ]
+        ));
     }
 
     #[test]
     fn clicking_a_playlist_row_selects_it() {
         let mut h = Harness::new();
-        let mut pl = pp6core::Playlist::default();
-        for t in ["A", "B"] {
-            pl.items.push(pp6core::PlaylistItem {
-                path: PathBuf::from(format!("/lib/{t}.pro6")),
-                arrangement: None,
-            });
-        }
-        h.show.playlist = Arc::new(pl);
+        h.show = two_playlists();
         h.frame(vec![]);
         h.frame(vec![]);
         // Playlist panel rows start under its header (bottom half of the left column).
@@ -2014,7 +2273,7 @@ mod interaction_tests {
         for y in (450..880).step_by(4) {
             let a = h.click(Pos2::new(60.0, y as f32));
             if let Some(i) = a.iter().find_map(|a| match a {
-                UiAction::Core(Command::PlaylistSelect(i)) => Some(*i),
+                UiAction::Core(Command::PlaylistSelect(r)) => Some(r.item + 10 * r.playlist),
                 _ => None,
             }) {
                 picked = Some(i);

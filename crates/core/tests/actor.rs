@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crossbeam_channel::Receiver;
-use pp6core::{Command, CoreConfig, LiveRestore, Playlist, PlaylistItem, RestoreState, ShowState};
+use pp6core::{Command, CoreConfig, ItemRef, ShowState};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -34,6 +34,10 @@ fn start(config: CoreConfig) -> (pp6core::CoreHandle, Receiver<Arc<ShowState>>) 
     let (core, _join) = pp6core::spawn(config).unwrap();
     let rx = core.subscribe(None);
     (core, rx)
+}
+
+fn r(playlist: usize, item: usize) -> ItemRef {
+    ItemRef { playlist, item }
 }
 
 fn pos(s: &ShowState) -> Option<usize> {
@@ -180,21 +184,33 @@ fn playlist_editing_and_preparse() {
     let (core, rx) = start(CoreConfig::default());
     for p in [&a, &b, &c] {
         core.send(Command::PlaylistAdd {
+            playlist: 0,
             path: p.clone(),
             arrangement: None,
         });
     }
-    core.send(Command::PlaylistSelect(0));
+    core.send(Command::PlaylistSelect(r(0, 0)));
     let s = wait(&rx, "item 0 and next pre-parsed", |s| {
         s.docs.contains_key(&a) && s.docs.contains_key(&b)
     });
-    assert_eq!((s.playlist_item, s.selected.as_ref()), (Some(0), Some(&a)));
-    core.send(Command::PlaylistMove { from: 0, to: 2 });
-    let s = wait(&rx, "moved", |s| s.playlist.items[2].path == a);
-    assert_eq!(s.playlist_item, Some(2), "selection follows the moved item");
-    core.send(Command::PlaylistRemove(0));
-    let s = wait(&rx, "removed", |s| s.playlist.items.len() == 2);
-    assert_eq!(s.playlist_item, Some(1));
+    assert_eq!(
+        (s.playlist_item, s.selected.as_ref()),
+        (Some(r(0, 0)), Some(&a))
+    );
+    core.send(Command::PlaylistMove {
+        playlist: 0,
+        from: 0,
+        to: 2,
+    });
+    let s = wait(&rx, "moved", |s| s.playlists[0].playlist.items[2].path == a);
+    assert_eq!(
+        s.playlist_item,
+        Some(r(0, 2)),
+        "selection follows the moved item"
+    );
+    core.send(Command::PlaylistRemove(r(0, 0)));
+    let s = wait(&rx, "removed", |s| s.playlists[0].playlist.items.len() == 2);
+    assert_eq!(s.playlist_item, Some(r(0, 1)));
     // Load error is reported, not fatal.
     core.send(Command::Open(fixture("invalid/bad_rect.pro6")));
     let s = wait(&rx, "error", |s| !s.load_errors.is_empty());
@@ -202,53 +218,110 @@ fn playlist_editing_and_preparse() {
 }
 
 #[test]
-fn restore_recent_session_goes_live() {
+fn playlists_are_saved_reloaded_and_deleted_to_a_folder() {
+    let dir = std::env::temp_dir().join(format!("pp6core-playlists-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
     let song = fixture("song_1024x768.pro6");
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let restore = RestoreState {
-        saved_at_unix: now - 60,
-        playlist_path: None,
-        playlist: Playlist {
-            name: "x".into(),
-            items: vec![PlaylistItem {
-                path: song.clone(),
-                arrangement: None,
-            }],
-        },
-        playlist_item: Some(0),
-        live: Some(LiveRestore {
-            path: song.clone(),
-            arrangement: None,
-            position: 3,
-            text_visible: false,
-            background_visible: true,
-        }),
-        background_media: None,
-    };
-    let (_core, rx) = start(CoreConfig {
-        restore: Some(restore.clone()),
+    let render = fixture("render_1024x768.pro6");
+    let config = || CoreConfig {
+        playlists_dir: Some(dir.clone()),
         ..Default::default()
-    });
-    let s = wait(&rx, "restored live", |s| s.live.is_some());
-    assert_eq!(pos(&s), Some(3));
-    assert!(!s.text_visible, "cleared state restored too");
-
-    // An old session restores the selection but doesn't go live.
-    let old = RestoreState {
-        saved_at_unix: now - 7 * 3600,
-        ..restore
     };
-    let (core, rx) = start(CoreConfig {
-        restore: Some(old),
-        ..Default::default()
+    let (core, rx) = start(config());
+    core.send(Command::PlaylistCreate("Sunday AM".into()));
+    core.send(Command::PlaylistCreate("Sunday PM".into()));
+    core.send(Command::PlaylistAdd {
+        playlist: 0,
+        path: song.clone(),
+        arrangement: None,
     });
-    let s = wait(&rx, "loaded", |s| s.docs.contains_key(&song));
-    assert!(s.live.is_none());
-    assert_eq!(s.playlist_item, Some(0));
+    core.send(Command::PlaylistAdd {
+        playlist: 1,
+        path: render.clone(),
+        arrangement: None,
+    });
+    core.send(Command::PlaylistRename {
+        playlist: 1,
+        name: "Evening".into(),
+    });
+    wait(&rx, "edited", |s| {
+        s.playlists.len() == 2 && s.playlists[1].playlist.name == "Evening"
+    });
     core.shutdown();
+    std::thread::sleep(Duration::from_millis(200)); // saves run on the I/O thread
+
+    // A new start finds both, in name order, with their items.
+    let (core, rx) = start(config());
+    let s = wait(&rx, "reloaded", |s| s.playlists.len() == 2);
+    let names: Vec<&str> = s
+        .playlists
+        .iter()
+        .map(|p| p.playlist.name.as_str())
+        .collect();
+    assert_eq!(names, ["Evening", "Sunday AM"]);
+    assert_eq!(s.playlists[0].playlist.items[0].path, render);
+    assert_eq!(s.playlists[1].playlist.items[0].path, song);
+    assert!(s.live.is_none(), "starts blank");
+
+    // Delete keeps the file aside, out of the list.
+    core.send(Command::PlaylistDelete(0));
+    wait(&rx, "deleted", |s| s.playlists.len() == 1);
+    std::thread::sleep(Duration::from_millis(200));
+    let left: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|x| x == "toml"))
+        .collect();
+    assert_eq!(left.len(), 1);
+    assert_eq!(std::fs::read_dir(dir.join("deleted")).unwrap().count(), 1);
+    core.shutdown();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn next_and_prev_stay_inside_the_live_presentations_playlist() {
+    let song = fixture("song_1024x768.pro6");
+    let render = fixture("render_1024x768.pro6");
+    let fonts = fixture("two_fonts_1920x1080.pro6");
+    let (core, rx) = start(CoreConfig::default());
+    core.send(Command::PlaylistCreate("AM".into()));
+    core.send(Command::PlaylistCreate("PM".into()));
+    for (pl, p) in [(0, &song), (1, &render), (1, &fonts)] {
+        core.send(Command::PlaylistAdd {
+            playlist: pl,
+            path: p.clone(),
+            arrangement: None,
+        });
+    }
+    wait(&rx, "loaded", |s| {
+        [&song, &render, &fonts]
+            .iter()
+            .all(|p| s.docs.contains_key(*p))
+    });
+    // End of the only item in AM: doesn't jump into PM.
+    core.send(Command::GoTo {
+        presentation: song.clone(),
+        position: 5,
+    });
+    wait(&rx, "song end", |s| pos(s) == Some(5));
+    core.send(Command::Next);
+    core.send(Command::ClearText); // marker
+    let s = wait(&rx, "marker", |s| !s.text_visible);
+    assert!(s.is_live(&song));
+    // Inside PM: Next crosses render -> fonts, Prev comes back.
+    core.send(Command::GoTo {
+        presentation: render.clone(),
+        position: 3,
+    });
+    wait(&rx, "render end", |s| {
+        s.is_live(&render) && pos(s) == Some(3)
+    });
+    core.send(Command::Next);
+    let s = wait(&rx, "fonts", |s| s.is_live(&fonts));
+    assert_eq!(s.playlist_item, Some(r(1, 1)));
+    core.send(Command::Prev);
+    let s = wait(&rx, "back", |s| s.is_live(&render));
+    assert_eq!((pos(&s), s.playlist_item), (Some(3), Some(r(1, 0))));
 }
 
 #[test]
@@ -279,19 +352,22 @@ fn next_past_the_last_slide_moves_to_the_next_playlist_item() {
     let fonts = fixture("two_fonts_1920x1080.pro6");
     let (core, rx) = start(CoreConfig::default());
     core.send(Command::PlaylistAdd {
+        playlist: 0,
         path: song.clone(),
         arrangement: None,
     });
     // Second item uses an explicit arrangement; third is loaded only on demand.
     core.send(Command::PlaylistAdd {
+        playlist: 0,
         path: render.clone(),
         arrangement: None,
     });
     core.send(Command::PlaylistAdd {
+        playlist: 0,
         path: fonts.clone(),
         arrangement: None,
     });
-    core.send(Command::PlaylistSelect(0));
+    core.send(Command::PlaylistSelect(r(0, 0)));
     wait(&rx, "song loaded", |s| {
         s.docs.contains_key(&song) && s.docs.contains_key(&render)
     });
@@ -306,14 +382,14 @@ fn next_past_the_last_slide_moves_to_the_next_playlist_item() {
     let s = wait(&rx, "next item", |s| s.is_live(&render));
     assert_eq!(
         (pos(&s), s.playlist_item, s.selected.as_ref()),
-        (Some(0), Some(1), Some(&render))
+        (Some(0), Some(r(0, 1)), Some(&render))
     );
     assert!(s.text_visible);
 
     // Prev on the first slide goes back to the previous item's last enabled slide.
     core.send(Command::Prev);
     let s = wait(&rx, "previous item", |s| s.is_live(&song));
-    assert_eq!((pos(&s), s.playlist_item), (Some(5), Some(0)));
+    assert_eq!((pos(&s), s.playlist_item), (Some(5), Some(r(0, 0))));
 
     // Prev on the first slide of the first item stays put.
     core.send(Command::GoTo {
@@ -336,7 +412,7 @@ fn next_past_the_last_slide_moves_to_the_next_playlist_item() {
     });
     core.send(Command::Next);
     let s = wait(&rx, "third item", |s| s.is_live(&fonts));
-    assert_eq!((pos(&s), s.playlist_item), (Some(0), Some(2)));
+    assert_eq!((pos(&s), s.playlist_item), (Some(0), Some(r(0, 2))));
 
     // End of the last item: stays.
     core.send(Command::GoTo {
@@ -356,10 +432,12 @@ fn next_item_uses_its_stored_arrangement() {
     let render = fixture("render_1024x768.pro6");
     let (core, rx) = start(CoreConfig::default());
     core.send(Command::PlaylistAdd {
+        playlist: 0,
         path: render.clone(),
         arrangement: None,
     });
     core.send(Command::PlaylistAdd {
+        playlist: 0,
         path: song.clone(),
         arrangement: Some("AA000000-0001-4000-8000-000000000002".into()),
     });
@@ -384,14 +462,16 @@ fn next_slide_looks_into_the_next_playlist_item() {
     let render = fixture("render_1024x768.pro6");
     let (core, rx) = start(CoreConfig::default());
     core.send(Command::PlaylistAdd {
+        playlist: 0,
         path: song.clone(),
         arrangement: None,
     });
     core.send(Command::PlaylistAdd {
+        playlist: 0,
         path: render.clone(),
         arrangement: None,
     });
-    core.send(Command::PlaylistSelect(0));
+    core.send(Command::PlaylistSelect(r(0, 0)));
     wait(&rx, "loaded", |s| {
         s.docs.contains_key(&song) && s.docs.contains_key(&render)
     });

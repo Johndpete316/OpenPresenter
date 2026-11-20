@@ -21,6 +21,84 @@ pub struct PlaylistItem {
     pub arrangement: Option<String>,
 }
 
+/// A playlist and the file it's kept in (`None`: not saved, e.g. in tests).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlaylistFile {
+    pub file: Option<PathBuf>,
+    pub playlist: Playlist,
+}
+
+/// One item of one playlist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ItemRef {
+    pub playlist: usize,
+    pub item: usize,
+}
+
+/// Every `*.toml` playlist in `dir`, sorted by name. Unreadable files are reported, not
+/// fatal. A missing folder is just "no playlists yet".
+pub fn load_dir(dir: &Path) -> (Vec<PlaylistFile>, Vec<PlaylistError>) {
+    let mut out = Vec::new();
+    let mut errors = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return (out, errors);
+    };
+    for e in entries.filter_map(Result::ok) {
+        let path = e.path();
+        if path
+            .extension()
+            .is_none_or(|x| !x.eq_ignore_ascii_case("toml"))
+        {
+            continue;
+        }
+        match Playlist::load(&path) {
+            Ok(mut p) => {
+                if p.name.trim().is_empty() {
+                    p.name = path
+                        .file_stem()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                }
+                out.push(PlaylistFile {
+                    file: Some(path),
+                    playlist: p,
+                });
+            }
+            Err(e) => errors.push(e),
+        }
+    }
+    out.sort_by_key(|p| p.playlist.name.to_lowercase());
+    (out, errors)
+}
+
+/// A file name in `dir` for a new playlist called `name` that doesn't exist yet.
+pub fn new_file_name(dir: &Path, name: &str) -> PathBuf {
+    let stem: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .to_owned();
+    let stem = if stem.is_empty() {
+        "Playlist".to_owned()
+    } else {
+        stem
+    };
+    let mut path = dir.join(format!("{stem}.toml"));
+    let mut n = 2;
+    while path.exists() {
+        path = dir.join(format!("{stem} {n}.toml"));
+        n += 1;
+    }
+    path
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PlaylistError {
     #[error("{path}: {source}", path = .path.display())]
@@ -43,13 +121,13 @@ impl PlaylistError {
         match self {
             PlaylistError::Io { path, source } => {
                 format!(
-                    "Playlist '{}' couldn't be read or written ({source}). The current playlist is unchanged.",
+                    "Playlist file '{}' couldn't be read or written ({source}). Other playlists are unaffected.",
                     name(path)
                 )
             }
             PlaylistError::Format { path, .. } => {
                 format!(
-                    "'{}' isn't a playlist this program can read. The current playlist is unchanged.",
+                    "'{}' isn't a playlist this program can read. It was skipped; other playlists are unaffected.",
                     name(path)
                 )
             }
@@ -78,6 +156,14 @@ impl Playlist {
 
     /// Atomic save (temp file + rename).
     pub fn save(&self, path: &Path) -> Result<(), PlaylistError> {
+        if let Some(dir) = path.parent()
+            && let Err(source) = std::fs::create_dir_all(dir)
+        {
+            return Err(PlaylistError::Io {
+                path: path.into(),
+                source,
+            });
+        }
         let text = toml::to_string_pretty(self).map_err(|e| PlaylistError::Format {
             path: path.into(),
             message: e.to_string(),
@@ -110,7 +196,7 @@ mod tests {
         p.save(&dir.join("copy.toml")).unwrap();
         assert_eq!(Playlist::load(&dir.join("copy.toml")).unwrap(), p);
         let err = Playlist::load(&dir.join("missing.toml")).unwrap_err();
-        assert!(err.user_message().contains("unchanged"));
+        assert!(err.user_message().contains("unaffected"));
         std::fs::write(dir.join("bad.toml"), "item = 5").unwrap();
         assert!(matches!(
             Playlist::load(&dir.join("bad.toml")),

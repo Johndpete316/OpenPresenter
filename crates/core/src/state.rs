@@ -10,7 +10,7 @@ use std::time::Instant;
 use pro6::Document;
 
 use crate::order::{SlideRef, slide_order};
-use crate::playlist::Playlist;
+use crate::playlist::{ItemRef, PlaylistFile};
 
 #[derive(Debug, Clone)]
 pub struct Live {
@@ -67,9 +67,10 @@ pub struct ShowState {
     pub background_next: Option<PathBuf>,
     /// Presentation shown in the operator's grid (selected in library or playlist).
     pub selected: Option<PathBuf>,
-    pub playlist: Arc<Playlist>,
-    pub playlist_path: Option<PathBuf>,
-    pub playlist_item: Option<usize>,
+    /// All playlists (each saved in its own file), in display order.
+    pub playlists: Arc<Vec<PlaylistFile>>,
+    /// The selected / followed playlist item.
+    pub playlist_item: Option<ItemRef>,
     pub docs: Arc<HashMap<PathBuf, Arc<Document>>>,
     pub load_errors: Arc<HashMap<PathBuf, String>>,
     /// Arrangement chosen per presentation (`None` inside = natural order).
@@ -92,8 +93,7 @@ impl Default for ShowState {
             background_media: None,
             background_next: None,
             selected: None,
-            playlist: Arc::new(Playlist::default()),
-            playlist_path: None,
+            playlists: Arc::default(),
             playlist_item: None,
             docs: Arc::default(),
             load_errors: Arc::default(),
@@ -132,12 +132,11 @@ impl ShowState {
         if let Some(n) = crate::order::next_enabled(&l.order, l.position) {
             return Some((l.path.clone(), l.doc.clone(), n, l.order[n].flat));
         }
-        let items = &self.playlist.items;
-        let i = match self.playlist_item {
-            Some(i) if items.get(i).is_some_and(|it| it.path == l.path) => i,
-            _ => items.iter().position(|it| it.path == l.path)?,
-        };
-        let next = items.get(i + 1)?;
+        let at = self.playlist_ref_of(&l.path)?;
+        let next = self.playlists[at.playlist]
+            .playlist
+            .items
+            .get(at.item + 1)?;
         let doc = self.docs.get(&next.path)?.clone();
         let arrangement = next
             .arrangement
@@ -146,6 +145,34 @@ impl ShowState {
         let order = slide_order(&doc, arrangement.as_deref());
         let n = crate::order::next_enabled(&order, None)?;
         Some((next.path.clone(), doc, n, order[n].flat))
+    }
+
+    /// The playlist item a presentation is playing as: the selected item if it is that
+    /// presentation (it may appear more than once), else its first appearance.
+    pub fn playlist_ref_of(&self, path: &Path) -> Option<ItemRef> {
+        if let Some(r) = self.playlist_item
+            && self.item(r).is_some_and(|it| it.path == path)
+        {
+            return Some(r);
+        }
+        self.playlists.iter().enumerate().find_map(|(pi, p)| {
+            p.playlist
+                .items
+                .iter()
+                .position(|it| it.path == path)
+                .map(|item| ItemRef { playlist: pi, item })
+        })
+    }
+
+    pub fn item(&self, r: ItemRef) -> Option<&crate::PlaylistItem> {
+        self.playlists.get(r.playlist)?.playlist.items.get(r.item)
+    }
+
+    /// Whether any playlist contains `path`.
+    pub fn in_any_playlist(&self, path: &Path) -> bool {
+        self.playlists
+            .iter()
+            .any(|p| p.playlist.items.iter().any(|i| i.path == path))
     }
 
     pub fn is_live(&self, path: &Path) -> bool {
@@ -177,9 +204,12 @@ impl ShowState {
         );
         let _ = writeln!(
             s,
-            "playlist {:?} ({} items), selected item {:?}, selected presentation {:?}",
-            self.playlist_path,
-            self.playlist.items.len(),
+            "{} playlist(s) ({} items), selected item {:?}, selected presentation {:?}",
+            self.playlists.len(),
+            self.playlists
+                .iter()
+                .map(|p| p.playlist.items.len())
+                .sum::<usize>(),
             self.playlist_item,
             self.selected
         );
