@@ -73,16 +73,17 @@ pp6/
 
 ## Milestones
 ### M0 — Workspace + `.pro6` Parser + Corpus Tool
-- [ ] Cargo workspace skeleton, CI (Linux test + Windows build), `rustfmt`/`clippy` config
-- [ ] `pro6` data model from the spec; every node keeps unknown attributes/children as raw XML (`extra`) for round-tripping
-- [ ] Parser with `quick-xml`; base64 decode of payloads
-- [ ] RTF reader: extract font table, font face per run, `\fs` size (half-points), colour, plain text. Evaluate `rtf-parser`; hand-roll the subset if it doesn't fit
-- [ ] Read canvas size from the document root (attribute names to confirm — see Unknowns)
-- [ ] Read `RVDisplaySlide.enabled` into the model
-- [ ] Parse `RVTimeline` attributes (`duration`, `loop`, `timeOffset`, `selectedMediaTrackIndex`); keep `timeCues`/`mediaTracks` as raw `extra` until M8
-- [ ] Hand-written fixtures in `fixtures/` covering: multiple groups, multiple slides per group, multi-line text, two fonts, non-default canvas size (1024×768), a disabled slide
-- [ ] `pp6tool report <dir>`: per file parse OK/fail with error; counts of canvas sizes; fonts used; group names; element/attribute names seen including unknowns; files with media cues
+- [x] Cargo workspace skeleton, CI (Linux test + Windows build), `rustfmt`/`clippy` config
+- [x] `pro6` data model from the spec; every node keeps unknown attributes/children as raw XML (`extra`) for round-tripping
+- [x] Parser with `quick-xml`; base64 decode of payloads
+- [x] RTF reader: extract font table, font face per run, `\fs` size (half-points), colour, plain text. Evaluate `rtf-parser`; hand-roll the subset if it doesn't fit
+- [x] Read canvas size from the document root (attribute names to confirm — see Unknowns)
+- [x] Read `RVDisplaySlide.enabled` into the model
+- [x] Parse `RVTimeline` attributes (`duration`, `loop`, `timeOffset`, `selectedMediaTrackIndex`); keep `timeCues`/`mediaTracks` as raw `extra` until M8
+- [x] Hand-written fixtures in `fixtures/` covering: multiple groups, multiple slides per group, multi-line text, two fonts, non-default canvas size (1024×768), a disabled slide
+- [x] `pp6tool report <dir>`: per file parse OK/fail with error; counts of canvas sizes; fonts used; group names; element/attribute names seen including unknowns; files with media cues
 - **Accept:** all fixtures parse; report runs on `fixtures/`; `cargo test -p pro6` green with no GUI deps.
+- **Status (2026-11-19):** done. RTF: `rtf-parser` rejected, subset hand-rolled (see [format-notes.md](format-notes.md)). `pp6tool.exe` cross-builds with `cargo xwin`.
 
 ### M1 — Writer + Round-Trip
 - [ ] Writer that emits unchanged nodes and `extra` data exactly as parsed
@@ -158,18 +159,23 @@ Only the Announcements presentation uses these.
 - **Accept:** Announcements file loops on its own with the same timing as PP6.
 
 ## Unknowns to Verify
-Track findings here as real files arrive.
-- [ ] Canvas size attribute names on `RVPresentationDocument`
-- [ ] Actual canvas sizes in the library (expected mostly 1024×768)
+Track findings here as real files arrive. "M0:" notes say how the parser currently handles each one. None are verified against a real file yet.
+- [ ] Canvas size attribute names on `RVPresentationDocument`. M0: spec says `width`/`height`; parser requires both and errors if missing.
+- [ ] Actual canvas sizes in the library (expected mostly 1024×768). M0: `pp6tool report` counts them.
 - [ ] RTF `\fs` → canvas pixel conversion matches PP6 (side-by-side screenshot diff)
-- [ ] Arrangement structure; whether arrangements reference groups by UUID
+- [ ] Arrangement structure; whether arrangements reference groups by UUID. M0: `arrangements` kept raw; report lists its element names.
 - [ ] Whether PP6 on Windows uses stale `WinFlowData`/`WinFontData` over `RTFData` after edits
-- [ ] `RVRect3D` field order (`{x y z w h}` assumed)
-- [ ] Shadow string field meanings
-- [ ] Media cue / timeline structure (Announcements only)
+- [ ] `RVRect3D` field order (`{x y z w h}` assumed). M0: parsed with that assumption; malformed → `BadRect`.
+- [ ] Shadow string field meanings. M0: assumed `blur|r g b a|{x, y}`; raw fields always kept; mismatch → warning.
+- [ ] Media cue / timeline structure (Announcements only). M0: `cues`, `timeCues`, `mediaTracks` kept raw; report lists files using them.
 - [ ] Where per-slide auto-advance durations are stored
 - [ ] Behaviour when the operator presses Next/Prev/Clear or picks another presentation while a loop is running (stop loop? keep timing?) — **ask John**
-- [ ] Arrangement element structure and how `selectedArrangementID` maps to it
+- [ ] Arrangement element structure and how `selectedArrangementID` maps to it. M0: `selectedArrangementID` read as a string.
+- [ ] XML syntax for named children: `<array rvXMLIvarName="…">`, `<NSString rvXMLIvarName="…">`, `rvXMLDictionaryKey` (assumed, not shown in spec). M0: matched on element name + ivar; mismatch → kept raw + warning.
+- [ ] Base64 payload line wrapping/whitespace. M0: whitespace stripped before decode; original text kept.
+- [ ] PP6 RTF flavour on Windows (Cocoa `\cocoartf` vs Windows-style font table), and whether text effects (`\outl`, `\strokewidth`, `\shad`) appear. M0: both flavours parse; report lists unhandled control words.
+- [ ] Whether a trailing `\par` means an empty last line in PP6. M0: ignored.
+- [ ] Per-font `\fcharset` code pages. M0: only document `\ansicpg` is applied.
 
 ## Required Tooling
 ### Dev Machine (CachyOS / Arch)
