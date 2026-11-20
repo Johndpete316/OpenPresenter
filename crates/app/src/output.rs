@@ -21,12 +21,16 @@ use crate::gl::{self, GlParts};
 use crate::raster::RenderCmd;
 
 /// Which display to put the output on.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum MonitorChoice {
+    /// Display name as the OS reports it (falls back to `index` if given).
+    Name { name: String, index: Option<usize> },
     /// Index into the list of connected displays.
     Index(usize),
-    /// The first display that isn't the primary one, else the primary.
-    PreferSecondary,
+    /// A display that is neither `avoid` (the operator window's display) nor the
+    /// primary one. Never covers the operator's screen by surprise: if there is no
+    /// such display, the output stays off with an error.
+    Secondary { avoid: Option<MonitorHandle> },
 }
 
 pub struct OutputWindow {
@@ -61,30 +65,35 @@ fn describe(i: usize, m: &MonitorHandle, primary: bool) -> String {
 
 fn pick_monitor(
     event_loop: &ActiveEventLoop,
-    choice: MonitorChoice,
+    choice: &MonitorChoice,
 ) -> Result<(usize, MonitorHandle), OutputError> {
     let monitors: Vec<MonitorHandle> = event_loop.available_monitors().collect();
     if monitors.is_empty() {
         return Err(OutputError::NoMonitors);
     }
+    let not_found = |requested: usize| OutputError::MonitorNotFound {
+        requested,
+        available: describe_monitors(event_loop),
+    };
     match choice {
-        MonitorChoice::Index(i) => {
-            monitors
-                .get(i)
-                .cloned()
-                .map(|m| (i, m))
-                .ok_or_else(|| OutputError::MonitorNotFound {
-                    requested: i,
-                    available: describe_monitors(event_loop),
-                })
-        }
-        MonitorChoice::PreferSecondary => {
+        MonitorChoice::Index(i) => monitors
+            .get(*i)
+            .cloned()
+            .map(|m| (*i, m))
+            .ok_or_else(|| not_found(*i)),
+        MonitorChoice::Name { name, index } => monitors
+            .iter()
+            .position(|m| m.name().as_deref() == Some(name.as_str()))
+            .or(index.filter(|i| *i < monitors.len()))
+            .map(|i| (i, monitors[i].clone()))
+            .ok_or_else(|| not_found(index.unwrap_or(usize::MAX))),
+        MonitorChoice::Secondary { avoid } => {
             let primary = event_loop.primary_monitor();
-            let i = monitors
+            monitors
                 .iter()
-                .position(|m| Some(m) != primary.as_ref())
-                .unwrap_or(0);
-            Ok((i, monitors[i].clone()))
+                .position(|m| Some(m) != avoid.as_ref() && Some(m) != primary.as_ref())
+                .map(|i| (i, monitors[i].clone()))
+                .ok_or(OutputError::NoSecondary)
         }
     }
 }
@@ -98,7 +107,7 @@ impl OutputWindow {
         windowed: Option<(u32, u32)>,
         events: EventLoopProxy<UserEvent>,
     ) -> Result<OutputWindow, OutputError> {
-        let (index, monitor) = pick_monitor(event_loop, choice)?;
+        let (index, monitor) = pick_monitor(event_loop, &choice)?;
         let monitor_name = describe(
             index,
             &monitor,

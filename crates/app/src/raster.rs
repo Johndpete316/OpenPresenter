@@ -1,6 +1,6 @@
-//! Raster worker: turns slides into output-sized frames off every show-critical
-//! thread, keeps a small cache, and pre-renders the neighbours of the current slide
-//! so a slide change is just a texture swap.
+//! Raster worker: follows the core's snapshots directly (not via the UI thread), turns
+//! the live slide into an output-sized frame, keeps a small cache, and pre-renders the
+//! neighbours in play order so a slide change is just a texture swap.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -8,15 +8,18 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, select};
+use pp6core::{ShowState, next_enabled, prev_enabled};
 use render::{Fonts, SlideFrame, render_slide};
 
 use crate::UserEvent;
 
-/// Cache key: which slide at which output size.
+/// Cache key: which slide of which loaded document, at which output size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FrameKey {
-    pub index: usize,
+    /// Identity of the loaded document (`Arc` pointer): a reload is a new key.
+    pub doc: usize,
+    pub flat: usize,
     pub width: u32,
     pub height: u32,
 }
@@ -34,8 +37,14 @@ pub enum RenderCmd {
         key: FrameKey,
         frame: Arc<SlideFrame>,
     },
-    /// Show nothing (black), e.g. the slide couldn't be rendered.
+    /// Show nothing (black): no live slide, or it couldn't be rendered.
     Blank {
+        requested_at: Option<Instant>,
+    },
+    /// Text / background layer visibility (Clear Text / Clear Background).
+    Layers {
+        text: bool,
+        background: bool,
         requested_at: Option<Instant>,
     },
     Resize {
@@ -44,7 +53,7 @@ pub enum RenderCmd {
     },
     Redraw,
     /// Read back what's on screen and save it as PNG (verification tool).
-    Capture(std::path::PathBuf),
+    Capture(PathBuf),
     Stop,
 }
 
@@ -52,11 +61,7 @@ pub enum RenderCmd {
 pub type OutputLink = Arc<Mutex<Option<Sender<RenderCmd>>>>;
 
 pub enum RasterCmd {
-    Show {
-        index: usize,
-        requested_at: Option<Instant>,
-    },
-    /// Output size changed (or a new output window exists): re-send the current slide.
+    /// Output size changed, or a new output window exists: re-send everything.
     Size {
         width: u32,
         height: u32,
@@ -66,82 +71,91 @@ pub enum RasterCmd {
 
 const CACHE: usize = 6;
 
+pub struct Spawned {
+    pub tx: Sender<RasterCmd>,
+    pub thread: JoinHandle<()>,
+}
+
 pub fn spawn(
-    doc: Arc<pro6::Document>,
+    snapshots: Receiver<Arc<ShowState>>,
     font_dirs: Vec<PathBuf>,
     output: OutputLink,
     events: winit::event_loop::EventLoopProxy<UserEvent>,
-) -> std::io::Result<(Sender<RasterCmd>, JoinHandle<()>)> {
+    fonts_for_others: Sender<Fonts>,
+) -> std::io::Result<Spawned> {
     let (tx, rx) = crossbeam_channel::unbounded();
-    let handle = std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .name("raster".into())
-        .spawn(move || run(&doc, &font_dirs, &output, &events, &rx))?;
-    Ok((tx, handle))
+        .spawn(move || {
+            let started = Instant::now();
+            let mut fonts = Fonts::system();
+            for d in &font_dirs {
+                fonts.add_dir(d);
+            }
+            let _ = fonts_for_others.send(fonts.fork());
+            let _ = events.send_event(UserEvent::FontsReady {
+                elapsed: started.elapsed(),
+                faces: fonts.face_count(),
+            });
+            let mut w = Worker {
+                fonts,
+                cache: VecDeque::new(),
+                output,
+                events,
+                size: None,
+                sent: Sent::default(),
+            };
+            w.run(&snapshots, &rx);
+        })?;
+    Ok(Spawned { tx, thread })
 }
 
-fn run(
-    doc: &pro6::Document,
-    font_dirs: &[PathBuf],
-    output: &OutputLink,
-    events: &winit::event_loop::EventLoopProxy<UserEvent>,
-    rx: &Receiver<RasterCmd>,
-) {
-    let started = Instant::now();
-    let mut fonts = Fonts::system();
-    for d in font_dirs {
-        fonts.add_dir(d);
-    }
-    let _ = events.send_event(UserEvent::FontsReady {
-        elapsed: started.elapsed(),
-        faces: fonts.face_count(),
-    });
-
-    let mut w = Worker {
-        doc,
-        slides: doc.slides().collect(),
-        fonts,
-        cache: VecDeque::new(),
-        output,
-        events,
-    };
-    let mut size: Option<(u32, u32)> = None;
-    let mut current: Option<usize> = None;
-    while let Ok(cmd) = rx.recv() {
-        match cmd {
-            RasterCmd::Show {
-                index,
-                requested_at,
-            } => {
-                current = Some(index);
-                if let Some(sz) = size {
-                    w.show(index, sz, requested_at);
-                }
-            }
-            RasterCmd::Size { width, height } => {
-                size = Some((width, height));
-                if let Some(i) = current {
-                    w.show(i, (width, height), None);
-                }
-            }
-            RasterCmd::Stop => break,
-        }
-    }
+/// What the output currently has, to send only changes.
+#[derive(Default, Clone)]
+struct Sent {
+    live: Option<(usize, usize)>,
+    layers: Option<(bool, bool)>,
 }
 
 /// A rendered frame, or the operator message for a slide that can't be drawn.
 type Rendered = Result<Arc<SlideFrame>, String>;
 
-struct Worker<'a> {
-    doc: &'a pro6::Document,
-    slides: Vec<&'a pro6::Slide>,
+struct Worker {
     fonts: Fonts,
     /// Failures are cached too, so pre-rendering doesn't retry and re-report them.
     cache: VecDeque<(FrameKey, Rendered)>,
-    output: &'a OutputLink,
-    events: &'a winit::event_loop::EventLoopProxy<UserEvent>,
+    output: OutputLink,
+    events: winit::event_loop::EventLoopProxy<UserEvent>,
+    size: Option<(u32, u32)>,
+    sent: Sent,
 }
 
-impl Worker<'_> {
+impl Worker {
+    fn run(&mut self, snapshots: &Receiver<Arc<ShowState>>, rx: &Receiver<RasterCmd>) {
+        let mut latest: Option<Arc<ShowState>> = None;
+        loop {
+            select! {
+                recv(snapshots) -> s => {
+                    let Ok(mut s) = s else { return };
+                    while let Ok(newer) = snapshots.try_recv() {
+                        s = newer;
+                    }
+                    self.apply(&s, false);
+                    latest = Some(s);
+                }
+                recv(rx) -> cmd => match cmd {
+                    Ok(RasterCmd::Size { width, height }) => {
+                        self.size = Some((width, height));
+                        if let Some(s) = &latest {
+                            self.apply(s, true);
+                        }
+                    }
+                    Ok(RasterCmd::Stop) | Err(_) => return,
+                }
+            }
+        }
+    }
+
     fn send(&self, cmd: RenderCmd) {
         if let Ok(guard) = self.output.lock()
             && let Some(tx) = guard.as_ref()
@@ -150,10 +164,39 @@ impl Worker<'_> {
         }
     }
 
-    /// Show `index` now, then pre-render its neighbours.
-    fn show(&mut self, index: usize, size: (u32, u32), requested_at: Option<Instant>) {
-        match self.frame(index, size) {
-            Some((key, Ok(frame))) => {
+    /// Bring the output in line with `s`. `force` re-sends everything (new window/size).
+    fn apply(&mut self, s: &ShowState, force: bool) {
+        let Some(size) = self.size else { return };
+        if force {
+            self.sent = Sent::default();
+        }
+        let layers = (s.text_visible, s.background_visible);
+        if self.sent.layers != Some(layers) {
+            self.sent.layers = Some(layers);
+            self.send(RenderCmd::Layers {
+                text: layers.0,
+                background: layers.1,
+                requested_at: s.command_at,
+            });
+        }
+        let live = s
+            .live
+            .as_ref()
+            .map(|l| (Arc::as_ptr(&l.doc) as usize, l.slide.flat));
+        let prev = std::mem::replace(&mut self.sent.live, live);
+        if prev == live && !force {
+            return;
+        }
+        let Some(l) = &s.live else {
+            // Went from live to nothing (or a fresh window): show black.
+            self.send(RenderCmd::Blank {
+                requested_at: s.command_at,
+            });
+            return;
+        };
+        let index = l.slide.flat;
+        match self.frame(&l.doc, index, size) {
+            (key, Ok(frame)) => {
                 tracing::debug!(
                     slide = index + 1,
                     render_ms = ms(frame.render_time),
@@ -162,57 +205,67 @@ impl Worker<'_> {
                 self.send(RenderCmd::Show {
                     key,
                     frame,
-                    requested_at,
+                    requested_at: s.command_at,
                 });
             }
-            Some((_, Err(message))) => {
+            (_, Err(message)) => {
                 let _ = self
                     .events
                     .send_event(UserEvent::RenderFailed { index, message });
-                self.send(RenderCmd::Blank { requested_at });
+                self.send(RenderCmd::Blank {
+                    requested_at: s.command_at,
+                });
             }
-            None => self.send(RenderCmd::Blank { requested_at }),
         }
         // Next first: it's the likely next press. Failures stay quiet until shown.
-        for n in [index.checked_add(1), index.checked_sub(1)]
-            .into_iter()
-            .flatten()
-        {
-            if n < self.slides.len()
-                && let Some((key, Ok(frame))) = self.frame(n, size)
+        let neighbours = [
+            next_enabled(&l.order, l.position),
+            l.position.and_then(|p| prev_enabled(&l.order, p)),
+        ];
+        for n in neighbours.into_iter().flatten() {
+            if let Some(r) = l.order.get(n)
+                && let (key, Ok(frame)) = self.frame(&l.doc, r.flat, size)
             {
                 self.send(RenderCmd::Preload { key, frame });
             }
         }
     }
 
-    /// Cached or freshly rendered frame. `None` only if `index` is out of range.
-    fn frame(&mut self, index: usize, (width, height): (u32, u32)) -> Option<(FrameKey, Rendered)> {
+    fn frame(
+        &mut self,
+        doc: &Arc<pro6::Document>,
+        flat: usize,
+        (width, height): (u32, u32),
+    ) -> (FrameKey, Rendered) {
         let key = FrameKey {
-            index,
+            doc: Arc::as_ptr(doc) as usize,
+            flat,
             width,
             height,
         };
-        if let Some(pos) = self.cache.iter().position(|(k, _)| *k == key) {
-            let hit = self.cache.remove(pos)?;
+        if let Some(pos) = self.cache.iter().position(|(k, _)| *k == key)
+            && let Some(hit) = self.cache.remove(pos)
+        {
             self.cache.push_back(hit.clone());
-            return Some(hit);
+            return hit;
         }
-        let slide = self.slides.get(index)?;
-        let result = match render_slide(&mut self.fonts, self.doc, slide, width, height) {
-            Ok(frame) => {
-                for w in &frame.warnings {
-                    tracing::info!(slide = index + 1, warning = %w.message, "render warning");
+        let result = match doc.slides().nth(flat) {
+            None => Err(format!("Slide {} doesn't exist.", flat + 1)),
+            Some(slide) => match render_slide(&mut self.fonts, doc, slide, width, height) {
+                Ok(frame) => {
+                    for w in &frame.warnings {
+                        tracing::info!(slide = flat + 1, warning = %w.message, "render warning");
+                    }
+                    Ok(Arc::new(frame))
                 }
-                Ok(Arc::new(frame))
-            }
-            Err(e) => Err(e.user_message()),
+                Err(e) => Err(e.user_message()),
+            },
         };
         self.cache.push_back((key, result.clone()));
         while self.cache.len() > CACHE {
             self.cache.pop_front();
         }
-        Some((key, result))
+        (key, result)
     }
 }
 

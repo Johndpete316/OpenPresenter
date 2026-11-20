@@ -42,8 +42,10 @@ impl RenderError {
         }
     }
 
+    /// Debug-level here: callers decide how loudly to report (the output reports
+    /// once when a slide fails to go live; thumbnails would repeat it per size).
     pub(crate) fn logged(self) -> Self {
-        tracing::warn!(error = %self, "render error");
+        tracing::debug!(error = %self, "render error");
         self
     }
 }

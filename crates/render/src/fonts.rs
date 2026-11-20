@@ -57,6 +57,16 @@ impl Fonts {
         self.system.db_mut().load_fonts_dir(dir);
     }
 
+    /// An independent copy sharing the same font list (cheap: font data is shared),
+    /// for another thread. Avoids scanning the system fonts twice.
+    pub fn fork(&self) -> Fonts {
+        let db = self.system.db().clone();
+        Fonts::wrap(FontSystem::new_with_locale_and_db(
+            self.system.locale().to_owned(),
+            db,
+        ))
+    }
+
     fn wrap(system: FontSystem) -> Fonts {
         Fonts {
             system,

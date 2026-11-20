@@ -106,9 +106,18 @@ fn run_inner(
                 r.current = Some(key);
                 let upload = upload_started.elapsed();
                 swap(&mut r, width, height)?;
-                presented(events, Some(key.index), requested_at, upload);
+                presented(events, Some(key.flat), requested_at, upload);
             }
             RenderCmd::Preload { key, frame } => r.ensure(&gl, key, frame)?,
+            RenderCmd::Layers {
+                text,
+                background,
+                requested_at,
+            } => {
+                r.layers = (text, background);
+                swap(&mut r, width, height)?;
+                presented(events, None, requested_at, Default::default());
+            }
             RenderCmd::Blank { requested_at } => {
                 r.current = None;
                 swap(&mut r, width, height)?;
@@ -181,6 +190,8 @@ struct Renderer {
     vao: glow::VertexArray,
     textures: Vec<Texture>,
     current: Option<FrameKey>,
+    /// (text visible, background visible)
+    layers: (bool, bool),
 }
 
 impl Renderer {
@@ -212,6 +223,7 @@ impl Renderer {
                 vao,
                 textures: Vec::new(),
                 current: None,
+                layers: (true, true),
             })
         }
     }
@@ -302,16 +314,21 @@ impl Renderer {
             let oy = (sh as i32 - f.height as i32) / 2;
             let c = f.placement.canvas;
             let [r, g, b, a] = f.background.map(|v| f32::from(v) / 255.0);
-            gl.enable(glow::SCISSOR_TEST);
-            gl.scissor(
-                ox + c.x as i32,
-                oy + (f.height - c.y - c.height) as i32,
-                c.width as i32,
-                c.height as i32,
-            );
-            gl.clear_color(r * a, g * a, b * a, 1.0);
-            gl.clear(glow::COLOR_BUFFER_BIT);
-            gl.disable(glow::SCISSOR_TEST);
+            if self.layers.1 {
+                gl.enable(glow::SCISSOR_TEST);
+                gl.scissor(
+                    ox + c.x as i32,
+                    oy + (f.height - c.y - c.height) as i32,
+                    c.width as i32,
+                    c.height as i32,
+                );
+                gl.clear_color(r * a, g * a, b * a, 1.0);
+                gl.clear(glow::COLOR_BUFFER_BIT);
+                gl.disable(glow::SCISSOR_TEST);
+            }
+            if !self.layers.0 {
+                return;
+            }
 
             gl.viewport(ox, oy, f.width as i32, f.height as i32);
             gl.enable(glow::BLEND);
