@@ -1,0 +1,10 @@
+---
+source: crates/pro6/tests/fixtures.rs
+expression: "msgs.join(\"\\n\")"
+---
+truncated.pro6: 'truncated.pro6' couldn't be opened: the file is damaged or incomplete near line 11. The file was skipped; other files are unaffected.
+bad_base64.pro6: 'bad_base64.pro6' couldn't be opened: the text of slide 1 in group 1 is corrupted. The file was skipped; other files are unaffected.
+bad_rect.pro6: 'bad_rect.pro6' couldn't be opened: slide 1 in group 1 has invalid layout data. The file was skipped; other files are unaffected.
+wrong_root.pro6: 'wrong_root.pro6' couldn't be opened: it isn't a ProPresenter 6 presentation. The file was skipped; other files are unaffected.
+missing_canvas.pro6: 'missing_canvas.pro6' couldn't be opened: it doesn't say what size its slides are (no canvas `width`). The file was skipped; other files are unaffected.
+unbalanced_rtf.pro6: 'unbalanced_rtf.pro6' couldn't be opened: the text of slide 1 in group 1 is corrupted. The file was skipped; other files are unaffected.

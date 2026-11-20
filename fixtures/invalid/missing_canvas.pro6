@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RVPresentationDocument versionNumber="600">
+  <array rvXMLIvarName="groups">
+    <RVSlideGrouping name="Verse 1" uuid="11111111-0000-4000-8000-000000000001" color="1 1 1 1">
+      <array rvXMLIvarName="slides">
+        <RVDisplaySlide enabled="true" UUID="22222222-0000-4000-8000-000000000001">
+          <array rvXMLIvarName="displayElements">
+            <RVTextElement displayName="Default" UUID="33333333-0000-4000-8000-000000000001">
+              <RVRect3D rvXMLIvarName="position">{1 2 0 3 4}</RVRect3D>
+              <NSString rvXMLIvarName="RTFData">e1xydGYxXGFuc2lcYW5zaWNwZzEyNTJcZGVmZjB7XGZvbnR0Ymx7XGYwXGZuaWxcZmNoYXJzZXQwIEFyaWFsO319e1xjb2xvcnRibDtccmVkMjU1XGdyZWVuMjU1XGJsdWUyNTU7fVxwYXJkXHFjXGYwXGZzMTEwXGNmMSBBbWF6aW5nIGdyYWNlLCBob3cgc3dlZXQgdGhlIHNvdW5kXHBhciBUaGF0IHNhdmVkIGEgd3JldGNoIGxpa2UgbWV9</NSString>
+            </RVTextElement>
+          </array>
+        </RVDisplaySlide>
+      </array>
+    </RVSlideGrouping>
+  </array>
+</RVPresentationDocument>

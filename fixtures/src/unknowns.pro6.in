@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SYNTHETIC FIXTURE. Arrangement, cue, media-track and RVImageElement structures below are
+     placeholders invented to test raw preservation and reporting. They are NOT verified PP6 XML. -->
+<RVPresentationDocument height="768" width="1024" docType="0" versionNumber="600" usedCount="0" backgroundColor="0 0 0 1" drawingBackgroundColor="false" CCLIDisplay="false" lastDateUsed="" selectedArrangementID="9F8E7D6C-0003-4000-8000-0000000000A1" category="Presentation" resourcesDirectory="" notes="" CCLISongTitle="" chordChartPath="" os="1" buildNumber="6016" futureRootAttr="kept">
+  <RVTimeline timeOffset="0" duration="30" selectedMediaTrackIndex="0" loop="true" rvXMLIvarName="timeline">
+    <array rvXMLIvarName="timeCues">
+      <SyntheticTimeCue timeStamp="10" slideUUID="C3D4E5F6-0003-4000-8000-000000000001" />
+    </array>
+    <array rvXMLIvarName="mediaTracks">
+      <SyntheticMediaTrack path="C:\Media\loop.mp4" />
+    </array>
+  </RVTimeline>
+  <array rvXMLIvarName="groups">
+    <RVSlideGrouping name="Announcements" uuid="8E5A3C74-2D4F-4E3B-9A7C-3B2F4D5E6C71" color="1 0.6 0 1" futureGroupAttr="1">
+      <array rvXMLIvarName="slides">
+        <RVDisplaySlide backgroundColor="0 0 0 1" highlightColor="" drawingBackgroundColor="false" enabled="true" hotKey="" label="" notes="" UUID="C3D4E5F6-0003-4000-8000-000000000001" chordChartPath="">
+          <array rvXMLIvarName="cues">
+            <SyntheticMediaCue UUID="D0000000-0003-4000-8000-000000000001" source="C:\Media\loop.mp4" />
+          </array>
+          <array rvXMLIvarName="displayElements">
+            <SyntheticImageElement UUID="E0000000-0003-4000-8000-0000000000FF" source="C:\Media\bg.png" />
+            <RVTextElement displayName="Default" UUID="E0000000-0003-4000-8000-000000000001" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="0.75" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="0" revealType="0" futureTextAttr="x">
+              <RVRect3D rvXMLIvarName="position">{32 24 0 960 720}</RVRect3D>
+              <SyntheticChild rvXMLIvarName="future">opaque</SyntheticChild>
+              <NSString rvXMLIvarName="PlainText">@@TXT:unk.a@@</NSString>
+              <NSString rvXMLIvarName="RTFData">@@RTF:unk.a@@</NSString>
+              <NSString rvXMLIvarName="WinFlowData">AAEC</NSString>
+              <NSString rvXMLIvarName="WinFontData">AwQF</NSString>
+            </RVTextElement>
+          </array>
+        </RVDisplaySlide>
+      </array>
+    </RVSlideGrouping>
+    <SyntheticGroupLike name="not a group" />
+  </array>
+  <array rvXMLIvarName="arrangements">
+    <SyntheticArrangement name="Main" uuid="9F8E7D6C-0003-4000-8000-0000000000A1" color="1 1 1 1">
+      <array rvXMLIvarName="groupIDs">
+        <NSString>8E5A3C74-2D4F-4E3B-9A7C-3B2F4D5E6C71</NSString>
+      </array>
+    </SyntheticArrangement>
+  </array>
+  <SyntheticRootChild>kept as raw XML</SyntheticRootChild>
+</RVPresentationDocument>

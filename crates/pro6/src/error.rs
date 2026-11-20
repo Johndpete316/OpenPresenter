@@ -120,6 +120,11 @@ impl ParseError {
             ParseErrorKind::NotPro6Root { .. } => {
                 "it isn't a ProPresenter 6 presentation".to_owned()
             }
+            ParseErrorKind::MissingAttr {
+                attr: a @ ("width" | "height"),
+            } => {
+                format!("it doesn't say what size its slides are (no canvas `{a}`)")
+            }
             ParseErrorKind::MissingAttr { .. }
             | ParseErrorKind::BadAttr { .. }
             | ParseErrorKind::MissingChild { .. }

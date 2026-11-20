@@ -116,7 +116,12 @@ pub(crate) fn parse(src: &str, ctx: &Ctx<'_>) -> Result<RawDocument, ParseError>
     let mut stack: Vec<RawElement> = Vec::new();
 
     let xml_err = |reader: &Reader<&[u8]>, stack: &[RawElement], message: String| {
-        let offset = usize::try_from(reader.error_position()).unwrap_or(usize::MAX);
+        // error_position() is only set by quick-xml's own errors; ours use the read position.
+        let pos = match reader.error_position() {
+            0 => reader.buffer_position(),
+            p => p,
+        };
+        let offset = usize::try_from(pos).unwrap_or(usize::MAX);
         let (line, column) = line_col(body, offset);
         stack_ctx(ctx, stack).err(ParseErrorKind::Xml {
             message,
