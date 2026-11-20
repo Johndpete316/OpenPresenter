@@ -13,6 +13,7 @@ pub mod error;
 pub mod extra;
 pub mod model;
 pub mod raw;
+pub mod rescale;
 pub mod rtf;
 pub mod schema;
 pub mod write;

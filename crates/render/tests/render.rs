@@ -204,3 +204,39 @@ fn font_resolution() {
     );
     assert!(f.resolve("Arial", false, false).is_none());
 }
+
+#[test]
+fn rescaled_document_renders_like_the_original_fitted() {
+    let mut f = fonts();
+    let original = doc("render_1024x768.pro6");
+    let mut scaled = original.clone();
+    pro6::rescale::rescale(
+        &mut scaled,
+        pro6::CanvasSize {
+            width: 1920,
+            height: 1080,
+        },
+        pro6::rescale::Mode::Fit,
+        pro6::WinPayloads::Drop,
+    );
+    for i in 0..3 {
+        let a = render(&mut f, &original, i, 1920, 1080).unwrap();
+        let b = render(&mut f, &scaled, i, 1920, 1080).unwrap();
+        let (ba, bb) = (ink_bbox(&a), ink_bbox(&b));
+        let close = |x: u32, y: u32| x.abs_diff(y) <= 2;
+        assert!(
+            close(ba.0, bb.0) && close(ba.1, bb.1) && close(ba.2, bb.2) && close(ba.3, bb.3),
+            "slide {}: {ba:?} vs {bb:?}",
+            i + 1
+        );
+        let (ia, ib) = (a.composite(), b.composite());
+        let same = ia.pixels().zip(ib.pixels()).filter(|(p, q)| p == q).count();
+        let ratio = same as f64 / (1920.0 * 1080.0);
+        assert!(
+            ratio > 0.995,
+            "slide {}: only {:.4} of pixels identical",
+            i + 1,
+            ratio
+        );
+    }
+}

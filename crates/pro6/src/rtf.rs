@@ -728,6 +728,66 @@ fn escape_text(o: &mut String, text: &str) {
     }
 }
 
+// ---- in-place size scaling -----------------------------------------------------------
+
+/// Control words whose numeric parameter is an absolute size (half-points for `\fs`,
+/// twips or points for the rest) and must scale with the canvas.
+pub const SIZE_WORDS: &[&str] = &[
+    "fs", "sl", "sa", "sb", "li", "ri", "fi", "tx", "expnd", "expndtw", "up", "dn",
+];
+
+/// Change made by [`scale_sizes`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SizeChange {
+    pub word: String,
+    pub old: i32,
+    pub new: i32,
+}
+
+/// Multiply the parameter of every size control word by `factor`, editing the RTF
+/// text in place so everything else (including control words this reader doesn't
+/// model) is kept byte-for-byte. `\fs` never goes below 1. `\slmult` and other
+/// unit-less words are untouched.
+pub fn scale_sizes(src: &[u8], factor: f64) -> Result<(Vec<u8>, Vec<SizeChange>), RtfError> {
+    let mut lx = Lexer { src, pos: 0 };
+    let mut out = Vec::with_capacity(src.len() + 16);
+    let mut copied = 0usize;
+    let mut changes = Vec::new();
+    while let Some((start, tok)) = lx.next()? {
+        let Tok::Word(name, Some(old)) = tok else {
+            continue;
+        };
+        if !SIZE_WORDS.contains(&name) {
+            continue;
+        }
+        let mut new = (f64::from(old) * factor).round() as i32;
+        if name == "fs" {
+            new = new.max(1);
+        }
+        // Parameter text starts right after `\` + name.
+        let p0 = start + 1 + name.len();
+        let mut p1 = p0;
+        if src.get(p1) == Some(&b'-') {
+            p1 += 1;
+        }
+        while src.get(p1).is_some_and(u8::is_ascii_digit) {
+            p1 += 1;
+        }
+        out.extend_from_slice(&src[copied..p0]);
+        out.extend_from_slice(new.to_string().as_bytes());
+        copied = p1;
+        if new != old {
+            changes.push(SizeChange {
+                word: name.to_owned(),
+                old,
+                new,
+            });
+        }
+    }
+    out.extend_from_slice(&src[copied..]);
+    Ok((out, changes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -934,5 +994,33 @@ mod tests {
                 b: 255
             })
         );
+    }
+
+    #[test]
+    fn scale_sizes_in_place() {
+        let src = "{\\rtf1\\ansi\\cocoartf1038{\\fonttbl\\f0 Arial;}\\pard\\sl-480\\slmult0\\li720\\f0\\fs96 Big\\fs1 tiny\\expnd-20 x}";
+        let (out, changes) = scale_sizes(src.as_bytes(), 1.5).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "{\\rtf1\\ansi\\cocoartf1038{\\fonttbl\\f0 Arial;}\\pard\\sl-720\\slmult0\\li1080\\f0\\fs144 Big\\fs2 tiny\\expnd-30 x}"
+        );
+        let words: Vec<_> = changes
+            .iter()
+            .map(|c| (c.word.as_str(), c.old, c.new))
+            .collect();
+        assert_eq!(
+            words,
+            [
+                ("sl", -480, -720),
+                ("li", 720, 1080),
+                ("fs", 96, 144),
+                ("fs", 1, 2),
+                ("expnd", -20, -30)
+            ]
+        );
+        let (out, _) = scale_sizes(b"{\\rtf1\\fs3 a}", 0.1).unwrap();
+        assert_eq!(out, b"{\\rtf1\\fs1 a}", "font size never reaches 0");
+        let (same, none) = scale_sizes(WIN.as_bytes(), 1.0).unwrap();
+        assert_eq!((same.as_slice(), none.len()), (WIN.as_bytes(), 0));
     }
 }
