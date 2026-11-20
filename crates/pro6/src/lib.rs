@@ -6,6 +6,7 @@
 //! typed view on top of it. Every node keeps what the typed model doesn't understand
 //! in an [`Extra`], so nothing in the file is ever dropped.
 
+pub mod diff;
 pub mod error;
 pub mod extra;
 pub mod model;
