@@ -19,7 +19,7 @@
           </array>
           <array rvXMLIvarName="displayElements">
             <SyntheticImageElement UUID="E0000000-0003-4000-8000-0000000000FF" source="C:\Media\bg.png" />
-            <RVTextElement displayName="Default" UUID="E0000000-0003-4000-8000-000000000001" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="0.75" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="0" revealType="0" futureTextAttr="x">
+            <RVTextElement displayName="Default" UUID="E0000000-0003-4000-8000-000000000001" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="0.75" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="1" revealType="0" futureTextAttr="x">
               <RVRect3D rvXMLIvarName="position">{32 24 0 960 720}</RVRect3D>
               <SyntheticChild rvXMLIvarName="future">opaque</SyntheticChild>
               <NSString rvXMLIvarName="PlainText">U3ludGhldGljIHVua25vd25zIGZpeHR1cmU=</NSString>

@@ -1,8 +1,9 @@
 //! Lay out and rasterise one slide.
 //!
 //! Assumptions (docs/PLAN.md Unknowns): one RTF point = one canvas pixel, so
-//! `\fs` half-points / 2 = font size in canvas pixels; `verticalAlignment`
-//! 0/1/2 = top/middle/bottom; RTF "auto" colour (no `\cf`) = black.
+//! `\fs` half-points / 2 = font size in canvas pixels; RTF "auto" colour (no
+//! `\cf`) = black. `verticalAlignment`: 0 = middle is **verified** (every real
+//! file uses 0 and PP6 shows it centred); 1 = top, 2 = bottom are assumed.
 //! Layout happens directly at output scale (font sizes and boxes multiplied by
 //! the fit scale), so text stays sharp on any output resolution.
 
@@ -209,6 +210,7 @@ fn render_text(
             spans.push((run.text.clone(), idx));
         }
     }
+    trim_line_ends(&mut spans);
     if underline {
         warn(frame, "underline isn't drawn yet".into());
     }
@@ -277,9 +279,9 @@ fn render_text(
     }
 
     let dy = match el.vertical_alignment {
-        1 => (box_h - text_h) / 2.0,
+        1 => 0.0,
         2 => box_h - text_h,
-        _ => 0.0,
+        _ => (box_h - text_h) / 2.0,
     };
     let (ox, oy) = (x0.round() as i32, (y0 + dy).round() as i32);
     let c = p.canvas;
@@ -311,6 +313,31 @@ fn render_text(
     Ok(())
 }
 
+/// Drop spaces/tabs at the end of each line (layout only). PP6 (WPF) ignores them
+/// when aligning, so "sing \n" centres like "sing\n"; real songs have many.
+fn trim_line_ends(spans: &mut [(String, usize)]) {
+    let mut at_line_end = true;
+    for (text, _) in spans.iter_mut().rev() {
+        let mut kept: Vec<char> = Vec::with_capacity(text.len());
+        for c in text.chars().rev() {
+            match c {
+                ' ' | '\t' if at_line_end => {}
+                '\n' => {
+                    at_line_end = true;
+                    kept.push(c);
+                }
+                _ => {
+                    at_line_end = false;
+                    kept.push(c);
+                }
+            }
+        }
+        if kept.len() != text.chars().count() {
+            *text = kept.into_iter().rev().collect();
+        }
+    }
+}
+
 fn style_name(bold: bool, italic: bool) -> &'static str {
     match (bold, italic) {
         (true, true) => "bold italic",
@@ -340,5 +367,23 @@ fn fill_rect(frame: &mut SlideFrame, x: f32, y: f32, w: f32, h: f32, color: [u8;
             let i = (yy as usize * frame.width as usize + xx as usize) * 4;
             blend(&mut frame.text[i..i + 4], color);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trim_line_ends;
+
+    #[test]
+    fn trailing_spaces_are_trimmed_across_runs_and_lines() {
+        let mut s = vec![
+            ("sing ".to_string(), 0),
+            (" \nlove; ".to_string(), 1),
+            ("\n".to_string(), 1),
+            ("a  b ".to_string(), 0),
+        ];
+        trim_line_ends(&mut s);
+        let t: Vec<&str> = s.iter().map(|x| x.0.as_str()).collect();
+        assert_eq!(t, ["sing", "\nlove;", "\n", "a  b"]);
     }
 }

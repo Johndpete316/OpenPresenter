@@ -161,7 +161,7 @@ fn two_fonts_1920x1080() {
             .value,
         2.0
     );
-    assert_eq!(welcome.vertical_alignment, 1);
+    assert_eq!(welcome.vertical_alignment, 0); // 0 = middle
     assert!(doc.warnings.is_empty(), "{:#?}", doc.warnings);
 }
 

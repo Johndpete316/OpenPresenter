@@ -218,7 +218,7 @@ Track findings here as real files arrive. "M0:" notes say how the parser current
 - [ ] Whether PP6 (Windows) opens and renders RTF written by `rtf::write` (Windows-style font table, `\pard\qX` per paragraph, `\uN?`). Check with an edited file in PP6.
 - [ ] PlainText encoding (assumed UTF-8) and newline style PP6 writes. M1: `set_text` keeps whatever style the element already used, default `\n`.
 - [ ] Whether a Cocoa-flavoured element should be rewritten in Cocoa style after an edit. M1: always Windows style.
-- [ ] `verticalAlignment` values. M2: 0 = top, 1 = middle, 2 = bottom (assumed).
+- [ ] `verticalAlignment` values. **0 = middle verified** (2026-11-20: every element in the real files is 0, and John reports PP6 centres them vertically; my first guess of 0 = top was wrong). 1 = top, 2 = bottom are still assumed: needs a file with a top/bottom-aligned box saved from PP6.
 - [ ] Text colour when RTF has no `\cf` ("auto"). M2: black, per RTF spec.
 - [ ] Line height. M2: the font's ascent + descent + line gap at the run size. Compare with PP6 on multi-line slides.
 - [ ] RTF font names: family names vs PostScript names (e.g. `ArialMT`, `Helvetica-Bold`). M2 resolves both.

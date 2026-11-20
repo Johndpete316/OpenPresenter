@@ -14,7 +14,7 @@
             <RVSlideTimerCue UUID="C0000000-0005-4000-8000-000000000001" displayName="Go to Next" actionType="9" enabled="1" timeStamp="0" delayTime="0" loopToBeginning="false" duration="3" />
           </array>
           <array rvXMLIvarName="displayElements">
-            <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000001" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="1" revealType="0">
+            <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000001" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="0" revealType="0">
               <RVRect3D rvXMLIvarName="position">{112 84 0 800 600}</RVRect3D>
               <NSString rvXMLIvarName="PlainText">QW5ub3VuY2VtZW50IDE=</NSString>
               <NSString rvXMLIvarName="RTFData">e1xydGYxXGFuc2lcYW5zaWNwZzEyNTJcZGVmZjB7XGZvbnR0Ymx7XGYwXGZuaWxcZmNoYXJzZXQwIExpYmVyYXRpb24gU2Fuczt9fXtcY29sb3J0Ymw7XHJlZDI1NVxncmVlbjI1NVxibHVlMjU1O31ccGFyZFxxY1xmMFxmczk2XGNmMSBBbm5vdW5jZW1lbnQgMX0=</NSString>
@@ -26,7 +26,7 @@
             <RVSlideTimerCue UUID="C0000000-0005-4000-8000-000000000002" displayName="Go to Next" actionType="9" enabled="1" timeStamp="0" delayTime="0" loopToBeginning="false" duration="5" />
           </array>
           <array rvXMLIvarName="displayElements">
-            <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000002" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="1" revealType="0">
+            <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000002" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="0" revealType="0">
               <RVRect3D rvXMLIvarName="position">{112 84 0 800 600}</RVRect3D>
               <NSString rvXMLIvarName="PlainText">QW5ub3VuY2VtZW50IDI=</NSString>
               <NSString rvXMLIvarName="RTFData">e1xydGYxXGFuc2lcYW5zaWNwZzEyNTJcZGVmZjB7XGZvbnR0Ymx7XGYwXGZuaWxcZmNoYXJzZXQwIExpYmVyYXRpb24gU2Fuczt9fXtcY29sb3J0Ymw7XHJlZDI1NVxncmVlbjI1NVxibHVlMjU1O31ccGFyZFxxY1xmMFxmczk2XGNmMSBBbm5vdW5jZW1lbnQgMn0=</NSString>
@@ -38,7 +38,7 @@
             <RVSlideTimerCue UUID="C0000000-0005-4000-8000-000000000003" displayName="Go to Next" actionType="9" enabled="1" timeStamp="0" delayTime="0" loopToBeginning="false" duration="4" />
           </array>
           <array rvXMLIvarName="displayElements">
-            <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000003" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="1" revealType="0">
+            <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000003" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="0" revealType="0">
               <RVRect3D rvXMLIvarName="position">{112 84 0 800 600}</RVRect3D>
               <NSString rvXMLIvarName="PlainText">QW5ub3VuY2VtZW50IDM=</NSString>
               <NSString rvXMLIvarName="RTFData">e1xydGYxXGFuc2lcYW5zaWNwZzEyNTJcZGVmZjB7XGZvbnR0Ymx7XGYwXGZuaWxcZmNoYXJzZXQwIExpYmVyYXRpb24gU2Fuczt9fXtcY29sb3J0Ymw7XHJlZDI1NVxncmVlbjI1NVxibHVlMjU1O31ccGFyZFxxY1xmMFxmczk2XGNmMSBBbm5vdW5jZW1lbnQgM30=</NSString>
@@ -50,7 +50,7 @@
             <RVSlideTimerCue UUID="C0000000-0005-4000-8000-000000000004" displayName="Go to Next" actionType="9" enabled="1" timeStamp="0" delayTime="0" loopToBeginning="true" duration="4" />
           </array>
           <array rvXMLIvarName="displayElements">
-            <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000004" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="1" revealType="0">
+            <RVTextElement displayName="Default" UUID="E0000000-0005-4000-8000-000000000004" typeID="0" displayDelay="0" locked="false" persistent="0" fromTemplate="false" opacity="1" source="" bezelRadius="0" rotation="0" drawingFill="false" drawingShadow="false" drawingStroke="false" fillColor="1 1 1 1" adjustsHeightToFit="false" verticalAlignment="0" revealType="0">
               <RVRect3D rvXMLIvarName="position">{112 84 0 800 600}</RVRect3D>
               <NSString rvXMLIvarName="PlainText">QW5ub3VuY2VtZW50IDQ=</NSString>
               <NSString rvXMLIvarName="RTFData">e1xydGYxXGFuc2lcYW5zaWNwZzEyNTJcZGVmZjB7XGZvbnR0Ymx7XGYwXGZuaWxcZmNoYXJzZXQwIExpYmVyYXRpb24gU2Fuczt9fXtcY29sb3J0Ymw7XHJlZDI1NVxncmVlbjI1NVxibHVlMjU1O31ccGFyZFxxY1xmMFxmczk2XGNmMSBBbm5vdW5jZW1lbnQgNH0=</NSString>

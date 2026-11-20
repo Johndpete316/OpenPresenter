@@ -68,7 +68,7 @@ Open points:
   the scaled size, so a line could in principle break differently than at canvas size. Not seen
   yet; check with real files.
 - **assumed**: font size in canvas px = `\fs` / 2 (1 pt = 1 canvas px).
-- **assumed**: `verticalAlignment` 0/1/2 = top/middle/bottom; RTF auto colour = black.
+- `verticalAlignment` 0 = **middle (verified 2026-11-20**: all real files use 0 and PP6 shows them vertically centred). **Assumed**: 1 = top, 2 = bottom; RTF auto colour = black.
 - Line height comes from each face's metrics (ascent + descent + leading) at the run's size, per span.
 - Fonts resolve by family name, then PostScript name, case-insensitively. A missing font is a
   `RenderError::MissingFont`. If bold/italic is requested and the family lacks that face, the
