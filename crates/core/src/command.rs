@@ -47,4 +47,13 @@ pub enum Command {
     },
     /// Select a playlist item (loads it; the next item is pre-parsed).
     PlaylistSelect(usize),
+    /// Edit a loaded presentation (in memory; marks it unsaved).
+    Edit {
+        presentation: PathBuf,
+        op: pro6::ops::Op,
+    },
+    /// Save a presentation's edits to its file (the previous version is kept as `.pro6.bak`).
+    Save(PathBuf),
+    /// Throw away unsaved edits and reload from disk.
+    Revert(PathBuf),
 }

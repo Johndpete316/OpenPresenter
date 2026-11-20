@@ -62,6 +62,8 @@ pub struct ShowState {
     /// Arrangement chosen per presentation (`None` inside = natural order).
     pub arrangements: Arc<HashMap<PathBuf, Option<String>>>,
     pub notices: Arc<Vec<Notice>>,
+    /// Presentations with unsaved edits.
+    pub unsaved: Arc<std::collections::HashSet<PathBuf>>,
 }
 
 impl Default for ShowState {
@@ -83,6 +85,7 @@ impl Default for ShowState {
             load_errors: Arc::default(),
             arrangements: Arc::default(),
             notices: Arc::default(),
+            unsaved: Arc::default(),
         }
     }
 }

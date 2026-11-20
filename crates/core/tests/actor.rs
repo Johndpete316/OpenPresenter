@@ -387,3 +387,123 @@ fn next_slide_looks_into_the_next_playlist_item() {
     let s = wait(&rx, "pos 5", |s| pos(s) == Some(5));
     assert_eq!(s.next_slide().map(|n| (n.0, n.2)), Some((render, 0)));
 }
+
+#[test]
+fn edits_follow_the_live_slide_save_and_revert() {
+    use pro6::ops::Op;
+    let dir = std::env::temp_dir().join(format!("pp6core-edit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("song.pro6");
+    std::fs::copy(fixture("song_1024x768.pro6"), &file).unwrap();
+    let (core, rx) = start(CoreConfig::default());
+    core.send(Command::SelectArrangement {
+        presentation: file.clone(),
+        arrangement: None,
+    });
+    core.send(Command::GoTo {
+        presentation: file.clone(),
+        position: 1,
+    });
+    let s = wait(&rx, "live", |s| pos(s) == Some(1));
+    let live_uuid = s
+        .live
+        .as_ref()
+        .unwrap()
+        .doc
+        .slides()
+        .nth(1)
+        .unwrap()
+        .uuid
+        .clone();
+
+    // Insert a slide before the live one: the live slide keeps showing, its position shifts.
+    core.send(Command::Edit {
+        presentation: file.clone(),
+        op: Op::AddSlide {
+            group: 0,
+            at: 0,
+            text: "Inserted".into(),
+        },
+    });
+    let s = wait(&rx, "edited", |s| s.unsaved.contains(&file));
+    let live = s.live.as_ref().unwrap();
+    assert_eq!(live.position, Some(2));
+    assert_eq!(
+        live.doc.slides().nth(live.slide.flat).unwrap().uuid,
+        live_uuid
+    );
+    assert!(
+        Arc::ptr_eq(&live.doc, &s.docs[&file]),
+        "live follows the edited document"
+    );
+
+    // Editing the live slide's text updates what's live.
+    core.send(Command::Edit {
+        presentation: file.clone(),
+        op: Op::SetText {
+            group: 0,
+            slide: 2,
+            text: "Changed".into(),
+        },
+    });
+    let s = wait(&rx, "text edited", |s| {
+        s.live.as_ref().is_some_and(|l| {
+            Arc::ptr_eq(&l.doc, &s.docs[&file])
+                && s.docs[&file]
+                    .slides()
+                    .nth(2)
+                    .is_some_and(|x| x.uuid == live_uuid)
+        }) && s.seq > 0
+    });
+    let t = s.docs[&file]
+        .slides()
+        .nth(2)
+        .unwrap()
+        .text_elements()
+        .next()
+        .unwrap()
+        .rtf_doc(&file)
+        .unwrap()
+        .unwrap()
+        .plain_text();
+    assert_eq!(t, "Changed");
+
+    // A refused edit is a notice, not a change.
+    core.send(Command::Edit {
+        presentation: file.clone(),
+        op: Op::RemoveSlide {
+            group: 0,
+            slide: 99,
+        },
+    });
+    let s = wait(&rx, "refused", |s| {
+        s.notices
+            .last()
+            .is_some_and(|n| n.text.contains("Nothing was changed"))
+    });
+    assert_eq!(s.docs[&file].groups()[0].slides().len(), 3);
+
+    // Save writes the file and keeps a backup of the previous version.
+    core.send(Command::Save(file.clone()));
+    wait(&rx, "saved", |s| !s.unsaved.contains(&file));
+    assert_eq!(pro6::load(&file).unwrap().groups()[0].slides().len(), 3);
+    assert_eq!(
+        pro6::load(&dir.join("song.pro6.bak")).unwrap().groups()[0]
+            .slides()
+            .len(),
+        2
+    );
+
+    // Revert throws away unsaved edits.
+    core.send(Command::Edit {
+        presentation: file.clone(),
+        op: Op::RemoveGroup { group: 2 },
+    });
+    wait(&rx, "edited again", |s| s.unsaved.contains(&file));
+    core.send(Command::Revert(file.clone()));
+    let s = wait(&rx, "reverted", |s| {
+        !s.unsaved.contains(&file) && s.docs.get(&file).is_some_and(|d| d.groups().len() == 3)
+    });
+    assert_eq!(s.docs[&file].groups()[0].slides().len(), 3);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
