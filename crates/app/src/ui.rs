@@ -280,14 +280,12 @@ fn toolbar(
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 let k = &settings.keys;
-                let text_off = !show.text_visible;
-                let bg_off = !show.background_visible;
                 if tool_button(
                     ui,
                     icon::X,
                     "Clear All",
                     Color32::from_rgb(110, 110, 116),
-                    text_off && bg_off,
+                    false,
                     true,
                 )
                 .on_hover_text(format!("Clear All{}", keys(&k.clear_all)))
@@ -300,7 +298,7 @@ fn toolbar(
                     icon::TEXT_T_SLASH,
                     "Slides",
                     Color32::from_rgb(214, 68, 58),
-                    text_off,
+                    false,
                     true,
                 )
                 .on_hover_text(format!("Clear the slide text{}", keys(&k.clear_text)))
@@ -313,7 +311,7 @@ fn toolbar(
                     icon::IMAGE,
                     "BkGrds",
                     Color32::from_rgb(47, 143, 216),
-                    bg_off,
+                    false,
                     true,
                 )
                 .on_hover_text(format!("Clear the background{}", keys(&k.clear_background)))
@@ -605,21 +603,6 @@ fn preview(
                 ui.label(RichText::new("Nothing live").size(12.5).weak());
             }
         }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let state = match (show.text_visible, show.background_visible) {
-                (true, true) => None,
-                (false, true) => Some("Text cleared"),
-                (true, false) => Some("Background cleared"),
-                (false, false) => Some("All cleared"),
-            };
-            if let Some(s) = state {
-                ui.label(
-                    RichText::new(s)
-                        .size(12.5)
-                        .color(Color32::from_rgb(230, 110, 100)),
-                );
-            }
-        });
     });
     loop_panel(ui, show, actions);
     ui.add_space(4.0);

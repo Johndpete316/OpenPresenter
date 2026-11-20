@@ -56,8 +56,7 @@ pp6.exe --open "C:\path\to\song.pro6" --monitor 1
    use the clicker: PageDown/PageUp (or arrows) step through slides, skipping disabled ones; the
    clicker's blank button (`.` or `b`) is Clear All. F1/F2/F3 = Clear All / Background / Text.
 4. Switch arrangement mid-song from the grid's Arrangement list: the slide on screen must stay.
-5. Kill the process mid-service (Task Manager) and relaunch: it should come back on the same
-   slide (if within 6 h).
+5. Relaunch: it starts blank (nothing live), by request.
 6. Key bindings live in `settings.toml` under `[keys]` (e.g. `next = ["PageDown", "Right"]`).
    Restart to apply.
 

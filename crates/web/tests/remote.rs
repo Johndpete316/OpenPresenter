@@ -186,7 +186,10 @@ async fn pin_login_lockout_commands_and_logout_on_new_pin() {
         204
     );
     let s = wait(&watch, |s| !s.text_visible);
-    assert!(!s.background_visible, "Clear from the phone is Clear All");
+    assert!(
+        s.background_media.is_none(),
+        "Clear from the phone is Clear All"
+    );
     assert_eq!(
         http(&url, "POST", "/api/cmd/bogus", Some(&cookie), None)
             .await

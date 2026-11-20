@@ -132,11 +132,13 @@ fn run_inner(
             RenderCmd::Show {
                 key,
                 frame,
+                layers,
                 requested_at,
             } => {
                 let upload_started = Instant::now();
                 r.ensure(&gl, key, frame)?;
                 r.current = Some(key);
+                r.layers = layers;
                 let upload = upload_started.elapsed();
                 media.render(&gl, r.media_rect(width, height), true);
                 present(&r, &media, width, height)?;
@@ -152,8 +154,12 @@ fn run_inner(
                 present(&r, &media, width, height)?;
                 presented(events, None, requested_at, Default::default());
             }
-            RenderCmd::Blank { requested_at } => {
+            RenderCmd::Blank {
+                layers,
+                requested_at,
+            } => {
                 r.current = None;
+                r.layers = layers;
                 media.render(&gl, r.media_rect(width, height), true);
                 present(&r, &media, width, height)?;
                 presented(events, None, requested_at, Default::default());

@@ -145,18 +145,31 @@ fn clear_layers_and_text_returns_on_next() {
         position: 0,
     });
     wait(&rx, "live after load", |s| pos(s) == Some(0));
+    core.send(Command::SetBackground {
+        media: Some("/m/bg.mp4".into()),
+        next: None,
+    });
+    wait(&rx, "bg", |s| s.background_media.is_some());
     core.send(Command::ClearBackground);
     wait(&rx, "bg cleared", |s| {
-        !s.background_visible && s.text_visible
+        s.background_media.is_none() && s.text_visible
     });
+    core.send(Command::SetBackground {
+        media: Some("/m/bg.mp4".into()),
+        next: None,
+    });
+    wait(&rx, "bg again", |s| s.background_media.is_some());
     core.send(Command::ClearAll);
     wait(&rx, "all cleared", |s| {
-        !s.background_visible && !s.text_visible
+        s.background_media.is_none() && !s.text_visible
     });
     core.send(Command::Next);
     let s = wait(&rx, "next", |s| pos(s) == Some(1));
     assert!(s.text_visible, "triggering a slide brings text back");
-    assert!(!s.background_visible, "a cleared background stays cleared");
+    assert!(
+        s.background_media.is_none(),
+        "a cleared background stays stopped"
+    );
 }
 
 #[test]
@@ -241,8 +254,6 @@ fn restore_recent_session_goes_live() {
 #[test]
 fn background_media_and_clears() {
     let (core, rx) = start(CoreConfig::default());
-    core.send(Command::ClearBackground);
-    wait(&rx, "bg hidden", |s| !s.background_visible);
     core.send(Command::SetBackground {
         media: Some("/m/loop.mp4".into()),
         next: Some("/m/next.mp4".into()),
@@ -258,7 +269,7 @@ fn background_media_and_clears() {
     );
     core.send(Command::ClearAll);
     let s = wait(&rx, "cleared", |s| s.background_media.is_none());
-    assert!(!s.background_visible && !s.text_visible);
+    assert!(!s.text_visible && s.background_next.is_none());
 }
 
 #[test]
@@ -311,8 +322,8 @@ fn next_past_the_last_slide_moves_to_the_next_playlist_item() {
     });
     wait(&rx, "song start", |s| pos(s) == Some(0) && s.is_live(&song));
     core.send(Command::Prev);
-    core.send(Command::ClearBackground); // marker
-    let s = wait(&rx, "prev processed", |s| !s.background_visible);
+    core.send(Command::ClearText); // marker
+    let s = wait(&rx, "prev processed", |s| !s.text_visible);
     assert!(s.is_live(&song) && pos(&s) == Some(0));
 
     // Into an item that may not be loaded yet: goes live when it is.
@@ -705,4 +716,67 @@ fn stepping_past_a_presentation_outside_the_playlist_says_why() {
         .filter(|n| n.text.contains("isn't in the playlist"))
         .count();
     assert_eq!(hints, 1);
+}
+
+/// John's report: after Clear during the Welcome loop, the cleared slide kept coming back.
+#[test]
+fn clear_during_a_loop_keeps_everything_off_until_the_operator_shows_a_slide() {
+    let dir = std::env::temp_dir().join(format!("pp6core-loop-clear-{}", std::process::id()));
+    let ann = fast_announcements(&dir, true);
+    let song = fixture("song_1024x768.pro6");
+    let (core, rx) = start(CoreConfig::default());
+    core.send(Command::Open(song.clone()));
+    core.send(Command::GoTo {
+        presentation: ann.clone(),
+        position: 0,
+    });
+    wait(&rx, "looping", |s| {
+        s.looping.is_some() && s.docs.contains_key(&song)
+    });
+    for clear in [Command::ClearAll, Command::ClearText] {
+        core.send(Command::GoTo {
+            presentation: ann.clone(),
+            position: 0,
+        });
+        core.send(Command::StartLoop);
+        wait(&rx, "looping again", |s| s.looping.is_some());
+        core.send(clear);
+        let s = wait(&rx, "cleared", |s| !s.text_visible);
+        assert!(s.looping.is_none());
+        let seq = s.seq;
+        // Well past every slide timer: nothing changes on its own.
+        std::thread::sleep(Duration::from_millis(900));
+        let mut last = s;
+        while let Ok(n) = rx.try_recv() {
+            last = n;
+        }
+        assert!(
+            !last.text_visible && last.looping.is_none(),
+            "seq {seq} -> {}",
+            last.seq
+        );
+        // Showing a song slide shows that slide, and it stays.
+        core.send(Command::GoTo {
+            presentation: song.clone(),
+            position: 1,
+        });
+        let s = wait(&rx, "song", |s| s.is_live(&song) && s.text_visible);
+        assert_eq!(pos(&s), Some(1));
+        std::thread::sleep(Duration::from_millis(700));
+        let mut last = s;
+        while let Ok(n) = rx.try_recv() {
+            last = n;
+        }
+        assert!(last.is_live(&song) && pos(&last) == Some(1) && last.looping.is_none());
+    }
+    // Clear Background is one-shot: it stops the background, no lasting "cleared" state.
+    core.send(Command::SetBackground {
+        media: Some("/m/a.mp4".into()),
+        next: None,
+    });
+    wait(&rx, "bg", |s| s.background_media.is_some());
+    core.send(Command::ClearBackground);
+    let s = wait(&rx, "bg cleared", |s| s.background_media.is_none());
+    assert!(s.background_visible && s.text_visible);
+    std::fs::remove_dir_all(&dir).unwrap();
 }

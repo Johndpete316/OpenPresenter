@@ -27,9 +27,12 @@ pub struct FrameKey {
 /// Commands to the output render thread.
 pub enum RenderCmd {
     /// Show this frame now. `requested_at` is when the operator asked (for latency).
+    /// `layers` = (text, background) visibility, applied in the same present so a
+    /// cleared slide can never flash back before the new one is up.
     Show {
         key: FrameKey,
         frame: Arc<SlideFrame>,
+        layers: (bool, bool),
         requested_at: Option<Instant>,
     },
     /// Upload ahead of time so a later `Show` is instant.
@@ -39,6 +42,7 @@ pub enum RenderCmd {
     },
     /// Show nothing (black): no live slide, or it couldn't be rendered.
     Blank {
+        layers: (bool, bool),
         requested_at: Option<Instant>,
     },
     /// Text / background layer visibility (Clear Text / Clear Background).
@@ -198,25 +202,31 @@ impl Worker {
         // A forced re-send (new window / size) isn't an operator action: no latency stamp.
         let requested_at = if force { None } else { s.command_at };
         let layers = (s.text_visible, s.background_visible);
-        if self.sent.layers != Some(layers) {
-            self.sent.layers = Some(layers);
-            self.send(RenderCmd::Layers {
-                text: layers.0,
-                background: layers.1,
-                requested_at,
-            });
-        }
         let live = s
             .live
             .as_ref()
             .map(|l| (Arc::as_ptr(&l.doc) as usize, l.slide.flat));
         let prev = std::mem::replace(&mut self.sent.live, live);
         if prev == live && !force {
+            // Same slide: only visibility may have changed (Clear Text, etc.).
+            if self.sent.layers != Some(layers) {
+                self.sent.layers = Some(layers);
+                self.send(RenderCmd::Layers {
+                    text: layers.0,
+                    background: layers.1,
+                    requested_at,
+                });
+            }
             return;
         }
+        // New slide: its visibility travels with it (one present, never the old slide).
+        self.sent.layers = Some(layers);
         let Some(l) = &s.live else {
             // Went from live to nothing (or a fresh window): show black.
-            self.send(RenderCmd::Blank { requested_at });
+            self.send(RenderCmd::Blank {
+                layers,
+                requested_at,
+            });
             return;
         };
         let index = l.slide.flat;
@@ -230,6 +240,7 @@ impl Worker {
                 self.send(RenderCmd::Show {
                     key,
                     frame,
+                    layers,
                     requested_at,
                 });
             }
@@ -237,7 +248,10 @@ impl Worker {
                 let _ = self
                     .events
                     .send_event(UserEvent::RenderFailed { index, message });
-                self.send(RenderCmd::Blank { requested_at });
+                self.send(RenderCmd::Blank {
+                    layers,
+                    requested_at,
+                });
             }
         }
         // Next first (possibly the next playlist item's first slide): it's the likely next

@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 use crossbeam_channel::{Receiver, Sender};
 use pp6core::library::LibraryIndex;
-use pp6core::{Command, CoreHandle, RestoreState, Settings, ShowState};
+use pp6core::{Command, CoreHandle, Settings, ShowState};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
@@ -143,7 +143,6 @@ fn parse_size(s: &str) -> Result<(u32, u32), String> {
 
 struct Paths {
     settings: PathBuf,
-    restore: PathBuf,
     logs: PathBuf,
     library_cache: PathBuf,
     thumbs: PathBuf,
@@ -166,7 +165,6 @@ fn paths(data_dir: Option<PathBuf>) -> Paths {
     };
     Paths {
         settings: config.join("settings.toml"),
-        restore: data.join("restore.json"),
         logs: data.join("logs"),
         library_cache: cache.join("library.json"),
         thumbs: cache.join("thumbnails"),
@@ -198,16 +196,11 @@ fn main() -> ExitCode {
         app_notices.push(e.user_message());
     }
 
-    let restore = if args.no_restore {
-        None
-    } else {
-        RestoreState::load(&paths.restore)
-    };
-    let restore_writer =
-        pp6core::restore::spawn_writer(paths.restore.clone(), Duration::from_millis(500)).ok();
+    // Start blank (John, 2026-11-20): nothing live, nothing on the output.
+    let _ = args.no_restore;
     let (core, _core_thread) = match pp6core::spawn(pp6core::CoreConfig {
-        restore,
-        restore_writer,
+        restore: None,
+        restore_writer: None,
         output_enabled: settings.output.enabled,
     }) {
         Ok(v) => v,

@@ -452,19 +452,22 @@ impl Core {
         match cmd {
             Command::Next => self.step(true, at),
             Command::Prev => self.step(false, at),
+            // Clears are one-shot actions (as in PP6), not toggled states: Clear Text
+            // takes the slide off until the next slide is shown; Clear Background stops
+            // the background (choosing one again brings it back).
             Command::ClearText => {
                 self.s.text_visible = false;
                 self.stop_loop_by_operator("Loop stopped (cleared).");
             }
             Command::ClearBackground => {
-                self.s.background_visible = false;
                 self.s.background_media = None;
+                self.s.background_next = None;
                 self.stop_loop_by_operator("Loop stopped (cleared).");
             }
             Command::ClearAll => {
                 self.s.text_visible = false;
-                self.s.background_visible = false;
                 self.s.background_media = None;
+                self.s.background_next = None;
                 self.stop_loop_by_operator("Loop stopped (cleared).");
             }
             Command::SetBackground { media, next } => {
@@ -694,6 +697,7 @@ impl Core {
         if let Some(l) = self.s.looping.as_ref() {
             self.loop_suppressed = Some(l.path.clone());
         }
+        self.pending_loop = None;
         self.stop_loop(why);
     }
 
@@ -729,6 +733,11 @@ impl Core {
             self.stop_loop("Loop stopped.");
             return;
         };
+        // Never bring cleared text back on a timer.
+        if !self.s.text_visible {
+            self.stop_loop("Loop stopped (cleared).");
+            return;
+        }
         // "Go to Next", or back to the first slide after a loopToBeginning slide.
         let target = if l.loops_back {
             next_enabled(&live.order, None)
