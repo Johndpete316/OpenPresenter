@@ -13,7 +13,7 @@ mod state;
 use std::io::Write as _;
 use std::path::Path;
 
-pub use actor::{CoreConfig, CoreHandle, spawn};
+pub use actor::{CoreConfig, CoreHandle, save_with_backup, spawn};
 pub use command::Command;
 pub use order::{SlideRef, find_nearest, next_enabled, prev_enabled, slide_order};
 pub use playlist::{Playlist, PlaylistError, PlaylistItem};

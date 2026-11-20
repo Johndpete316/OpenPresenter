@@ -54,6 +54,7 @@ pub struct UiState {
     pub settings_open: bool,
     pub settings_path: String,
     pub remote: RemoteStatus,
+    pub edit: crate::editor::EditState,
     pub(crate) textures: HashMap<ThumbKey, Result<TextureHandle, String>>,
     pub(crate) requested: HashSet<ThumbKey>,
 }
@@ -80,6 +81,16 @@ impl UiState {
             self.textures.clear();
             self.requested.clear();
         }
+    }
+
+    pub(crate) fn thumb_public(
+        &mut self,
+        tx: &Sender<ThumbRequest>,
+        doc: &Arc<pro6::Document>,
+        flat: usize,
+        width: u32,
+    ) -> (ThumbKey, Option<&Result<TextureHandle, String>>) {
+        self.thumb(tx, doc, flat, width)
     }
 
     fn thumb(
@@ -148,7 +159,7 @@ fn keys(list: &[String]) -> String {
     list.first().map(|k| format!(" ({k})")).unwrap_or_default()
 }
 
-fn title(path: &Path) -> String {
+pub(crate) fn title(path: &Path) -> String {
     path.file_stem().map_or_else(
         || path.display().to_string(),
         |s| s.to_string_lossy().into_owned(),
@@ -406,7 +417,7 @@ fn playlist(ui: &mut egui::Ui, show: &ShowState, actions: &mut Vec<UiAction>) {
         });
 }
 
-fn color32(c: Option<pro6::Rgba>) -> Color32 {
+pub(crate) fn color32(c: Option<pro6::Rgba>) -> Color32 {
     let q = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     match c {
         Some(c) if c.a > 0.0 => Color32::from_rgb(q(c.r), q(c.g), q(c.b)),
@@ -414,7 +425,7 @@ fn color32(c: Option<pro6::Rgba>) -> Color32 {
     }
 }
 
-fn tile_image(
+pub(crate) fn tile_image(
     ui: &mut egui::Ui,
     tex: Option<&Result<TextureHandle, String>>,
     size: Vec2,
@@ -463,10 +474,26 @@ fn grid(
         };
         return;
     };
+    if st.edit.on {
+        crate::editor::grid_edit(ui, st, show, thumbs, actions, &path, &doc);
+        return;
+    }
     let arrangement = show.arrangement_for(&path);
     let arrangements = doc.arrangements();
     ui.horizontal(|ui| {
-        ui.heading(title(&path));
+        let unsaved = if show.unsaved.contains(&path) {
+            " •"
+        } else {
+            ""
+        };
+        ui.heading(format!("{}{unsaved}", title(&path)));
+        if ui
+            .button("Edit")
+            .on_hover_text("Edit text, slides, groups and arrangements")
+            .clicked()
+        {
+            st.edit.on = true;
+        }
         let name = |id: &Option<String>| match id {
             None => "Natural order".to_owned(),
             Some(id) => arrangements

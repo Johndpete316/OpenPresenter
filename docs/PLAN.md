@@ -166,12 +166,19 @@ pp6/
   - PIN 4 digits by default (4–6 configurable). Five wrong PINs lock that IP out for 30 s, doubling up to 10 min. A new PIN logs out every phone. Sessions are HttpOnly + SameSite=Strict cookies (also blocks cross-site command posts); there's no HTTPS (LAN only).
 
 ### M7 — Editor
-- [ ] Edit slide text, add/remove/reorder slides
-- [ ] Create/rename/recolour/reorder groups; move slides between groups
-- [ ] Edit arrangements
-- [ ] Save to `.pro6`
+- [x] Edit slide text, add/remove/reorder slides
+- [x] Create/rename/recolour/reorder groups; move slides between groups
+- [x] Edit arrangements
+- [x] Save to `.pro6`
 - [ ] Later: element layout, font, colour, position
 - **Accept:** edited file opens correctly in PP6.
+- **Status (2026-11-20):** built. Every operation is tested through a full write → re-parse round trip (unique UUIDs, arrangements follow group renames, moves and removals; failed edits change nothing). Core tests cover edits while live, save with backup, and revert. Edit mode was checked with `--capture-ui`. **Still to do for acceptance:** open edited files in PP6 (see docs/windows-setup.md, M7). Notes:
+  - Edit mode lives in the grid ("Edit"); clicking selects, never goes live. Slides show in natural group order.
+  - New slides copy the layout, font and size of a neighbouring slide (fresh UUIDs throughout, including cues). A presentation with no slides can't get a new one (no invented fonts).
+  - Text edits use the first run's style for the whole box (mixed fonts in one box become one font). They drop WinFlowData/WinFontData; that's the first thing to verify in PP6.
+  - Arrangement editing writes the *assumed* `RVSongArrangement`/`groupIDs` structure.
+  - Save keeps the previous file as `<name>.pro6.bak` (one rolling backup) and saves atomically. Revert reloads from disk. Quitting with unsaved edits asks Save / Don't save / Cancel. There's no undo yet, and unsaved edits aren't in the crash-restore file.
+  - If the live slide is edited, the output updates; if it's deleted, the screen keeps it until the next trigger.
 
 ### M8 — Announcements: Media Cues + Looping / Auto-Advance
 Only the Announcements presentation uses these.
@@ -217,6 +224,7 @@ Track findings here as real files arrive. "M0:" notes say how the parser current
 - [ ] `drawingBackgroundColor` semantics (slide vs document). M2: slide colour if the slide's flag is true, else the document's if its flag is true, else black.
 - [ ] Shadow, stroke (outline), rotation, underline, and fill corner radius: not drawn in M2 (each produces a render warning).
 - [ ] How PP6 layers slide background colour vs background media, and its media scaling (fit/fill). M5: media under an optional slide colour; media fits the canvas area.
+- [ ] Does PP6 accept files edited here: new slides/groups (fresh UUIDs, no Win payloads), regenerated RTF, and arrangements written in the assumed structure?
 - [ ] Arrangement XML structure. M3 reads `uuid`/`name`/`color` plus NSString group UUIDs below each arrangement (tolerant, read-only); verify with a real file.
 - [x] Next/Prev at the end of a presentation. **John:** Next moves to the next playlist item (implemented). Prev at the first slide stays put; not specified, so not changed.
 - [ ] Characters missing from the slide's font: cosmic-text draws them from another font. M2 reports a warning; decide whether that is acceptable or should be an error.

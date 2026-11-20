@@ -118,7 +118,7 @@ fn io_worker(rx: &Receiver<IoJob>, back: &Sender<Msg>) {
 
 /// Keep the previous version as `<name>.pro6.bak` (replacing an older backup), then
 /// save atomically.
-fn save_with_backup(doc: &Document) -> Result<(), String> {
+pub fn save_with_backup(doc: &Document) -> Result<(), String> {
     let path = &doc.path;
     if path.exists() {
         let mut name = path

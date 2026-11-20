@@ -3,6 +3,7 @@
 //! lives in the core actor.
 
 mod crash;
+mod editor;
 mod error;
 mod gl;
 mod keys;
@@ -80,6 +81,11 @@ struct Args {
     /// With --capture: wait this long after the first slide before capturing.
     #[arg(long, default_value_t = 0)]
     capture_delay_ms: u64,
+    /// Start the grid in edit mode, optionally with slide GROUP:SLIDE selected (0-based).
+    #[arg(long)]
+    edit_mode: bool,
+    #[arg(long)]
+    edit_slide: Option<String>,
     /// Open the Settings window at startup.
     #[arg(long)]
     open_settings: bool,
@@ -291,6 +297,15 @@ fn main() -> ExitCode {
             let _ = audio_proxy.send_event(UserEvent::AudioDevices(r));
         });
     let media_files = list_media(&settings.media_dirs);
+    let mut ui_state_edit = editor::EditState::default();
+    if args.edit_mode {
+        ui_state_edit.on = true;
+    }
+    if let Some((g, s)) = args.edit_slide.as_deref().and_then(|v| v.split_once(':'))
+        && let (Ok(g), Ok(s)) = (g.parse(), s.parse())
+    {
+        ui_state_edit.select(g, s);
+    }
     let mut app = App {
         started,
         ui: UiState {
@@ -300,6 +315,7 @@ fn main() -> ExitCode {
             app_notices,
             settings_path: paths.settings.display().to_string(),
             settings_open: args.open_settings,
+            edit: ui_state_edit,
             ..UiState::default()
         },
         show: Arc::new(ShowState::default()),
@@ -572,6 +588,48 @@ impl App {
         true
     }
 
+    /// Ask what to do with unsaved edits before closing. `false` = don't close.
+    fn confirm_unsaved(&mut self) -> bool {
+        let unsaved: Vec<PathBuf> = self.show.unsaved.iter().cloned().collect();
+        if unsaved.is_empty() {
+            return true;
+        }
+        let names: Vec<String> = unsaved.iter().map(|p| ui::title(p)).collect();
+        let answer = rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title("Unsaved changes")
+            .set_description(format!(
+                "Save changes to {} before closing?",
+                names.join(", ")
+            ))
+            .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
+                "Save".into(),
+                "Don't save".into(),
+                "Cancel".into(),
+            ))
+            .show();
+        match answer {
+            rfd::MessageDialogResult::Custom(s) if s == "Save" => {
+                let mut ok = true;
+                for p in &unsaved {
+                    if let Some(doc) = self.show.docs.get(p)
+                        && let Err(e) = pp6core::save_with_backup(doc)
+                    {
+                        ok = false;
+                        rfd::MessageDialog::new()
+                            .set_level(rfd::MessageLevel::Error)
+                            .set_title("Not saved")
+                            .set_description(e)
+                            .show();
+                    }
+                }
+                ok
+            }
+            rfd::MessageDialogResult::Custom(s) if s == "Don't save" => true,
+            _ => false,
+        }
+    }
+
     fn save_settings(&mut self) {
         if let Err(e) = self.settings.save(&self.paths.settings) {
             self.ui.app_notices.push(e.user_message());
@@ -770,7 +828,11 @@ impl ApplicationHandler<UserEvent> for App {
         };
         let response = op.egui.on_window_event(&op.window, &event);
         match event {
-            WindowEvent::CloseRequested => self.quit(el),
+            WindowEvent::CloseRequested => {
+                if self.confirm_unsaved() {
+                    self.quit(el);
+                }
+            }
             WindowEvent::Resized(s) => {
                 op.resize(s.width, s.height);
                 op.window.request_redraw();

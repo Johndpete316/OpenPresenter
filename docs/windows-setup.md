@@ -83,6 +83,20 @@ pp6.exe --open "C:\path\to\song.pro6" --monitor 1
 6. Settings: `[web]` in `settings.toml` (`enabled`, `port`, `bind`, `pin_length` 4–6). The server
    listens on the PC's LAN address only (not all interfaces) unless `bind` says otherwise.
 
+## M7: edited files open in PP6
+
+Work on **copies** of real presentations.
+
+1. Open a song, click **Edit** in the grid.
+2. Change a slide's text (Apply), add a slide, duplicate one, move one to another group,
+   rename and recolour a group, add a group, and build a new arrangement.
+3. **Save** (the previous version is kept as `<name>.pro6.bak`).
+4. Open the saved file in **PP6 on Windows** and check:
+   - the new text shows (not the old text: this verifies dropping WinFlowData/WinFontData);
+   - fonts and sizes match the neighbouring slides;
+   - group names and colours are right, and the new arrangement appears and plays in order.
+5. Also run `pp6tool roundtrip` on the folder: saved files must parse and be stable.
+
 ## Known issues on the Linux dev machine (not the app)
 
 `mpv` and `ffmpeg` there currently fail to start (`libsndio.so.7` / `libjxl.so.0.12` missing
