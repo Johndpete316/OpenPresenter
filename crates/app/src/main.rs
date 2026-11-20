@@ -295,13 +295,6 @@ fn main() -> ExitCode {
             Err(msg) => app_notices.push(msg),
         }
     }
-    let audio_proxy = proxy.clone();
-    let _ = std::thread::Builder::new()
-        .name("audio-devices".into())
-        .spawn(move || {
-            let r = media::audio_devices().map_err(|e| e.user_message());
-            let _ = audio_proxy.send_event(UserEvent::AudioDevices(r));
-        });
     let media_files = list_media(&settings.media_dirs);
     let mut ui_state_edit = editor::EditState::default();
     if args.edit_mode {
@@ -939,6 +932,15 @@ impl ApplicationHandler<UserEvent> for App {
                     self.cold_start_logged = true;
                     let cold = at.duration_since(self.started);
                     tracing::info!(cold_start_ms = ms(cold), "first slide on screen");
+                    // Only now load libmpv to list audio devices: on Windows, loading the
+                    // ~120 MB DLL holds the loader lock and would stall window creation.
+                    let audio_proxy = self.proxy.clone();
+                    let _ = std::thread::Builder::new()
+                        .name("audio-devices".into())
+                        .spawn(move || {
+                            let r = media::audio_devices().map_err(|e| e.user_message());
+                            let _ = audio_proxy.send_event(UserEvent::AudioDevices(r));
+                        });
                     println!(
                         "cold start (process start → first slide presented): {:.1} ms",
                         ms(cold)

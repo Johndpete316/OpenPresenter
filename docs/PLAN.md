@@ -103,6 +103,7 @@ pp6/
 - [x] Measure cold start and slide-change latency; log them
 - **Accept:** fixture slides render correctly to PNG and to a second monitor on Windows.
 - **Status (2026-11-20):** everything is built and verified on Linux. PNGs are checked visually. The GL output, captured with `pp6 --capture`, matches `pp6tool render` pixel-for-pixel at 4:3, 16:9 and 1:1, including black bars and background. Disable/enable and the missing-display error were exercised. `pp6.exe` cross-builds. **Still to do for acceptance:** run on the Windows host with a second display. Suggested commands: `pp6.exe --list-monitors`, then `pp6.exe <file> --monitor N`; arrow keys and D, stdin `e` to re-enable; `--bench 30`; `--capture out.png`. Record the numbers in perf.md.
+- **Windows (2026-11-20):** fixture and real slides render to PNG on Windows (Bookman Old Style hymn checked), and the output runs **fullscreen on a real second display** (DISPLAY2 1024×768) next to the operator window. Round-trip is byte-identical on Windows. Windows-only bugs found and fixed: operator window crash ("Unable to create Texture object": creating the output's WGL context left the operator context not current); startup stall from loading libmpv during startup (6.5 s → 1.3–2.2 s). **Still to do:** a visual comparison against PP6 (not installed on the test laptop).
 - **M3 architecture note:** winit allows one event loop per process, and `eframe` takes it. The output window must share the operator UI's event loop, so M3 should use `egui-winit` + `egui_glow` directly instead of `eframe`. The output's GL still runs on its own thread. glow is pinned to 0.17 to match `egui_glow` 0.37. **Confirm with John before M3.**
 
 ### M3 — Core + Operator MVP
@@ -194,7 +195,7 @@ Only the Announcements presentation uses these.
 - [x] Putting a *different* presentation live **stops the loop** (John: no pausing)
 - [x] Until supported: load the presentation with text and a non-fatal "media cues / auto-advance not supported yet" warning
 - **Accept:** Announcements file loops on its own with the same timing as PP6.
-- **Status (2026-11-20):** built against the **verified** format from `AA001 Welcome.pro6`. Each slide's `RVSlideTimerCue` gives its time, and `loopToBeginning` on the last slide loops back. The timer runs on the core thread. Like PP6, putting a timed presentation live starts it. John's rules apply: Next/Prev restart the timer; any Clear stops it (it stays stopped until Start loop or the presentation is put live again); selecting elsewhere keeps it; another presentation live stops it. Without a loop-back slide it stops at the end. The UI shows LOOP RUNNING + countdown + Stop near Preview. Timing tests run in real time. **Still to do for acceptance:** run the Welcome file on the Windows PC next to PP6 and compare timing (needs Bookman Old Style installed). **Confirmed by John (2026-11-20):** auto-start when a timed presentation goes live, and it stays stopped after Clear until Start loop (or put live again).
+- **Status (2026-11-20):** built against the **verified** format from `AA001 Welcome.pro6`. Each slide's `RVSlideTimerCue` gives its time, and `loopToBeginning` on the last slide loops back. The timer runs on the core thread. Like PP6, putting a timed presentation live starts it. John's rules apply: Next/Prev restart the timer; any Clear stops it (it stays stopped until Start loop or the presentation is put live again); selecting elsewhere keeps it; another presentation live stops it. Without a loop-back slide it stops at the end. The UI shows LOOP RUNNING + countdown + Stop near Preview. Timing tests run in real time. **Still to do for acceptance:** run the Welcome file on the Windows PC next to PP6 and compare timing (needs Bookman Old Style installed). **Windows run (2026-11-20):** the real Welcome file auto-started on Windows and advanced every 10.0 s. Note: at launch the first slide's countdown starts when it goes live, about 1 s before it's on screen. **Confirmed by John (2026-11-20):** auto-start when a timed presentation goes live, and it stays stopped after Clear until Start loop (or put live again).
 
 ## Unknowns to Verify
 Track findings here as real files arrive. "M0:" notes say how the parser currently handles each one. None are verified against a real file yet.
@@ -239,6 +240,9 @@ Track findings here as real files arrive. "M0:" notes say how the parser current
 - [ ] `RVImageElement` (images on slides; `source` is a URL-encoded Windows path) and `RVTransition` (document transition): kept as raw XML, not drawn or used yet.
 - [ ] Shadow `n|r g b a|{x, y}`: first field was 0 with an offset of {4.95, -4.95}; probably blur radius, unverified.
 - [ ] Group colours are written with 15 decimals (`0.498039215686275`); preserved exactly.
+
+## Deployment requirements (found on Windows, 2026-11-20)
+- [ ] **Code signing.** Windows 11 **Smart App Control** blocks unsigned `pp6.exe`/`pp6tool.exe` (and would block `libmpv-2.dll`); a Defender exclusion doesn't help. Before deploying to the church PC: check whether Smart App Control is on there, and plan to sign the executables and DLL with a trusted code-signing certificate (e.g. Microsoft Trusted Signing or a commercial OV/EV certificate; self-signed won't satisfy Smart App Control).
 
 ## Required Tooling
 ### Dev Machine (CachyOS / Arch)

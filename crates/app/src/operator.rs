@@ -8,7 +8,7 @@ use glow::HasContext as _;
 use glutin::config::{ConfigTemplateBuilder, GlConfig as _};
 use glutin::context::{
     ContextApi, ContextAttributesBuilder, GlProfile, NotCurrentGlContext as _,
-    PossiblyCurrentContext, Version,
+    PossiblyCurrentContext, PossiblyCurrentGlContext as _, Version,
 };
 use glutin::display::{GetGlDisplay as _, GlDisplay as _};
 use glutin::surface::{GlSurface as _, Surface, SwapInterval, WindowSurface};
@@ -96,6 +96,12 @@ impl OperatorWindow {
 
     /// Run one UI frame and present it. With `capture`, the frame is also saved as PNG.
     pub fn frame(&mut self, run_ui: impl FnMut(&mut egui::Ui), capture: Option<&std::path::Path>) {
+        // Creating another GL context on this thread (the output window, on Windows/WGL)
+        // can leave no context current; make ours current before every frame.
+        if let Err(e) = self.ctx.make_current(&self.surface) {
+            tracing::error!(error = %e, "operator window: couldn't make GL context current");
+            return;
+        }
         self.egui.run(&self.window, run_ui);
         unsafe {
             self.gl.clear_color(0.1, 0.1, 0.1, 1.0);

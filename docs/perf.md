@@ -53,6 +53,20 @@ GL setup). In normal use that happens when the output is idle after startup; wit
 | 2026-11-20 | M5 release | Linux / RTX 3080 / Wayland | mpv player setup | ≈ 110 ms first, ≈ 60 ms second | `mpv_render_context_create`; mpv_create itself ≈ 2 ms |
 | 2026-11-20 | M5 release | Linux / RTX 3080 / Wayland | Slide change, no media | median 0.70 ms, max 0.85 ms | |
 
+## Windows (2026-11-20): first runs on Windows
+
+Machine: Windows 11 (build 26200) laptop, Intel Arc 140V, OpenGL 3.3 (driver 32.0.101.6737), 361
+font faces. Output **fullscreen on a real second display** (DISPLAY2, 1024×768), operator window on
+the 2880×1920 main display. Release build cross-compiled with cargo-xwin. Fixture
+`song_1024x768.pro6` (Arial), `--bench 30 --bench-interval-ms 150`.
+
+| Date | Build | Machine | Metric | Value | Notes |
+|---|---|---|---|---|---|
+| 2026-11-20 | first Windows build | Win11 / Arc 140V | Cold start | **6.5 s** | libmpv (121 MB) loaded at startup held the Windows loader lock; fonts 3.9 s |
+| 2026-11-20 | libmpv deferred | Win11 / Arc 140V | Cold start | **1.3–2.2 s** | fonts 0.48–0.68 s; libmpv now loads after the first slide (≈0.2 s) |
+| 2026-11-20 | libmpv deferred | Win11 / Arc 140V | Slide change (cached) | median 0.43–0.54 ms, p95 1.5 ms, max 1.8 ms (one 70 ms outlier while libmpv loaded just after startup) | command → buffer swap, fullscreen output |
+| 2026-11-20 | libmpv deferred | Win11 / Arc 140V | Welcome loop | advances every 10.0 s (33.37 → 43.37) | real `AA001 Welcome.pro6`, auto-started |
+
 **Not yet measured:** Windows (the production host), fullscreen on a second display, and real
 `.pro6` files. The Windows numbers matter most. Fonts load differently there, and on a library
 PC with hundreds of fonts installed, font loading may dominate cold start.

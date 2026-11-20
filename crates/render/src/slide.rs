@@ -107,7 +107,8 @@ fn render_text(
     {
         warn(frame, "text outline (stroke) isn't drawn yet".into());
     }
-    if el.rotation != 0.0 {
+    // 360° (seen in real files) is no rotation.
+    if el.rotation.rem_euclid(360.0) != 0.0 {
         warn(
             frame,
             format!("rotation {}° isn't applied yet", el.rotation),

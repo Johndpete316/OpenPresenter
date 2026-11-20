@@ -195,13 +195,15 @@ impl Worker {
 
     fn apply_live(&mut self, s: &ShowState, force: bool) {
         let Some(size) = self.size else { return };
+        // A forced re-send (new window / size) isn't an operator action: no latency stamp.
+        let requested_at = if force { None } else { s.command_at };
         let layers = (s.text_visible, s.background_visible);
         if self.sent.layers != Some(layers) {
             self.sent.layers = Some(layers);
             self.send(RenderCmd::Layers {
                 text: layers.0,
                 background: layers.1,
-                requested_at: s.command_at,
+                requested_at,
             });
         }
         let live = s
@@ -214,9 +216,7 @@ impl Worker {
         }
         let Some(l) = &s.live else {
             // Went from live to nothing (or a fresh window): show black.
-            self.send(RenderCmd::Blank {
-                requested_at: s.command_at,
-            });
+            self.send(RenderCmd::Blank { requested_at });
             return;
         };
         let index = l.slide.flat;
@@ -230,16 +230,14 @@ impl Worker {
                 self.send(RenderCmd::Show {
                     key,
                     frame,
-                    requested_at: s.command_at,
+                    requested_at,
                 });
             }
             (_, Err(message)) => {
                 let _ = self
                     .events
                     .send_event(UserEvent::RenderFailed { index, message });
-                self.send(RenderCmd::Blank {
-                    requested_at: s.command_at,
-                });
+                self.send(RenderCmd::Blank { requested_at });
             }
         }
         // Next first (possibly the next playlist item's first slide): it's the likely next

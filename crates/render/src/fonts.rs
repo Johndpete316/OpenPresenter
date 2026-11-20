@@ -28,6 +28,15 @@ pub struct ResolvedFont {
     pub inexact: bool,
 }
 
+/// Whether a face is a real substitute for the requested style: bold vs regular or
+/// italic vs upright. A family whose regular face is Light (e.g. Bookman Old Style,
+/// weight 300) is not a mismatch.
+fn mismatch(got_w: Weight, want_w: Weight, got_s: Style, want_s: Style) -> bool {
+    let bold = |w: Weight| w.0 >= 600;
+    let italic = |s: Style| s != Style::Normal;
+    bold(got_w) != bold(want_w) || italic(got_s) != italic(want_s)
+}
+
 impl Fonts {
     /// All fonts installed on this machine. Slow on machines with many fonts:
     /// do it off the show-critical path.
@@ -99,7 +108,7 @@ impl Fonts {
                 style: want_style,
             })?;
             let face = db.face(id)?;
-            let inexact = face.weight != want_weight || face.style != want_style;
+            let inexact = mismatch(face.weight, want_weight, face.style, want_style);
             return Some(ResolvedFont {
                 family,
                 weight: face.weight,
@@ -127,7 +136,7 @@ impl Fonts {
             style,
         })?;
         let got = db.face(id)?;
-        let inexact = got.weight != weight || got.style != style;
+        let inexact = mismatch(got.weight, weight, got.style, style);
         Some(ResolvedFont {
             family,
             weight: got.weight,
