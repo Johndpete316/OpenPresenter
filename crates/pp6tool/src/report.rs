@@ -5,9 +5,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use anyhow::Context as _;
 use pro6::raw::{RawElement, RawNode};
 use pro6::{Document, ParseError, schema};
 use serde::Serialize;
@@ -85,20 +84,9 @@ pub struct AttrUse {
 
 /// Scan `dir` recursively for `.pro6` files and build the report.
 pub fn build(dir: &Path) -> anyhow::Result<Report> {
-    let mut paths = Vec::new();
-    collect(dir, &mut paths).with_context(|| format!("couldn't scan {}", dir.display()))?;
-    paths.sort();
-
     let mut report = Report::default();
-    for path in &paths {
-        let rel = path
-            .strip_prefix(dir)
-            .unwrap_or(path)
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/");
-        let result = scan_file(path, rel, &mut report.summary);
+    for f in crate::walk::pro6_files(dir)? {
+        let result = scan_file(&f.path, f.rel, &mut report.summary);
         report.files.push(result);
     }
 
@@ -115,22 +103,6 @@ pub fn build(dir: &Path) -> anyhow::Result<Report> {
         .map(|f| f.path.clone())
         .collect();
     Ok(report)
-}
-
-fn collect(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if entry.file_type()?.is_dir() {
-            collect(&path, out)?;
-        } else if path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("pro6"))
-        {
-            out.push(path);
-        }
-    }
-    Ok(())
 }
 
 fn scan_file(path: &Path, rel: String, summary: &mut Summary) -> FileResult {
@@ -385,6 +357,7 @@ fn section(o: &mut String, title: &str, lines: impl Iterator<Item = String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn fixtures() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")

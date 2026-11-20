@@ -1,0 +1,21 @@
+---
+source: crates/pp6tool/src/roundtrip.rs
+expression: "render_text(&results, \"fixtures\")"
+---
+pp6tool roundtrip: fixtures
+  SKIP       invalid/bad_base64.pro6
+      'bad_base64.pro6' couldn't be opened: the text of slide 1 in group 1 is corrupted. The file was skipped; other files are unaffected.
+  SKIP       invalid/bad_rect.pro6
+      'bad_rect.pro6' couldn't be opened: slide 1 in group 1 has invalid layout data. The file was skipped; other files are unaffected.
+  SKIP       invalid/missing_canvas.pro6
+      'missing_canvas.pro6' couldn't be opened: it doesn't say what size its slides are (no canvas `width`). The file was skipped; other files are unaffected.
+  SKIP       invalid/truncated.pro6
+      'truncated.pro6' couldn't be opened: the file is damaged or incomplete near line 11. The file was skipped; other files are unaffected.
+  IDENTICAL  invalid/unbalanced_rtf.pro6
+  SKIP       invalid/wrong_root.pro6
+      'wrong_root.pro6' couldn't be opened: it isn't a ProPresenter 6 presentation. The file was skipped; other files are unaffected.
+  IDENTICAL  song_1024x768.pro6
+  IDENTICAL  two_fonts_1920x1080.pro6
+  IDENTICAL  unknowns.pro6
+
+4 identical, 0 semantically equal, 0 different, 0 broken, 0 save failed, 5 skipped (input doesn't parse)

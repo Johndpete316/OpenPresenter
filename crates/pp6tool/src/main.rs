@@ -1,8 +1,11 @@
 //! `pp6tool`: command-line tools for `.pro6` libraries.
 
 mod report;
+mod roundtrip;
+mod walk;
 
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::time::Instant;
 
 use clap::{Parser, Subcommand};
@@ -30,9 +33,18 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Load, save and compare every .pro6 file under a directory. Exits non-zero
+    /// if any file changes meaningfully or can't be read back.
+    Roundtrip {
+        /// Directory to scan recursively.
+        dir: PathBuf,
+        /// Also save each rewritten file here, at the same relative path.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<ExitCode> {
     let cli = Cli::parse();
     let level = match cli.verbose {
         0 => LevelFilter::ERROR,
@@ -68,6 +80,22 @@ fn main() -> anyhow::Result<()> {
                 elapsed.as_secs_f64() * 1000.0
             );
         }
+        Command::Roundtrip { dir, out } => {
+            let started = Instant::now();
+            let results = roundtrip::run(&dir, out.as_deref())?;
+            print!(
+                "{}",
+                roundtrip::render_text(&results, &dir.display().to_string())
+            );
+            eprintln!(
+                "round-tripped {} file(s) in {:.1} ms",
+                results.len(),
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+            if results.iter().any(|r| r.outcome.is_failure()) {
+                return Ok(ExitCode::FAILURE);
+            }
+        }
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
