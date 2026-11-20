@@ -24,7 +24,7 @@ and Cocoa `\fonttbl\f0...;` styles) and **rejected**:
 
 - `\par` boundaries are lost (`Amazing grace\par how sweet` → `"Amazing gracehow sweet"`),
   so line structure can't be recovered.
-- `舗?` decodes to U+8217 instead of U+2019 and the `?` fallback isn't skipped.
+- `\u8217?` decodes to U+8217 instead of U+2019 and the `?` fallback isn't skipped.
 - `\ucN` is ignored.
 
 A hand-rolled subset lives in `crates/pro6/src/rtf.rs`: font table (both styles), colour

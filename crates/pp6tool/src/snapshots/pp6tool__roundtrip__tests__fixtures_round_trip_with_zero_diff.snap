@@ -14,8 +14,9 @@ pp6tool roundtrip: fixtures
   IDENTICAL  invalid/unbalanced_rtf.pro6
   SKIP       invalid/wrong_root.pro6
       'wrong_root.pro6' couldn't be opened: it isn't a ProPresenter 6 presentation. The file was skipped; other files are unaffected.
+  IDENTICAL  render_1024x768.pro6
   IDENTICAL  song_1024x768.pro6
   IDENTICAL  two_fonts_1920x1080.pro6
   IDENTICAL  unknowns.pro6
 
-4 identical, 0 semantically equal, 0 different, 0 broken, 0 save failed, 5 skipped (input doesn't parse)
+5 identical, 0 semantically equal, 0 different, 0 broken, 0 save failed, 5 skipped (input doesn't parse)

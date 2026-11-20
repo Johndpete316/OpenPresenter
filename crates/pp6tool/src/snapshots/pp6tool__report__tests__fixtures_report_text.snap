@@ -3,7 +3,7 @@ source: crates/pp6tool/src/report.rs
 expression: "render_text(&r, \"fixtures\")"
 ---
 pp6tool report: fixtures
-9 file(s): 3 OK, 6 failed
+10 file(s): 4 OK, 6 failed
 
 FILES
   FAIL  invalid/bad_base64.pro6
@@ -24,97 +24,102 @@ FILES
   FAIL  invalid/wrong_root.pro6
         'wrong_root.pro6' couldn't be opened: it isn't a ProPresenter 6 presentation. The file was skipped; other files are unaffected.
         detail: root element is <RVPlaylistDocument>, expected <RVPresentationDocument> (at RVPlaylistDocument)
+  OK    render_1024x768.pro6  1024x768  1 group(s), 4 slide(s), 0 disabled
   OK    song_1024x768.pro6  1024x768  3 group(s), 5 slide(s), 1 disabled
   OK    two_fonts_1920x1080.pro6  1920x1080  2 group(s), 2 slide(s), 0 disabled
   OK    unknowns.pro6  1024x768  1 group(s), 1 slide(s), 0 disabled, 3 warning(s)
 
 CANVAS SIZES (files)
-  1024x768  2
+  1024x768  3
   1920x1080  1
 
 FONTS (files / runs) — every one must be installed on the show PC
   Arial  3 / 15
+  Futura PT  1 / 1
   Georgia  1 / 1
+  Liberation Sans  1 / 4
+  Liberation Serif  1 / 1
 
 GROUP NAMES (count; colours)
   (unnamed)  1; [1 1 1 0]
   Announcements  1; [1 0.6 0 1]
   Chorus  1; [1 0.2 0.2 1]
   Ref  1; [0.6 0.3 0.9 1]
+  Render  1; [0.5 0.5 0.5 1]
   Verse 1  1; [0.2 0.4 1 1]
   Verse 2  1; [0.2 0.8 0.3 1]
 
 ELEMENTS AND ATTRIBUTES (count; * = not in spec; includes files that failed after XML parsing)
-  <NSColor>  7
-      @rvXMLDictionaryKey  7
-  <NSNumber>  7
-      @rvXMLDictionaryKey  7
-  <NSString>  23
-      @rvXMLIvarName  22
-  <RVDisplaySlide>  12
-      @UUID  12
-      @backgroundColor  8
-      @chordChartPath  8
-      @drawingBackgroundColor  8
-      @enabled  12
-      @highlightColor  8
-      @hotKey  8
-      @label  8
-      @notes  8
+  <NSColor>  11
+      @rvXMLDictionaryKey  11
+  <NSNumber>  11
+      @rvXMLDictionaryKey  11
+  <NSString>  31
+      @rvXMLIvarName  30
+  <RVDisplaySlide>  16
+      @UUID  16
+      @backgroundColor  12
+      @chordChartPath  12
+      @drawingBackgroundColor  12
+      @enabled  16
+      @highlightColor  12
+      @hotKey  12
+      @label  12
+      @notes  12
   <RVPlaylistDocument>  1  *
       @versionNumber  1  *
-  <RVPresentationDocument>  7
-      @CCLIDisplay  3
-      @CCLISongTitle  3
-      @backgroundColor  3
-      @buildNumber  3
-      @category  3
-      @chordChartPath  3
-      @docType  3
-      @drawingBackgroundColor  3
+  <RVPresentationDocument>  8
+      @CCLIDisplay  4
+      @CCLISongTitle  4
+      @backgroundColor  4
+      @buildNumber  4
+      @category  4
+      @chordChartPath  4
+      @docType  4
+      @drawingBackgroundColor  4
       @futureRootAttr  1  *
-      @height  6
-      @lastDateUsed  3
-      @notes  3
-      @os  3
-      @resourcesDirectory  3
-      @selectedArrangementID  3
-      @usedCount  3
-      @versionNumber  7
-      @width  6
-  <RVRect3D>  12
-      @rvXMLIvarName  12
-  <RVSlideGrouping>  10
-      @color  10
+      @height  7
+      @lastDateUsed  4
+      @notes  4
+      @os  4
+      @resourcesDirectory  4
+      @selectedArrangementID  4
+      @usedCount  4
+      @versionNumber  8
+      @width  7
+  <RVRect3D>  16
+      @rvXMLIvarName  16
+  <RVSlideGrouping>  11
+      @color  11
       @futureGroupAttr  1  *
-      @name  10
-      @uuid  10
-  <RVTextElement>  12
-      @UUID  12
-      @adjustsHeightToFit  8
-      @bezelRadius  8
-      @displayDelay  8
-      @displayName  12
-      @drawingFill  8
-      @drawingShadow  8
-      @drawingStroke  8
-      @fillColor  8
-      @fromTemplate  8
+      @name  11
+      @uuid  11
+  <RVTextElement>  16
+      @UUID  16
+      @adjustsHeightToFit  12
+      @bezelRadius  12
+      @displayDelay  12
+      @displayName  16
+      @drawingFill  12
+      @drawingShadow  12
+      @drawingStroke  12
+      @fillColor  12
+      @fromTemplate  12
       @futureTextAttr  1  *
-      @locked  8
-      @opacity  8
-      @persistent  8
-      @revealType  8
-      @rotation  8
-      @source  8
-      @typeID  8
-      @verticalAlignment  8
-  <RVTimeline>  3
-      @duration  3
-      @loop  3
-      @rvXMLIvarName  3
-      @selectedMediaTrackIndex  3
-      @timeOffset  3
+      @locked  12
+      @opacity  12
+      @persistent  12
+      @revealType  12
+      @rotation  12
+      @source  12
+      @typeID  12
+      @verticalAlignment  12
+  <RVTimeline>  4
+      @duration  4
+      @loop  4
+      @rvXMLIvarName  4
+      @selectedMediaTrackIndex  4
+      @timeOffset  4
   <SyntheticArrangement>  1  *
       @color  1  *
       @name  1  *
@@ -135,12 +140,12 @@ ELEMENTS AND ATTRIBUTES (count; * = not in spec; includes files that failed afte
   <SyntheticTimeCue>  1  *
       @slideUUID  1  *
       @timeStamp  1  *
-  <array>  48
-      @rvXMLIvarName  48
-  <dictionary>  7
-      @rvXMLIvarName  7
-  <shadow>  7
-      @rvXMLIvarName  7
+  <array>  61
+      @rvXMLIvarName  61
+  <dictionary>  11
+      @rvXMLIvarName  11
+  <shadow>  11
+      @rvXMLIvarName  11
 
 UNHANDLED RTF CONTROL WORDS (count)
   \cocoartf  2

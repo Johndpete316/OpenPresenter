@@ -373,8 +373,8 @@ mod tests {
     fn fixtures_report_counts() {
         let r = build(&fixtures()).unwrap();
         let s = &r.summary;
-        assert_eq!((s.files_total, s.files_ok, s.files_failed), (9, 3, 6));
-        assert_eq!(s.canvas_sizes.get("1024x768"), Some(&2));
+        assert_eq!((s.files_total, s.files_ok, s.files_failed), (10, 4, 6));
+        assert_eq!(s.canvas_sizes.get("1024x768"), Some(&3));
         assert_eq!(s.canvas_sizes.get("1920x1080"), Some(&1));
         assert_eq!(s.fonts.get("Arial").map(|f| f.files), Some(3));
         assert_eq!(s.fonts.get("Georgia").map(|f| f.files), Some(1));
@@ -390,6 +390,6 @@ mod tests {
         let r = build(&fixtures()).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
-        assert_eq!(v["summary"]["files_total"], 9);
+        assert_eq!(v["summary"]["files_total"], 10);
     }
 }

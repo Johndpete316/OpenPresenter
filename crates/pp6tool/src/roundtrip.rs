@@ -158,6 +158,7 @@ mod tests {
             identical,
             [
                 "invalid/unbalanced_rtf.pro6",
+                "render_1024x768.pro6",
                 "song_1024x768.pro6",
                 "two_fonts_1920x1080.pro6",
                 "unknowns.pro6"

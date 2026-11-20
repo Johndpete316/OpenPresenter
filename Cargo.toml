@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/pro6", "crates/pp6tool"]
+members = ["crates/pro6", "crates/render", "crates/pp6tool"]
 
 [workspace.package]
 version = "0.1.0"
