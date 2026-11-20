@@ -676,3 +676,33 @@ fn start_loop_waits_for_loading_and_stops_at_end_without_loop_back() {
     assert!(s.notices.last().unwrap().text.contains("Loop finished"));
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn stepping_past_a_presentation_outside_the_playlist_says_why() {
+    let render = fixture("render_1024x768.pro6");
+    let (core, rx) = start(CoreConfig::default());
+    core.send(Command::Open(render.clone()));
+    wait(&rx, "loaded", |s| s.docs.contains_key(&render));
+    core.send(Command::GoTo {
+        presentation: render.clone(),
+        position: 3,
+    });
+    wait(&rx, "end", |s| pos(s) == Some(3));
+    core.send(Command::Next);
+    let s = wait(&rx, "hint", |s| {
+        s.notices
+            .iter()
+            .any(|n| n.text.contains("isn't in the playlist"))
+    });
+    assert_eq!(pos(&s), Some(3));
+    // Only once per presentation.
+    core.send(Command::Next);
+    core.send(Command::ClearText); // marker
+    let s = wait(&rx, "marker", |s| !s.text_visible);
+    let hints = s
+        .notices
+        .iter()
+        .filter(|n| n.text.contains("isn't in the playlist"))
+        .count();
+    assert_eq!(hints, 1);
+}

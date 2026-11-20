@@ -155,6 +155,8 @@ struct Core {
     loading: Vec<PathBuf>,
     doc_lru: VecDeque<PathBuf>,
     pending_goto: Option<PendingGoTo>,
+    /// Presentation the "not in the playlist" hint was last shown for.
+    edge_hint_for: Option<PathBuf>,
     restore_writer: Option<Sender<RestoreState>>,
     /// Start Loop was asked for while this presentation was still loading.
     pending_loop: Option<PathBuf>,
@@ -175,6 +177,7 @@ impl Core {
             loading: Vec::new(),
             doc_lru: VecDeque::new(),
             pending_goto: None,
+            edge_hint_for: None,
             restore_writer: config.restore_writer,
             pending_loop: None,
             loop_suppressed: None,
@@ -418,6 +421,34 @@ impl Core {
     }
 
     fn command(&mut self, cmd: Command, at: Instant) {
+        let playlist_edit = matches!(
+            cmd,
+            Command::PlaylistNew
+                | Command::PlaylistAdd { .. }
+                | Command::PlaylistRemove(_)
+                | Command::PlaylistMove { .. }
+                | Command::PlaylistLoad(_)
+        );
+        self.command_inner(cmd, at);
+        if playlist_edit {
+            let titles: Vec<String> = self
+                .s
+                .playlist
+                .items
+                .iter()
+                .map(|i| {
+                    i.path
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            tracing::info!(items = ?titles, "playlist changed");
+        }
+    }
+
+    fn command_inner(&mut self, cmd: Command, at: Instant) {
         match cmd {
             Command::Next => self.step(true, at),
             Command::Prev => self.step(false, at),
@@ -846,6 +877,23 @@ impl Core {
                 tracing::debug!(
                     "live presentation isn't in the playlist; no next/previous item to step to"
                 );
+                // Say so once per presentation: silently doing nothing looks like a bug.
+                if self.edge_hint_for.as_ref() != Some(&live.path) {
+                    let path = live.path.clone();
+                    let name = path.file_stem().map_or_else(
+                        || path.display().to_string(),
+                        |n| n.to_string_lossy().into(),
+                    );
+                    self.edge_hint_for = Some(path);
+                    self.notice(
+                        NoticeLevel::Warning,
+                        format!(
+                            "{} '{name}'. It isn't in the playlist, so there's no {} presentation to go to. Drag it into the playlist (or double-click it in the library).",
+                            if forward { "End of" } else { "Start of" },
+                            if forward { "next" } else { "previous" },
+                        ),
+                    );
+                }
                 return;
             }
             (Some(i), true) => i + 1,

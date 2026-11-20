@@ -246,6 +246,7 @@ pub fn draw(
         .show(ui, |ui| presentation(ui, st, show, thumbs, &mut actions));
     settings_window(ui.ctx(), st, show, settings, log_lines, &mut actions);
     toast(ui.ctx(), st, show);
+    drag_label(ui.ctx(), show);
     actions
 }
 
@@ -766,8 +767,14 @@ fn library(
                 let e = results[i];
                 let selected = show.selected.as_deref() == Some(e.path.as_path());
                 let live = show.is_live(&e.path);
-                let (rect, resp) =
-                    ui.allocate_exact_size(Vec2::new(ui.available_width(), row_h), Sense::click());
+                let (rect, resp) = ui.allocate_exact_size(
+                    Vec2::new(ui.available_width(), row_h),
+                    Sense::click_and_drag(),
+                );
+                // Drag into the playlist, as in PP6.
+                if e.error.is_none() {
+                    resp.dnd_set_drag_payload(PlaylistDrag::Library(e.path.clone()));
+                }
                 let p = ui.painter();
                 if selected {
                     p.rect_filled(rect, 0.0, color::ACCENT);
@@ -804,6 +811,8 @@ fn library(
                     rect.right_center() - Vec2::new(14.0, 0.0),
                     Vec2::splat(18.0),
                 );
+                #[cfg(test)]
+                st_probe::record(&e.title, rect, add_rect);
                 let add = ui
                     .interact(add_rect, ui.scope_id().with(("lib-add", i)), Sense::click())
                     .on_hover_text("Add to playlist");
@@ -891,8 +900,24 @@ fn playlist(ui: &mut egui::Ui, show: &ShowState, actions: &mut Vec<UiAction>) {
             for (i, item) in show.playlist.items.iter().enumerate() {
                 let live = show.is_live(&item.path);
                 let selected = show.playlist_item == Some(i);
-                let (rect, resp) =
-                    ui.allocate_exact_size(Vec2::new(ui.available_width(), 22.0), Sense::click());
+                let (rect, resp) = ui.allocate_exact_size(
+                    Vec2::new(ui.available_width(), 22.0),
+                    Sense::click_and_drag(),
+                );
+                resp.dnd_set_drag_payload(PlaylistDrag::Item(i));
+                // Dropping on a row inserts above or below it (whichever half).
+                let below = ui
+                    .ctx()
+                    .pointer_interact_pos()
+                    .is_some_and(|p| p.y > rect.center().y);
+                if resp.dnd_hover_payload::<PlaylistDrag>().is_some() {
+                    let y = if below { rect.bottom() } else { rect.top() };
+                    ui.painter()
+                        .hline(rect.x_range(), y, Stroke::new(2.0, color::LIVE));
+                }
+                if let Some(p) = resp.dnd_release_payload::<PlaylistDrag>() {
+                    drop_into_playlist(&p, i + usize::from(below), n, actions);
+                }
                 let p = ui.painter();
                 if selected {
                     p.rect_filled(rect, 0.0, color::ACCENT);
@@ -915,14 +940,17 @@ fn playlist(ui: &mut egui::Ui, show: &ShowState, actions: &mut Vec<UiAction>) {
                 } else {
                     Color32::from_gray(225)
                 };
-                p.with_clip_rect(Rect::from_min_max(rect.min, rect.max - Vec2::new(70.0, 0.0)))
-                    .text(
-                        rect.left_center() + Vec2::new(10.0, 0.0),
-                        Align2::LEFT_CENTER,
-                        format!("{}. {}", i + 1, title(&item.path)),
-                        FontId::proportional(13.0),
-                        text_color,
-                    );
+                p.with_clip_rect(Rect::from_min_max(
+                    rect.min,
+                    rect.max - Vec2::new(70.0, 0.0),
+                ))
+                .text(
+                    rect.left_center() + Vec2::new(10.0, 0.0),
+                    Align2::LEFT_CENTER,
+                    format!("{}. {}", i + 1, title(&item.path)),
+                    FontId::proportional(13.0),
+                    text_color,
+                );
                 if resp.clicked() {
                     actions.push(UiAction::Core(Command::PlaylistSelect(i)));
                 }
@@ -945,20 +973,98 @@ fn playlist(ui: &mut egui::Ui, show: &ShowState, actions: &mut Vec<UiAction>) {
                     }
                 }
             }
-            if n == 0 {
-                egui::Frame::new().inner_margin(8).show(ui, |ui| {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(
-                                "Empty. Double-click a presentation in the library (or use +) to add it.",
-                            )
-                            .italics()
-                            .weak(),
-                        )
-                        .wrap(),
-                    );
-                });
+            // The space below the items: dropping there adds at the end.
+            let h = ui.available_height().max(48.0);
+            let (rest, rest_resp) =
+                ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::hover());
+            let dragging = rest_resp.dnd_hover_payload::<PlaylistDrag>().is_some();
+            if dragging {
+                ui.painter()
+                    .hline(rest.x_range(), rest.top(), Stroke::new(2.0, color::LIVE));
             }
+            if let Some(p) = rest_resp.dnd_release_payload::<PlaylistDrag>() {
+                drop_into_playlist(&p, n, n, actions);
+            }
+            if n == 0 {
+                ui.painter().text(
+                    rest.center_top() + Vec2::new(0.0, 24.0),
+                    Align2::CENTER_CENTER,
+                    if dragging {
+                        "Drop to add"
+                    } else {
+                        "Drag presentations here from the library"
+                    },
+                    FontId::proportional(13.0),
+                    Color32::from_gray(140),
+                );
+                ui.painter().text(
+                    rest.center_top() + Vec2::new(0.0, 44.0),
+                    Align2::CENTER_CENTER,
+                    "(or double-click them, or use +)",
+                    FontId::proportional(11.0),
+                    Color32::from_gray(110),
+                );
+            }
+        });
+}
+
+/// What's being dragged onto the playlist.
+#[derive(Debug, Clone)]
+enum PlaylistDrag {
+    /// A presentation from the library.
+    Library(PathBuf),
+    /// An existing playlist item (reorder).
+    Item(usize),
+}
+
+/// Put the dragged thing at `index` (0..=n) of a playlist with `n` items.
+fn drop_into_playlist(p: &PlaylistDrag, index: usize, n: usize, actions: &mut Vec<UiAction>) {
+    match p {
+        PlaylistDrag::Library(path) => {
+            actions.push(UiAction::Core(Command::PlaylistAdd {
+                path: path.clone(),
+                arrangement: None,
+            }));
+            if index < n {
+                actions.push(UiAction::Core(Command::PlaylistMove { from: n, to: index }));
+            }
+        }
+        &PlaylistDrag::Item(from) => {
+            let to = if index > from { index - 1 } else { index };
+            if to != from && to < n {
+                actions.push(UiAction::Core(Command::PlaylistMove { from, to }));
+            }
+        }
+    }
+}
+
+/// While dragging, show what's being dragged next to the pointer.
+fn drag_label(ctx: &egui::Context, show: &ShowState) {
+    let Some(p) = egui::DragAndDrop::payload::<PlaylistDrag>(ctx) else {
+        return;
+    };
+    let Some(pos) = ctx.pointer_latest_pos() else {
+        return;
+    };
+    let text = match &*p {
+        PlaylistDrag::Library(path) => title(path),
+        PlaylistDrag::Item(i) => show
+            .playlist
+            .items
+            .get(*i)
+            .map(|it| title(&it.path))
+            .unwrap_or_default(),
+    };
+    egui::Area::new(egui::Id::unique("drag-label"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pos + Vec2::new(14.0, 8.0))
+        .interactable(false)
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(color::ACCENT)
+                .corner_radius(4.0)
+                .inner_margin(egui::Margin::symmetric(8, 4))
+                .show(ui, |ui| ui.label(RichText::new(text).color(Color32::WHITE)));
         });
 }
 
@@ -1747,4 +1853,201 @@ fn toast(ctx: &egui::Context, st: &mut UiState, show: &ShowState) {
                 st.settings_tab = SettingsTab::Log;
             }
         });
+}
+
+/// Where library rows were drawn (tests click on them).
+#[cfg(test)]
+mod st_probe {
+    use std::cell::RefCell;
+    thread_local! {
+        pub static ROWS: RefCell<Vec<(String, egui::Rect, egui::Rect)>> = const { RefCell::new(Vec::new()) };
+    }
+    pub fn record(title: &str, row: egui::Rect, add: egui::Rect) {
+        ROWS.with(|r| r.borrow_mut().push((title.to_owned(), row, add)));
+    }
+    pub fn take() -> Vec<(String, egui::Rect, egui::Rect)> {
+        ROWS.with(|r| std::mem::take(&mut *r.borrow_mut()))
+    }
+}
+
+#[cfg(test)]
+mod interaction_tests {
+    use super::*;
+    use egui::{Event, PointerButton, Pos2, RawInput};
+    use pp6core::library::IndexEntry;
+
+    struct Harness {
+        ctx: egui::Context,
+        st: UiState,
+        show: ShowState,
+        settings: Settings,
+        thumbs: Sender<ThumbRequest>,
+        time: f64,
+    }
+
+    impl Harness {
+        fn new() -> Self {
+            let mut st = UiState::default();
+            for t in ["AA001 Welcome", "BB002 Blest Be", "HG135 O Worship"] {
+                st.library.entries.push(IndexEntry {
+                    path: PathBuf::from(format!("/lib/{t}.pro6")),
+                    title: t.into(),
+                    ..Default::default()
+                });
+            }
+            let settings = Settings {
+                library_dirs: vec![PathBuf::from("/lib")],
+                ..Default::default()
+            };
+            let (thumbs, _rx) = crossbeam_channel::unbounded();
+            Harness {
+                ctx: egui::Context::default(),
+                st,
+                show: ShowState::default(),
+                settings,
+                thumbs,
+                time: 0.0,
+            }
+        }
+
+        /// One UI frame with `events`; returns the actions and the library row rects.
+        fn frame(&mut self, events: Vec<Event>) -> (Vec<UiAction>, Vec<(String, Rect, Rect)>) {
+            self.time += 0.05;
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 900.0))),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            };
+            let _ = st_probe::take();
+            let mut actions = Vec::new();
+            let (st, show, settings, thumbs) =
+                (&mut self.st, &self.show, &self.settings, &self.thumbs);
+            let mut out = self.ctx.run_ui(input, |ui| {
+                actions = draw(ui, st, show, settings, thumbs, &[]);
+            });
+            out.textures_delta.clear(); // no GPU here
+            (actions, st_probe::take())
+        }
+
+        fn click(&mut self, at: Pos2) -> Vec<UiAction> {
+            let mut out = Vec::new();
+            out.extend(self.frame(vec![Event::PointerMoved(at)]).0);
+            out.extend(self.frame(vec![press(at, true)]).0);
+            out.extend(self.frame(vec![press(at, false)]).0);
+            out
+        }
+    }
+
+    fn press(pos: Pos2, pressed: bool) -> Event {
+        Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        }
+    }
+
+    fn added(actions: &[UiAction]) -> Vec<PathBuf> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                UiAction::Core(Command::PlaylistAdd { path, .. }) => Some(path.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn rows(h: &mut Harness) -> Vec<(String, Rect, Rect)> {
+        h.frame(vec![]);
+        let r = h.frame(vec![]).1;
+        assert_eq!(r.len(), 3, "library rows drawn: {r:?}");
+        r
+    }
+
+    #[test]
+    fn plus_button_adds_to_playlist() {
+        let mut h = Harness::new();
+        let r = rows(&mut h);
+        let a = h.click(r[1].2.center());
+        assert_eq!(added(&a), [PathBuf::from("/lib/BB002 Blest Be.pro6")]);
+    }
+
+    #[test]
+    fn dragging_a_library_row_onto_the_playlist_adds_it() {
+        let mut h = Harness::new();
+        let r = rows(&mut h);
+        let from = r[2].1.center();
+        let to = Pos2::new(150.0, 860.0); // playlist panel, bottom-left
+        let mut a = Vec::new();
+        a.extend(h.frame(vec![Event::PointerMoved(from)]).0);
+        a.extend(h.frame(vec![press(from, true)]).0);
+        for k in 1..=10 {
+            let p = from + (to - from) * (k as f32 / 10.0);
+            a.extend(h.frame(vec![Event::PointerMoved(p)]).0);
+        }
+        a.extend(h.frame(vec![press(to, false)]).0);
+        a.extend(h.frame(vec![]).0);
+        assert_eq!(added(&a), [PathBuf::from("/lib/HG135 O Worship.pro6")]);
+    }
+
+    #[test]
+    fn drop_positions() {
+        let mut a = Vec::new();
+        drop_into_playlist(&PlaylistDrag::Library("/x".into()), 1, 3, &mut a);
+        assert!(matches!(
+            a.as_slice(),
+            [
+                UiAction::Core(Command::PlaylistAdd { .. }),
+                UiAction::Core(Command::PlaylistMove { from: 3, to: 1 })
+            ]
+        ));
+        let mut a = Vec::new();
+        drop_into_playlist(&PlaylistDrag::Item(0), 3, 3, &mut a); // to the end
+        assert!(matches!(
+            a.as_slice(),
+            [UiAction::Core(Command::PlaylistMove { from: 0, to: 2 })]
+        ));
+        let mut a = Vec::new();
+        drop_into_playlist(&PlaylistDrag::Item(1), 1, 3, &mut a); // onto itself
+        assert!(a.is_empty());
+    }
+
+    #[test]
+    fn clicking_a_playlist_row_selects_it() {
+        let mut h = Harness::new();
+        let mut pl = pp6core::Playlist::default();
+        for t in ["A", "B"] {
+            pl.items.push(pp6core::PlaylistItem {
+                path: PathBuf::from(format!("/lib/{t}.pro6")),
+                arrangement: None,
+            });
+        }
+        h.show.playlist = Arc::new(pl);
+        h.frame(vec![]);
+        h.frame(vec![]);
+        // Playlist panel rows start under its header (bottom half of the left column).
+        let mut picked = None;
+        for y in (450..880).step_by(4) {
+            let a = h.click(Pos2::new(60.0, y as f32));
+            if let Some(i) = a.iter().find_map(|a| match a {
+                UiAction::Core(Command::PlaylistSelect(i)) => Some(*i),
+                _ => None,
+            }) {
+                picked = Some(i);
+                break;
+            }
+        }
+        assert_eq!(picked, Some(0));
+    }
+
+    #[test]
+    fn double_click_adds_to_playlist() {
+        let mut h = Harness::new();
+        let r = rows(&mut h);
+        let at = r[0].1.center();
+        let mut a = h.click(at);
+        a.extend(h.click(at));
+        assert_eq!(added(&a), [PathBuf::from("/lib/AA001 Welcome.pro6")]);
+    }
 }

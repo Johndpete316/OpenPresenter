@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 const CACHE_VERSION: u32 = 2;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct IndexEntry {
     pub path: PathBuf,
     /// File name without extension.
