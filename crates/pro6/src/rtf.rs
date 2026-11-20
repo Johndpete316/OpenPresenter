@@ -432,6 +432,25 @@ pub fn parse(src: &[u8]) -> Result<RtfDoc, RtfError> {
                     ("red", Dest::ColorTable) => color.0 = param.map(clamp_u8),
                     ("green", Dest::ColorTable) => color.1 = param.map(clamp_u8),
                     ("blue", Dest::ColorTable) => color.2 = param.map(clamp_u8),
+                    ("uc", _) => st.uc = param.and_then(|p| u32::try_from(p).ok()).unwrap_or(1),
+                    ("u", _) => {
+                        let v = param.unwrap_or(0);
+                        let unit = if v < 0 { (v + 65536) as u16 } else { v as u16 };
+                        let ch = match (high_surrogate.take(), unit) {
+                            (None, 0xD800..=0xDBFF) => {
+                                high_surrogate = Some(unit);
+                                None
+                            }
+                            (Some(hi), 0xDC00..=0xDFFF) => {
+                                char::decode_utf16([hi, unit]).next().and_then(Result::ok)
+                            }
+                            (_, u) => char::from_u32(u32::from(u)),
+                        };
+                        if let Some(ch) = ch {
+                            emit(&mut doc, &mut para, &st, &mut font_entry, &ch.to_string());
+                        }
+                        skip = st.uc;
+                    }
                     (_, Dest::FontTable | Dest::ColorTable) => count(&mut doc, w),
                     ("f", _) => st.chr.font = param.unwrap_or(deff),
                     ("fs", _) => {
@@ -462,25 +481,6 @@ pub fn parse(src: &[u8]) -> Result<RtfDoc, RtfError> {
                     }
                     ("line", _) => emit(&mut doc, &mut para, &st, &mut font_entry, "\n"),
                     ("tab", _) => emit(&mut doc, &mut para, &st, &mut font_entry, "\t"),
-                    ("uc", _) => st.uc = param.and_then(|p| u32::try_from(p).ok()).unwrap_or(1),
-                    ("u", _) => {
-                        let v = param.unwrap_or(0);
-                        let unit = if v < 0 { (v + 65536) as u16 } else { v as u16 };
-                        let ch = match (high_surrogate.take(), unit) {
-                            (None, 0xD800..=0xDBFF) => {
-                                high_surrogate = Some(unit);
-                                None
-                            }
-                            (Some(hi), 0xDC00..=0xDFFF) => {
-                                char::decode_utf16([hi, unit]).next().and_then(Result::ok)
-                            }
-                            (_, u) => char::from_u32(u32::from(u)),
-                        };
-                        if let Some(ch) = ch {
-                            emit(&mut doc, &mut para, &st, &mut font_entry, &ch.to_string());
-                        }
-                        skip = st.uc;
-                    }
                     (w, _) => count(&mut doc, w),
                 }
             }
@@ -596,6 +596,136 @@ fn decode_cp(bytes: &[u8], cp: Option<u16>) -> String {
         _ => encoding_rs::WINDOWS_1252,
     };
     enc.decode_without_bom_handling(bytes).0.into_owned()
+}
+
+// ---- writer ------------------------------------------------------------------------
+
+/// Serialize to Windows-style RTF (`{\fonttbl{\f0\fnil\fcharset0 Name;}}`).
+///
+/// Writes the font table, colour table (adding any run colour that's missing), and
+/// each paragraph as `\pard\qX` + runs, emitting only the character properties that
+/// change between runs. Text outside printable ASCII is written as `\uN?`.
+/// What PP6 itself writes is unverified (see docs/PLAN.md Unknowns).
+pub fn write(doc: &RtfDoc) -> String {
+    use std::fmt::Write as _;
+
+    let mut colors = doc.colors.clone();
+    if colors.is_empty() {
+        colors.push(None); // index 0 = auto
+    }
+    for run in doc.runs() {
+        if let Some(c) = run.color
+            && !colors.iter().skip(1).any(|x| *x == Some(c))
+        {
+            colors.push(Some(c));
+        }
+    }
+    let color_index = |c: Option<Rgb>| -> usize {
+        c.and_then(|c| {
+            colors
+                .iter()
+                .skip(1)
+                .position(|x| *x == Some(c))
+                .map(|i| i + 1)
+        })
+        .unwrap_or(0)
+    };
+
+    let mut o = String::new();
+    let deff = doc.fonts.first().map_or(0, |f| f.index);
+    let _ = write!(
+        o,
+        "{{\\rtf1\\ansi\\ansicpg{}\\deff{deff}",
+        doc.code_page.unwrap_or(1252)
+    );
+    o.push_str("{\\fonttbl");
+    for f in &doc.fonts {
+        let _ = write!(o, "{{\\f{}\\fnil", f.index);
+        if let Some(cs) = f.charset {
+            let _ = write!(o, "\\fcharset{cs}");
+        }
+        o.push(' ');
+        escape_text(&mut o, &f.name);
+        o.push_str(";}");
+    }
+    o.push('}');
+    o.push_str("{\\colortbl;");
+    for c in colors.iter().skip(1) {
+        if let Some(c) = c {
+            let _ = write!(o, "\\red{}\\green{}\\blue{}", c.r, c.g, c.b);
+        }
+        o.push(';');
+    }
+    o.push('}');
+
+    let mut cur: Option<(i32, u32, usize, bool, bool, bool)> = None;
+    for (i, p) in doc.paragraphs.iter().enumerate() {
+        if i > 0 {
+            o.push_str("\\par\n");
+        }
+        o.push_str(match p.align {
+            Align::Left => "\\pard\\ql",
+            Align::Center => "\\pard\\qc",
+            Align::Right => "\\pard\\qr",
+            Align::Justified => "\\pard\\qj",
+        });
+        for run in &p.runs {
+            let next = (
+                run.font_index,
+                run.size_half_pt,
+                color_index(run.color),
+                run.bold,
+                run.italic,
+                run.underline,
+            );
+            let prev = cur.unwrap_or((i32::MIN, u32::MAX, usize::MAX, false, false, false));
+            if prev.0 != next.0 {
+                let _ = write!(o, "\\f{}", next.0);
+            }
+            if prev.1 != next.1 {
+                let _ = write!(o, "\\fs{}", next.1);
+            }
+            if prev.2 != next.2 {
+                let _ = write!(o, "\\cf{}", next.2);
+            }
+            if prev.3 != next.3 {
+                o.push_str(if next.3 { "\\b" } else { "\\b0" });
+            }
+            if prev.4 != next.4 {
+                o.push_str(if next.4 { "\\i" } else { "\\i0" });
+            }
+            if prev.5 != next.5 {
+                o.push_str(if next.5 { "\\ul" } else { "\\ulnone" });
+            }
+            o.push(' ');
+            cur = Some(next);
+            escape_text(&mut o, &run.text);
+        }
+    }
+    o.push('}');
+    o
+}
+
+fn escape_text(o: &mut String, text: &str) {
+    use std::fmt::Write as _;
+    for ch in text.chars() {
+        match ch {
+            '\\' => o.push_str("\\\\"),
+            '{' => o.push_str("\\{"),
+            '}' => o.push_str("\\}"),
+            '\n' => o.push_str("\\line "),
+            '\t' => o.push_str("\\tab "),
+            '\u{a0}' => o.push_str("\\~"),
+            ' '..='~' => o.push(ch),
+            _ => {
+                let mut buf = [0u16; 2];
+                for unit in ch.encode_utf16(&mut buf) {
+                    // RTF \u takes a signed 16-bit value; `?` is the fallback for old readers.
+                    let _ = write!(o, "\\u{}?", *unit as i16);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -731,5 +861,78 @@ mod tests {
         assert!(parse(br"Hi").is_err(), "must start with a group");
         assert!(parse(br"{\rtf1 \'zz}").is_err(), "bad hex");
         assert!(parse(br"{\rtf1 \'4").is_err(), "truncated hex");
+    }
+
+    #[test]
+    fn writer_round_trips_structure() {
+        for src in [
+            WIN,
+            r"{\rtf1\ansi{\fonttbl{\f0 A;}{\f1 B;}}{\colortbl;\red1\green2\blue3;}\pard\qr\f1\fs50\b\cf1 bold\b0\i  it\par\pard\qj\ul under}",
+        ] {
+            let a = p(src);
+            let written = write(&a);
+            let b = parse(written.as_bytes()).unwrap();
+            assert_eq!(b.fonts, a.fonts, "{written}");
+            assert_eq!(b.colors, a.colors, "{written}");
+            assert_eq!(b.paragraphs, a.paragraphs, "{written}");
+            assert!(b.unhandled_words.is_empty(), "{:?}", b.unhandled_words);
+        }
+    }
+
+    #[test]
+    fn writer_escapes_text() {
+        let text =
+            "back\\slash {braces} caf\u{e9} \u{2019}quote\u{2019} \u{1f600}\ttab\u{a0}nbsp\nline";
+        let doc = RtfDoc {
+            fonts: vec![FontEntry {
+                index: 0,
+                name: "Caf\u{e9} Sans".into(),
+                charset: Some(0),
+            }],
+            colors: vec![],
+            paragraphs: vec![Paragraph {
+                align: Align::Center,
+                runs: vec![Run {
+                    text: text.into(),
+                    font: Some("Caf\u{e9} Sans".into()),
+                    font_index: 0,
+                    size_half_pt: 110,
+                    color: Some(Rgb {
+                        r: 255,
+                        g: 255,
+                        b: 255,
+                    }),
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                }],
+            }],
+            code_page: None,
+            unhandled_words: BTreeMap::new(),
+        };
+        let written = write(&doc);
+        assert!(written.is_ascii(), "{written}");
+        let back = parse(written.as_bytes()).unwrap();
+        assert_eq!(back.plain_text(), text);
+        assert_eq!(back.fonts[0].name, "Caf\u{e9} Sans");
+        assert_eq!(
+            back.colors,
+            vec![
+                None,
+                Some(Rgb {
+                    r: 255,
+                    g: 255,
+                    b: 255
+                })
+            ]
+        );
+        assert_eq!(
+            back.runs().next().unwrap().color,
+            Some(Rgb {
+                r: 255,
+                g: 255,
+                b: 255
+            })
+        );
     }
 }

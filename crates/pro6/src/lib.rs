@@ -7,6 +7,7 @@
 //! in an [`Extra`], so nothing in the file is ever dropped.
 
 pub mod diff;
+pub mod edit;
 pub mod error;
 pub mod extra;
 pub mod model;
@@ -18,6 +19,7 @@ pub mod write;
 use std::path::Path;
 use std::time::Instant;
 
+pub use edit::{EditError, WinPayloads};
 pub use error::{ParseError, ParseErrorDetail, ParseErrorKind};
 pub use extra::{Extra, Leaf, TypedArray, Warning};
 pub use model::{
