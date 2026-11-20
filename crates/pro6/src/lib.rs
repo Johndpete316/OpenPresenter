@@ -12,6 +12,7 @@ pub mod edit;
 pub mod error;
 pub mod extra;
 pub mod model;
+pub mod ops;
 pub mod raw;
 pub mod rescale;
 pub mod rtf;

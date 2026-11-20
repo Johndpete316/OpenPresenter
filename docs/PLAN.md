@@ -184,7 +184,7 @@ Only the Announcements presentation uses these.
 - [ ] While looping (decided by John): Next/Prev step as usual and restart the timer for the slide they land on; any Clear (Text/Background/All) clears and **stops the loop**
 - [ ] While looping (decided by John): selecting/opening another presentation does **not** stop the loop
 - [ ] Loop-running indicator **near the Preview pane** (John), with time to the next slide
-- [ ] **Ask John at M8:** if a *different* presentation is put live while the loop runs, should the loop keep timing in the background, or pause until its presentation is live again?
+- [ ] Putting a *different* presentation live **stops the loop** (John: no pausing)
 - [ ] Until supported: load the presentation with text and a non-fatal "media cues / auto-advance not supported yet" warning
 - **Accept:** Announcements file loops on its own with the same timing as PP6.
 
@@ -199,7 +199,7 @@ Track findings here as real files arrive. "M0:" notes say how the parser current
 - [ ] Shadow string field meanings. M0: assumed `blur|r g b a|{x, y}`; raw fields always kept; mismatch → warning.
 - [ ] Media cue / timeline structure (Announcements only). M0: `cues`, `timeCues`, `mediaTracks` kept raw; report lists files using them.
 - [ ] Where per-slide auto-advance durations are stored
-- [x] Behaviour when the operator presses Next/Prev/Clear while a loop is running. **John:** Next/Prev do what they normally do and restart the timer for the slide they land on. Clear clears the current slide and stops the loop. Selecting another presentation does **not** stop the loop (John). Putting a different presentation *live* during a loop is still open; ask at M8.
+- [x] Behaviour when the operator presses Next/Prev/Clear while a loop is running. **John:** Next/Prev do what they normally do and restart the timer for the slide they land on. Clear clears the current slide and stops the loop. Selecting another presentation does **not** stop the loop (John). Putting a different presentation live stops the loop (John).
 - [ ] Arrangement element structure and how `selectedArrangementID` maps to it. M0: `selectedArrangementID` read as a string.
 - [ ] XML syntax for named children: `<array rvXMLIvarName="…">`, `<NSString rvXMLIvarName="…">`, `rvXMLDictionaryKey` (assumed, not shown in spec). M0: matched on element name + ivar; mismatch → kept raw + warning.
 - [ ] Base64 payload line wrapping/whitespace. M0: whitespace stripped before decode; original text kept.

@@ -25,6 +25,12 @@ pub enum EditError {
     ExistingRtf(#[from] ParseError),
     #[error("text element {uuid} has no styled text to take the font and size from")]
     NoStyle { uuid: String },
+    #[error("{what} doesn't exist")]
+    NotFound { what: String },
+    #[error("the presentation has no slide to copy the layout from")]
+    NoTemplate,
+    #[error("slide {uuid} has no text box")]
+    NoTextElement { uuid: String },
 }
 
 impl EditError {
@@ -38,6 +44,19 @@ impl EditError {
                 "This text box has no font or size set, so new text can't be styled to \
                  match. Nothing was changed."
                     .to_owned()
+            }
+            EditError::NotFound { what } => {
+                format!(
+                    "That {what} no longer exists (the presentation changed). Nothing was changed."
+                )
+            }
+            EditError::NoTemplate => {
+                "This presentation has no slides to copy the font and layout from, so a \
+                 new slide can't be made here. Nothing was changed."
+                    .to_owned()
+            }
+            EditError::NoTextElement { .. } => {
+                "This slide has no text box to put text in. Nothing was changed.".to_owned()
             }
         }
     }
