@@ -260,3 +260,130 @@ fn background_media_and_clears() {
     let s = wait(&rx, "cleared", |s| s.background_media.is_none());
     assert!(!s.background_visible && !s.text_visible);
 }
+
+#[test]
+fn next_past_the_last_slide_moves_to_the_next_playlist_item() {
+    let song = fixture("song_1024x768.pro6");
+    let render = fixture("render_1024x768.pro6");
+    let fonts = fixture("two_fonts_1920x1080.pro6");
+    let (core, rx) = start(CoreConfig::default());
+    core.send(Command::PlaylistAdd {
+        path: song.clone(),
+        arrangement: None,
+    });
+    // Second item uses an explicit arrangement; third is loaded only on demand.
+    core.send(Command::PlaylistAdd {
+        path: render.clone(),
+        arrangement: None,
+    });
+    core.send(Command::PlaylistAdd {
+        path: fonts.clone(),
+        arrangement: None,
+    });
+    core.send(Command::PlaylistSelect(0));
+    wait(&rx, "song loaded", |s| {
+        s.docs.contains_key(&song) && s.docs.contains_key(&render)
+    });
+
+    // Last position of the default arrangement (V1 C V2 C) is disabled; last enabled is 5.
+    core.send(Command::GoTo {
+        presentation: song.clone(),
+        position: 5,
+    });
+    wait(&rx, "song end", |s| pos(s) == Some(5));
+    core.send(Command::Next);
+    let s = wait(&rx, "next item", |s| s.is_live(&render));
+    assert_eq!(
+        (pos(&s), s.playlist_item, s.selected.as_ref()),
+        (Some(0), Some(1), Some(&render))
+    );
+    assert!(s.text_visible);
+
+    // Prev on the first slide stays put (only Next crosses items).
+    core.send(Command::Prev);
+    core.send(Command::ClearBackground); // marker
+    let s = wait(&rx, "prev processed", |s| !s.background_visible);
+    assert!(s.is_live(&render) && pos(&s) == Some(0));
+
+    // Into an item that may not be loaded yet: goes live when it is.
+    core.send(Command::GoTo {
+        presentation: render.clone(),
+        position: 3,
+    });
+    wait(&rx, "render end", |s| {
+        pos(s) == Some(3) && s.is_live(&render)
+    });
+    core.send(Command::Next);
+    let s = wait(&rx, "third item", |s| s.is_live(&fonts));
+    assert_eq!((pos(&s), s.playlist_item), (Some(0), Some(2)));
+
+    // End of the last item: stays.
+    core.send(Command::GoTo {
+        presentation: fonts.clone(),
+        position: 1,
+    });
+    wait(&rx, "fonts end", |s| pos(s) == Some(1));
+    core.send(Command::Next);
+    core.send(Command::ClearText); // marker
+    let s = wait(&rx, "end of playlist", |s| !s.text_visible);
+    assert!(s.is_live(&fonts) && pos(&s) == Some(1));
+}
+
+#[test]
+fn next_item_uses_its_stored_arrangement() {
+    let song = fixture("song_1024x768.pro6");
+    let render = fixture("render_1024x768.pro6");
+    let (core, rx) = start(CoreConfig::default());
+    core.send(Command::PlaylistAdd {
+        path: render.clone(),
+        arrangement: None,
+    });
+    core.send(Command::PlaylistAdd {
+        path: song.clone(),
+        arrangement: Some("AA000000-0001-4000-8000-000000000002".into()),
+    });
+    core.send(Command::GoTo {
+        presentation: render.clone(),
+        position: 3,
+    });
+    wait(&rx, "render end", |s| pos(s) == Some(3));
+    core.send(Command::Next);
+    let s = wait(&rx, "song live", |s| s.is_live(&song));
+    let live = s.live.as_ref().unwrap();
+    assert_eq!(
+        live.arrangement.as_deref(),
+        Some("AA000000-0001-4000-8000-000000000002")
+    );
+    assert_eq!(live.order.len(), 4, "Short arrangement: V1 C");
+}
+
+#[test]
+fn next_slide_looks_into_the_next_playlist_item() {
+    let song = fixture("song_1024x768.pro6");
+    let render = fixture("render_1024x768.pro6");
+    let (core, rx) = start(CoreConfig::default());
+    core.send(Command::PlaylistAdd {
+        path: song.clone(),
+        arrangement: None,
+    });
+    core.send(Command::PlaylistAdd {
+        path: render.clone(),
+        arrangement: None,
+    });
+    core.send(Command::PlaylistSelect(0));
+    wait(&rx, "loaded", |s| {
+        s.docs.contains_key(&song) && s.docs.contains_key(&render)
+    });
+    core.send(Command::GoTo {
+        presentation: song.clone(),
+        position: 4,
+    });
+    let s = wait(&rx, "pos 4", |s| pos(s) == Some(4));
+    assert_eq!(s.next_slide().map(|n| (n.0, n.2)), Some((song.clone(), 5)));
+    core.send(Command::GoTo {
+        presentation: song.clone(),
+        position: 5,
+    });
+    let s = wait(&rx, "pos 5", |s| pos(s) == Some(5));
+    assert_eq!(s.next_slide().map(|n| (n.0, n.2)), Some((render, 0)));
+}

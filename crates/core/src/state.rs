@@ -106,6 +106,30 @@ impl ShowState {
         Some(slide_order(doc, self.arrangement_for(path).as_deref()))
     }
 
+    /// What Next would show: the next enabled slide of the live presentation, or the
+    /// first enabled slide of the next playlist item when the live one is at its end
+    /// (only if that presentation is loaded). Returns `(path, doc, position, flat)`.
+    pub fn next_slide(&self) -> Option<(PathBuf, Arc<Document>, usize, usize)> {
+        let l = self.live.as_ref()?;
+        if let Some(n) = crate::order::next_enabled(&l.order, l.position) {
+            return Some((l.path.clone(), l.doc.clone(), n, l.order[n].flat));
+        }
+        let items = &self.playlist.items;
+        let i = match self.playlist_item {
+            Some(i) if items.get(i).is_some_and(|it| it.path == l.path) => i,
+            _ => items.iter().position(|it| it.path == l.path)?,
+        };
+        let next = items.get(i + 1)?;
+        let doc = self.docs.get(&next.path)?.clone();
+        let arrangement = next
+            .arrangement
+            .clone()
+            .or_else(|| self.arrangement_for(&next.path));
+        let order = slide_order(&doc, arrangement.as_deref());
+        let n = crate::order::next_enabled(&order, None)?;
+        Some((next.path.clone(), doc, n, order[n].flat))
+    }
+
     pub fn is_live(&self, path: &Path) -> bool {
         self.live.as_ref().is_some_and(|l| l.path == path)
     }

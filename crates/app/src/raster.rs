@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, select};
-use pp6core::{ShowState, next_enabled, prev_enabled};
+use pp6core::{ShowState, prev_enabled};
 use render::{Fonts, SlideFrame, render_slide};
 
 use crate::UserEvent;
@@ -242,17 +242,20 @@ impl Worker {
                 });
             }
         }
-        // Next first: it's the likely next press. Failures stay quiet until shown.
-        let neighbours = [
-            next_enabled(&l.order, l.position),
-            l.position.and_then(|p| prev_enabled(&l.order, p)),
-        ];
-        for n in neighbours.into_iter().flatten() {
-            if let Some(r) = l.order.get(n)
-                && let (key, Ok(frame)) = self.frame(&l.doc, r.flat, size)
-            {
-                self.send(RenderCmd::Preload { key, frame });
-            }
+        // Next first (possibly the next playlist item's first slide): it's the likely next
+        // press. Failures stay quiet until shown.
+        if let Some((_, doc, _, flat)) = s.next_slide()
+            && let (key, Ok(frame)) = self.frame(&doc, flat, size)
+        {
+            self.send(RenderCmd::Preload { key, frame });
+        }
+        if let Some(r) = l
+            .position
+            .and_then(|p| prev_enabled(&l.order, p))
+            .and_then(|p| l.order.get(p))
+            && let (key, Ok(frame)) = self.frame(&l.doc, r.flat, size)
+        {
+            self.send(RenderCmd::Preload { key, frame });
         }
     }
 

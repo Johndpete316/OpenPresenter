@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crossbeam_channel::Sender;
 use egui::{Color32, RichText, Sense, Stroke, TextureHandle, Vec2};
 use pp6core::library::LibraryIndex;
-use pp6core::{Command, NoticeLevel, Settings, ShowState, SlideRef, next_enabled};
+use pp6core::{Command, NoticeLevel, Settings, ShowState, SlideRef};
 
 use crate::thumbs::{ThumbKey, ThumbRequest, ThumbResult};
 
@@ -561,11 +561,16 @@ fn preview(ui: &mut egui::Ui, st: &mut UiState, show: &ShowState, thumbs: &Sende
         (false, false) => "All cleared".into(),
     };
     ui.label(RichText::new(state).small());
-    if let Some(n) = next_enabled(&l.order, l.position) {
-        ui.label(RichText::new("Next").small().weak());
-        let small = Vec2::new(PREVIEW_W as f32 / 2.0, h / 2.0);
-        let (_, tex) = st.thumb(thumbs, &l.doc, l.order[n].flat, PREVIEW_W / 2);
-        tile_image(ui, tex, small);
+    if let Some((path, doc, _, flat)) = show.next_slide() {
+        let label = if path == l.path {
+            "Next".to_owned()
+        } else {
+            format!("Next: {}", title(&path))
+        };
+        ui.label(RichText::new(label).small().weak());
+        let small_h = PREVIEW_W as f32 / 2.0 * doc.canvas.height as f32 / doc.canvas.width as f32;
+        let (_, tex) = st.thumb(thumbs, &doc, flat, PREVIEW_W / 2);
+        tile_image(ui, tex, Vec2::new(PREVIEW_W as f32 / 2.0, small_h));
     }
 }
 

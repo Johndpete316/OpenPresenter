@@ -123,7 +123,7 @@ pp6/
   - Core crate is `crates/core`, package `pp6core` (`core` clashes with Rust's built-in crate).
   - The library index cache is JSON, not bincode: `bincode` 3.0.0 is a deprecation release.
   - Key bindings are configured in `settings.toml` (`[keys]`); there's no in-app editor.
-  - Next at the last slide stays put; it doesn't jump to the next playlist item. **Ask John** whether it should.
+  - Next at the last slide moves to the first enabled slide of the **next playlist item**, using its stored arrangement (decided by John, 2026-11-20). It loads first if needed, without blocking. Prev at the first slide stays put. The raster worker and the "Next" preview look ahead into the next item, so the change is instant.
   - Triggering a slide brings back cleared text, but a cleared background stays cleared.
   - Relaunch restores the live slide only if the restore file is < 6 h old.
   - Data folders: settings in the per-user config dir; logs, restore file and caches in the per-user data and cache dirs (`directories` crate; `--data-dir` overrides).
@@ -177,6 +177,7 @@ Only the Announcements presentation uses these.
 - [ ] Loop: honour `RVTimeline.loop` — wrap from last enabled slide to first
 - [ ] Operator controls: Start/Stop loop button + indicator showing loop is running and time to next slide
 - [ ] Timer runs on the core actor, not the UI thread; a UI stall must not delay an advance
+- [ ] While looping (decided by John): Next/Prev step as usual and restart the timer for the slide they land on; any Clear (Text/Background/All) clears and **stops the loop**
 - [ ] Until supported: load the presentation with text and a non-fatal "media cues / auto-advance not supported yet" warning
 - **Accept:** Announcements file loops on its own with the same timing as PP6.
 
@@ -191,7 +192,7 @@ Track findings here as real files arrive. "M0:" notes say how the parser current
 - [ ] Shadow string field meanings. M0: assumed `blur|r g b a|{x, y}`; raw fields always kept; mismatch → warning.
 - [ ] Media cue / timeline structure (Announcements only). M0: `cues`, `timeCues`, `mediaTracks` kept raw; report lists files using them.
 - [ ] Where per-slide auto-advance durations are stored
-- [ ] Behaviour when the operator presses Next/Prev/Clear or picks another presentation while a loop is running (stop loop? keep timing?) — **ask John**
+- [x] Behaviour when the operator presses Next/Prev/Clear while a loop is running. **John:** Next/Prev do what they normally do and restart the timer for the slide they land on. Clear clears the current slide and stops the loop. (Picking another presentation during a loop isn't specified yet; presumably it stops the loop too. Confirm in M8.)
 - [ ] Arrangement element structure and how `selectedArrangementID` maps to it. M0: `selectedArrangementID` read as a string.
 - [ ] XML syntax for named children: `<array rvXMLIvarName="…">`, `<NSString rvXMLIvarName="…">`, `rvXMLDictionaryKey` (assumed, not shown in spec). M0: matched on element name + ivar; mismatch → kept raw + warning.
 - [ ] Base64 payload line wrapping/whitespace. M0: whitespace stripped before decode; original text kept.
@@ -210,7 +211,7 @@ Track findings here as real files arrive. "M0:" notes say how the parser current
 - [ ] Shadow, stroke (outline), rotation, underline, and fill corner radius: not drawn in M2 (each produces a render warning).
 - [ ] How PP6 layers slide background colour vs background media, and its media scaling (fit/fill). M5: media under an optional slide colour; media fits the canvas area.
 - [ ] Arrangement XML structure. M3 reads `uuid`/`name`/`color` plus NSString group UUIDs below each arrangement (tolerant, read-only); verify with a real file.
-- [ ] Next/Prev at the end of a presentation: stay put (current) or move to the next playlist item? **Ask John.**
+- [x] Next/Prev at the end of a presentation. **John:** Next moves to the next playlist item (implemented). Prev at the first slide stays put; not specified, so not changed.
 - [ ] Characters missing from the slide's font: cosmic-text draws them from another font. M2 reports a warning; decide whether that is acceptable or should be an error.
 
 ## Required Tooling

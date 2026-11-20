@@ -112,7 +112,8 @@ fn io_worker(rx: &Receiver<IoJob>, back: &Sender<Msg>) {
 
 struct PendingGoTo {
     path: PathBuf,
-    position: usize,
+    /// `None` = the first enabled slide (known once the presentation is loaded).
+    position: Option<usize>,
     at: Option<Instant>,
     text_visible: bool,
     background_visible: bool,
@@ -170,7 +171,7 @@ impl Core {
             if go_live {
                 self.pending_goto = Some(PendingGoTo {
                     path: l.path,
-                    position: l.position,
+                    position: Some(l.position),
                     at: None,
                     text_visible: l.text_visible,
                     background_visible: l.background_visible,
@@ -301,9 +302,22 @@ impl Core {
                 if self.pending_goto.as_ref().is_some_and(|p| p.path == path)
                     && let Some(p) = self.pending_goto.take()
                 {
-                    self.go_live(&p.path, p.position, p.at);
-                    self.s.text_visible = p.text_visible;
-                    self.s.background_visible = p.background_visible;
+                    let position = p.position.or_else(|| {
+                        self.s
+                            .order_for(&p.path)
+                            .and_then(|o| next_enabled(&o, None))
+                    });
+                    match position {
+                        Some(pos) => {
+                            self.go_live(&p.path, pos, p.at);
+                            self.s.text_visible = p.text_visible;
+                            self.s.background_visible = p.background_visible;
+                        }
+                        None => self.notice(
+                            NoticeLevel::Warning,
+                            format!("'{}' has no enabled slides to show.", p.path.display()),
+                        ),
+                    }
                 }
             }
             Err(e) => {
@@ -364,7 +378,7 @@ impl Core {
                     self.request_load(&presentation);
                     self.pending_goto = Some(PendingGoTo {
                         path: presentation,
-                        position,
+                        position: Some(position),
                         at: Some(at),
                         text_visible: true,
                         background_visible: self.s.background_visible,
@@ -520,11 +534,11 @@ impl Core {
             if let Some(t) = target {
                 let path = live.path.clone();
                 self.go_live(&path, t, Some(at));
+            } else if forward {
+                // Past the last slide: continue with the next playlist item.
+                self.next_playlist_item(at);
             } else {
-                tracing::debug!(
-                    forward,
-                    "at the end of the presentation; nothing to step to"
-                );
+                tracing::debug!("at the first slide; nothing before it");
             }
             return;
         }
@@ -535,6 +549,50 @@ impl Core {
             && let Some(first) = next_enabled(&order, None)
         {
             self.go_live(&path, first, Some(at));
+        }
+    }
+
+    /// Go live on the first enabled slide of the playlist item after the live one.
+    /// If it isn't loaded yet, it goes live as soon as it is (the core never waits).
+    fn next_playlist_item(&mut self, at: Instant) {
+        let Some(live) = &self.s.live else { return };
+        let items = &self.s.playlist.items;
+        // Prefer the selected item if it is the live one (a presentation can appear twice).
+        let current = match self.s.playlist_item {
+            Some(i) if items.get(i).is_some_and(|it| it.path == live.path) => Some(i),
+            _ => items.iter().position(|it| it.path == live.path),
+        };
+        let Some(next) = current.and_then(|i| items.get(i + 1).cloned()) else {
+            tracing::debug!("at the end of the presentation and the playlist; nothing to step to");
+            return;
+        };
+        let index = current.map_or(0, |i| i + 1);
+        if let Some(a) = &next.arrangement {
+            Arc::make_mut(&mut self.s.arrangements).insert(next.path.clone(), Some(a.clone()));
+        }
+        self.s.playlist_item = Some(index);
+        self.s.selected = Some(next.path.clone());
+        if let Some(first) = self
+            .s
+            .order_for(&next.path)
+            .and_then(|o| next_enabled(&o, None))
+        {
+            self.go_live(&next.path, first, Some(at));
+            self.s.playlist_item = Some(index);
+        } else if self.s.docs.contains_key(&next.path) {
+            self.notice(
+                NoticeLevel::Warning,
+                format!("'{}' has no enabled slides to show.", next.path.display()),
+            );
+        } else {
+            self.request_load(&next.path);
+            self.pending_goto = Some(PendingGoTo {
+                path: next.path,
+                position: None,
+                at: Some(at),
+                text_visible: true,
+                background_visible: self.s.background_visible,
+            });
         }
     }
 
