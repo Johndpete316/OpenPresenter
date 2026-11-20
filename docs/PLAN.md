@@ -86,11 +86,12 @@ pp6/
 - **Status (2026-11-19):** done. RTF: `rtf-parser` rejected, subset hand-rolled (see [format-notes.md](format-notes.md)). `pp6tool.exe` cross-builds with `cargo xwin`.
 
 ### M1 — Writer + Round-Trip
-- [ ] Writer that emits unchanged nodes and `extra` data exactly as parsed
-- [ ] `pp6tool roundtrip <dir>`: load → save → semantic compare; report diffs
-- [ ] On text edit: regenerate `PlainText` + `RTFData`; drop `WinFlowData`/`WinFontData` for that element (behind a flag until verified in PP6)
-- [ ] Preserve group and slide UUIDs exactly
+- [x] Writer that emits unchanged nodes and `extra` data exactly as parsed
+- [x] `pp6tool roundtrip <dir>`: load → save → semantic compare; report diffs
+- [x] On text edit: regenerate `PlainText` + `RTFData`; drop `WinFlowData`/`WinFontData` for that element (behind a flag until verified in PP6)
+- [x] Preserve group and slide UUIDs exactly
 - **Accept:** fixtures round-trip with zero semantic diff.
+- **Status (2026-11-20):** done. All parseable fixtures round-trip **byte-identical** (`pp6tool roundtrip fixtures/`). The Win payload drop is `WinPayloads::{Keep, Drop}`, a required argument with no default; M7 picks the default once PP6 behaviour is verified. Still to do: open `pp6tool roundtrip --out` copies and `set_text` output in real PP6.
 
 ### M2 — Rendering + Output Spike (Windows-Critical)
 - [ ] `render`: lay out a slide onto its own canvas size with `cosmic-text` using RTF face/size; positions from `RVRect3D` in canvas pixels
@@ -176,6 +177,9 @@ Track findings here as real files arrive. "M0:" notes say how the parser current
 - [ ] PP6 RTF flavour on Windows (Cocoa `\cocoartf` vs Windows-style font table), and whether text effects (`\outl`, `\strokewidth`, `\shad`) appear. M0: both flavours parse; report lists unhandled control words.
 - [ ] Whether a trailing `\par` means an empty last line in PP6. M0: ignored.
 - [ ] Per-font `\fcharset` code pages. M0: only document `\ansicpg` is applied.
+- [ ] Whether PP6 (Windows) opens and renders RTF written by `rtf::write` (Windows-style font table, `\pard\qX` per paragraph, `\uN?`). Check with an edited file in PP6.
+- [ ] PlainText encoding (assumed UTF-8) and newline style PP6 writes. M1: `set_text` keeps whatever style the element already used, default `\n`.
+- [ ] Whether a Cocoa-flavoured element should be rewritten in Cocoa style after an edit. M1: always Windows style.
 
 ## Required Tooling
 ### Dev Machine (CachyOS / Arch)
