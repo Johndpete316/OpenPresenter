@@ -57,3 +57,21 @@ Open points:
 - Text edits (`TextElement::set_text`) regenerate `RTFData` (Windows-style RTF via
   `rtf::write`) and `PlainText`. A trailing `\n` in new text is lost, because the reader drops
   a trailing empty paragraph (see the RTF open points above).
+
+## Rendering (M2)
+
+- One CPU rasteriser (`render` crate, cosmic-text + swash) produces output-resolution frames. Both
+  `pp6tool render` and the output window use it; the window draws the frame 1:1 as a texture.
+  Pixel equality between the two is checked with `pp6 --capture`.
+- Layout happens at output scale (font size × fit scale, box width × fit scale) rather than
+  rasterising at canvas size and scaling the bitmap, so text stays sharp. Wrapping is computed at
+  the scaled size, so a line could in principle break differently than at canvas size. Not seen
+  yet; check with real files.
+- **assumed**: font size in canvas px = `\fs` / 2 (1 pt = 1 canvas px).
+- **assumed**: `verticalAlignment` 0/1/2 = top/middle/bottom; RTF auto colour = black.
+- Line height comes from each face's metrics (ascent + descent + leading) at the run's size, per span.
+- Fonts resolve by family name, then PostScript name, case-insensitively. A missing font is a
+  `RenderError::MissingFont`. If bold/italic is requested and the family lacks that face, the
+  nearest face of the **same** family is used, with a warning.
+- Frames keep background and text as separate layers (for Clear Text / Clear Background and,
+  in M5, video under text).

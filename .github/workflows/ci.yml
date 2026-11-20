@@ -19,7 +19,8 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo nextest run -p pro6 -p pp6tool
+      # render tests use only the bundled fixture fonts, so they need no system fonts.
+      - run: cargo nextest run -p pro6 -p render -p pp6tool
 
   windows:
     runs-on: windows-latest
@@ -31,4 +32,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: pp6-windows
-          path: target/release/pp6tool.exe
+          path: |
+            target/release/pp6.exe
+            target/release/pp6tool.exe

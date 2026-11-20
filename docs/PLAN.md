@@ -94,14 +94,16 @@ pp6/
 - **Status (2026-11-20):** done. All parseable fixtures round-trip **byte-identical** (`pp6tool roundtrip fixtures/`). The Win payload drop is `WinPayloads::{Keep, Drop}`, a required argument with no default; M7 picks the default once PP6 behaviour is verified. Still to do: open `pp6tool roundtrip --out` copies and `set_text` output in real PP6.
 
 ### M2 — Rendering + Output Spike (Windows-Critical)
-- [ ] `render`: lay out a slide onto its own canvas size with `cosmic-text` using RTF face/size; positions from `RVRect3D` in canvas pixels
-- [ ] Canvas → output scaling: uniform fit, centred, black bars. Never stretch
-- [ ] `pp6tool render <file> --out dir/` → PNG per slide (for visual diff against PP6)
-- [ ] Output window: `winit` + `glutin` + `glow`, borderless fullscreen on a chosen monitor, own thread, vsync
-- [ ] Output disable = destroy window and release the monitor; re-enable recreates it
-- [ ] Missing-font detection → typed error
-- [ ] Measure cold start and slide-change latency; log them
+- [x] `render`: lay out a slide onto its own canvas size with `cosmic-text` using RTF face/size; positions from `RVRect3D` in canvas pixels
+- [x] Canvas → output scaling: uniform fit, centred, black bars. Never stretch
+- [x] `pp6tool render <file> --out dir/` → PNG per slide (for visual diff against PP6)
+- [x] Output window: `winit` + `glutin` + `glow`, borderless fullscreen on a chosen monitor, own thread, vsync
+- [x] Output disable = destroy window and release the monitor; re-enable recreates it
+- [x] Missing-font detection → typed error
+- [x] Measure cold start and slide-change latency; log them
 - **Accept:** fixture slides render correctly to PNG and to a second monitor on Windows.
+- **Status (2026-11-20):** everything is built and verified on Linux. PNGs are checked visually. The GL output, captured with `pp6 --capture`, matches `pp6tool render` pixel-for-pixel at 4:3, 16:9 and 1:1, including black bars and background. Disable/enable and the missing-display error were exercised. `pp6.exe` cross-builds. **Still to do for acceptance:** run on the Windows host with a second display. Suggested commands: `pp6.exe --list-monitors`, then `pp6.exe <file> --monitor N`; arrow keys and D, stdin `e` to re-enable; `--bench 30`; `--capture out.png`. Record the numbers in perf.md.
+- **M3 architecture note:** winit allows one event loop per process, and `eframe` takes it. The output window must share the operator UI's event loop, so M3 should use `egui-winit` + `egui_glow` directly instead of `eframe`. The output's GL still runs on its own thread. glow is pinned to 0.17 to match `egui_glow` 0.37. **Confirm with John before M3.**
 
 ### M3 — Core + Operator MVP
 - [ ] `core`: `ShowState`, `Command`, broadcast channel, crash-restore state file
@@ -180,6 +182,14 @@ Track findings here as real files arrive. "M0:" notes say how the parser current
 - [ ] Whether PP6 (Windows) opens and renders RTF written by `rtf::write` (Windows-style font table, `\pard\qX` per paragraph, `\uN?`). Check with an edited file in PP6.
 - [ ] PlainText encoding (assumed UTF-8) and newline style PP6 writes. M1: `set_text` keeps whatever style the element already used, default `\n`.
 - [ ] Whether a Cocoa-flavoured element should be rewritten in Cocoa style after an edit. M1: always Windows style.
+- [ ] `verticalAlignment` values. M2: 0 = top, 1 = middle, 2 = bottom (assumed).
+- [ ] Text colour when RTF has no `\cf` ("auto"). M2: black, per RTF spec.
+- [ ] Line height. M2: the font's ascent + descent + line gap at the run size. Compare with PP6 on multi-line slides.
+- [ ] RTF font names: family names vs PostScript names (e.g. `ArialMT`, `Helvetica-Bold`). M2 resolves both.
+- [ ] Text overflow beyond the element box (`adjustsHeightToFit`, shrink-to-fit?). M2: draws past the box (clipped to canvas) with a warning.
+- [ ] `drawingBackgroundColor` semantics (slide vs document). M2: slide colour if the slide's flag is true, else the document's if its flag is true, else black.
+- [ ] Shadow, stroke (outline), rotation, underline, and fill corner radius: not drawn in M2 (each produces a render warning).
+- [ ] Characters missing from the slide's font: cosmic-text draws them from another font. M2 reports a warning; decide whether that is acceptable or should be an error.
 
 ## Required Tooling
 ### Dev Machine (CachyOS / Arch)
