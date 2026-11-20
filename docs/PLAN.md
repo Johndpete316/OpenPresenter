@@ -129,12 +129,16 @@ pp6/
   - Data folders: settings in the per-user config dir; logs, restore file and caches in the per-user data and cache dirs (`directories` crate; `--data-dir` overrides).
 
 ### M4 — Bulk Resolution Tool
-- [ ] `pp6tool rescale --to 1024x768 <files|dir>`
-- [ ] Scales: document canvas size, element `position`, RTF `\fs`, shadow offset/blur, stroke width
-- [ ] Same aspect → proportional scale. Aspect change → uniform fit + centre; `--stretch` opt-in only
-- [ ] `--dry-run` default; per-file report old → new; writes to `--out` dir or backs up originals before in-place write
-- [ ] `--preview` renders before/after PNGs
+- [x] `pp6tool rescale --to 1024x768 <files|dir>`
+- [x] Scales: document canvas size, element `position`, RTF `\fs`, shadow offset/blur, stroke width
+- [x] Same aspect → proportional scale. Aspect change → uniform fit + centre; `--stretch` opt-in only
+- [x] `--dry-run` default; per-file report old → new; writes to `--out` dir or backs up originals before in-place write
+- [x] `--preview` renders before/after PNGs
 - **Accept:** rescaled fixtures render correctly; round-trip clean.
+- **Status (2026-11-20): done.** Tests show a rescaled document renders like the original fitted to the same output (bbox within 2 px, >99.5% identical pixels) and writes back identically. Notes:
+  - Beyond `\fs`, the RTF's absolute paragraph and kerning sizes (`\sl \sa \sb \li \ri \fi \tx \expnd \expndtw \up \dn`) are also scaled, edited in place. Leaving them unscaled would distort the layout. **Review with John.**
+  - `--stretch` scales text and effects by the smaller axis factor (fonts can't stretch non-uniformly).
+  - WinFlowData/WinFontData of rescaled text are dropped by default (`--keep-win-payloads` keeps them); same unknown as M1.
 
 ### M5 — Media + Settings
 - [ ] `media`: libmpv render API into output FBO; text composited above
