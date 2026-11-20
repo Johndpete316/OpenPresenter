@@ -284,6 +284,134 @@ fn line_col(src: &str, offset: usize) -> (usize, usize) {
     (line, column)
 }
 
+// ---- writing --------------------------------------------------------------------
+
+/// Serialize a raw document. Unchanged trees reproduce the source byte-for-byte
+/// (except end-tag spacing like `</a >` and spacing after `<!DOCTYPE`, which aren't kept).
+pub fn write_document(doc: &RawDocument) -> String {
+    let mut out = String::with_capacity(64 * 1024);
+    if doc.has_bom {
+        out.push('\u{feff}');
+    }
+    for n in &doc.prolog {
+        write_node(&mut out, n);
+    }
+    write_element(&mut out, &doc.root);
+    for n in &doc.epilog {
+        write_node(&mut out, n);
+    }
+    out
+}
+
+pub fn write_node(out: &mut String, node: &RawNode) {
+    match node {
+        RawNode::Element(e) => write_element(out, e),
+        RawNode::Text(t) => out.push_str(t),
+        RawNode::CData(t) => {
+            out.push_str("<![CDATA[");
+            out.push_str(t);
+            out.push_str("]]>");
+        }
+        RawNode::Comment(t) => {
+            out.push_str("<!--");
+            out.push_str(t);
+            out.push_str("-->");
+        }
+        RawNode::Decl(t) | RawNode::PI(t) => {
+            out.push_str("<?");
+            out.push_str(t);
+            out.push_str("?>");
+        }
+        RawNode::DocType(t) => {
+            // quick-xml drops the whitespace after the keyword; one space is the norm.
+            out.push_str("<!DOCTYPE ");
+            out.push_str(t);
+            out.push('>');
+        }
+    }
+}
+
+pub fn write_element(out: &mut String, el: &RawElement) {
+    out.push('<');
+    out.push_str(&el.name);
+    out.push_str(&el.attrs_src);
+    if el.self_closing && el.children.is_empty() {
+        // Keep the original `<x />` vs `<x/>` spacing: attrs_src ends with any space before `/`.
+        out.push_str("/>");
+        return;
+    }
+    out.push('>');
+    for c in &el.children {
+        write_node(out, c);
+    }
+    out.push_str("</");
+    out.push_str(&el.name);
+    out.push('>');
+}
+
+impl RawElement {
+    /// New element with attributes in the given order (used for nodes the model creates).
+    pub fn new(name: &str, attrs: &[(&str, &str)]) -> RawElement {
+        let mut el = RawElement {
+            name: name.to_owned(),
+            attrs: attrs
+                .iter()
+                .map(|(n, v)| RawAttr {
+                    name: (*n).to_owned(),
+                    raw_value: quick_xml::escape::escape(*v).into_owned(),
+                })
+                .collect(),
+            attrs_src: String::new(),
+            self_closing: true,
+            children: Vec::new(),
+        };
+        el.regenerate_attrs_src();
+        el
+    }
+
+    /// Rebuild `attrs_src` from `attrs` after a change, as ` name="value"` pairs.
+    pub fn regenerate_attrs_src(&mut self) {
+        self.attrs_src.clear();
+        for a in &self.attrs {
+            self.attrs_src.push(' ');
+            self.attrs_src.push_str(&a.name);
+            self.attrs_src.push_str("=\"");
+            // raw_value is already escaped, but may contain `"` if the source used single quotes.
+            self.attrs_src.push_str(&a.raw_value.replace('"', "&quot;"));
+            self.attrs_src.push('"');
+        }
+    }
+
+    /// Set an attribute's (unescaped) value, keeping its position. Appends if absent.
+    pub fn set_attr(&mut self, name: &str, value: &str) {
+        let raw_value = quick_xml::escape::escape(value).into_owned();
+        match self.attrs.iter_mut().find(|a| a.name == name) {
+            Some(a) => a.raw_value = raw_value,
+            None => self.attrs.push(RawAttr {
+                name: name.to_owned(),
+                raw_value,
+            }),
+        }
+        self.regenerate_attrs_src();
+    }
+
+    pub fn remove_attr(&mut self, name: &str) {
+        let before = self.attrs.len();
+        self.attrs.retain(|a| a.name != name);
+        if self.attrs.len() != before {
+            self.regenerate_attrs_src();
+        }
+    }
+
+    /// Replace all children with a single escaped text node.
+    pub fn set_text(&mut self, text: &str) {
+        self.children = vec![RawNode::Text(
+            quick_xml::escape::partial_escape(text).into_owned(),
+        )];
+        self.self_closing = false;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,5 +455,23 @@ mod tests {
     fn line_col_is_one_based() {
         assert_eq!(line_col("ab\ncd", 4), (2, 2));
         assert_eq!(line_col("ab", 0), (1, 1));
+    }
+
+    #[test]
+    fn write_is_byte_exact() {
+        let src = "\u{feff}<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<!DOCTYPE x>\n<!-- c -->\n<a  x='1' y=\"&amp;&quot;\">\r\n  <b>t &lt; u &#233;</b><c/><d />\n  <![CDATA[<raw>]]><?pi data?>\n</a>\n<!-- after -->";
+        let doc = p(src).unwrap();
+        assert_eq!(write_document(&doc), src);
+    }
+
+    #[test]
+    fn set_attr_regenerates_source_in_place() {
+        let mut doc = p("<a x='1' y=\"2\"/>").unwrap();
+        doc.root.set_attr("x", "a<b");
+        doc.root.set_attr("z", "new");
+        assert_eq!(write_document(&doc), "<a x=\"a&lt;b\" y=\"2\" z=\"new\"/>");
+        doc.root.remove_attr("y");
+        doc.root.set_text("t&");
+        assert_eq!(write_document(&doc), "<a x=\"a&lt;b\" z=\"new\">t&amp;</a>");
     }
 }
