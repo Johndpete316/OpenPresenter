@@ -18,7 +18,9 @@ pub use order::{SlideRef, find_nearest, next_enabled, prev_enabled, slide_order}
 pub use playlist::{
     ItemRef, Playlist, PlaylistError, PlaylistFile, PlaylistItem, load_dir as load_playlists,
 };
-pub use settings::{KeyBindings, OutputSettings, Settings, SettingsError, WebSettings};
+pub use settings::{
+    KeyBindings, MediaScaling, OutputSettings, Resolution, Settings, SettingsError, WebSettings,
+};
 pub use state::{Live, LoopState, Notice, NoticeLevel, ShowState};
 
 /// Write a file atomically: temp file in the same folder, flush to disk, rename.

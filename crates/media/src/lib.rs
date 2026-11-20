@@ -57,6 +57,29 @@ pub struct AudioDevice {
     pub description: String,
 }
 
+/// How background media fills the output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Scaling {
+    /// Cover the whole output, cropping what doesn't fit (no bars).
+    #[default]
+    Fill,
+    /// Show all of the picture; black bars where the shapes differ.
+    Fit,
+    /// Stretch to the output's shape (distorts).
+    Stretch,
+}
+
+impl Scaling {
+    /// mpv (keepaspect, panscan) for this mode.
+    fn mpv(self) -> (&'static str, &'static str) {
+        match self {
+            Scaling::Fill => ("yes", "1.0"),
+            Scaling::Fit => ("yes", "0.0"),
+            Scaling::Stretch => ("no", "0.0"),
+        }
+    }
+}
+
 /// Events from a player's event thread.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MediaEvent {
@@ -100,6 +123,7 @@ impl Player {
     /// `on_event` runs on the player's event thread.
     pub fn new(
         audio_device: Option<&str>,
+        scaling: Scaling,
         on_event: impl Fn(MediaEvent) + Send + 'static,
     ) -> Result<Player, MediaError> {
         let api = ffi::api().map_err(|e| MediaError::LibraryMissing(e.to_owned()))?;
@@ -119,6 +143,8 @@ impl Player {
             ("input-vo-keyboard", "no"),
             ("osc", "no"),
             ("terminal", "no"),
+            ("keepaspect", scaling.mpv().0),
+            ("panscan", scaling.mpv().1),
         ];
         if let Some(d) = audio_device {
             options.push(("audio-device", d));
@@ -286,6 +312,12 @@ impl Player {
         self.set("audio-device", name.unwrap_or("auto"))
     }
 
+    pub fn set_scaling(&self, scaling: Scaling) -> Result<(), MediaError> {
+        let (keepaspect, panscan) = scaling.mpv();
+        self.set("keepaspect", keepaspect)?;
+        self.set("panscan", panscan)
+    }
+
     pub fn set_mute(&self, mute: bool) -> Result<(), MediaError> {
         self.set("mute", if mute { "yes" } else { "no" })
     }
@@ -448,6 +480,110 @@ pub fn audio_devices() -> Result<Vec<AudioDevice>, MediaError> {
     result
 }
 
+/// Save one frame of `path` (about 10% in, for a video) as a PNG `width` pixels wide
+/// at `out`. Runs a short-lived headless mpv; blocks until done (a few hundred ms).
+pub fn thumbnail(path: &Path, out: &Path, width: u32) -> Result<(), MediaError> {
+    let api = ffi::api().map_err(|e| MediaError::LibraryMissing(e.to_owned()))?;
+    let dir = out
+        .parent()
+        .ok_or_else(|| MediaError::Create("thumbnail path has no folder".into()))?
+        .join(format!("mpv-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| MediaError::Create(e.to_string()))?;
+    // SAFETY: plain constructor.
+    let handle = unsafe { (api.create)() };
+    if handle.is_null() {
+        return Err(MediaError::Create("mpv_create returned null".into()));
+    }
+    let fail = |message: String| MediaError::Playback {
+        path: path.to_path_buf(),
+        message,
+    };
+    let result = (|| {
+        let dir_s = dir.to_string_lossy().into_owned();
+        let vf = format!("scale={width}:-2");
+        for (k, v) in [
+            ("config", "no"),
+            ("terminal", "no"),
+            ("load-scripts", "no"),
+            ("ytdl", "no"),
+            ("osc", "no"),
+            ("idle", "yes"),
+            ("audio", "no"),
+            ("sub", "no"),
+            ("ao", "null"),
+            ("vo", "image"),
+            ("vo-image-format", "png"),
+            ("vo-image-png-compression", "1"),
+            ("vo-image-outdir", dir_s.as_str()),
+            ("frames", "1"),
+            ("start", "10%"),
+            ("hr-seek", "no"),
+            ("image-display-duration", "0"),
+            ("vf", vf.as_str()),
+        ] {
+            let (ck, cv) = (cstr(k), cstr(v));
+            // SAFETY: valid handle and C strings.
+            let rc = unsafe { (api.set_option_string)(handle, ck.as_ptr(), cv.as_ptr()) };
+            if rc < 0 {
+                return Err(MediaError::Option {
+                    name: k.into(),
+                    message: mpv_err(api, rc),
+                });
+            }
+        }
+        // SAFETY: valid, un-initialised handle.
+        let rc = unsafe { (api.initialize)(handle) };
+        if rc < 0 {
+            return Err(MediaError::Create(mpv_err(api, rc)));
+        }
+        let args = [cstr("loadfile"), cstr(&path.to_string_lossy())];
+        let mut ptrs: Vec<*const c_char> = args.iter().map(|c| c.as_ptr()).collect();
+        ptrs.push(std::ptr::null());
+        // SAFETY: valid handle, NULL-terminated array of C strings that outlive the call.
+        let rc = unsafe { (api.command)(handle, ptrs.as_mut_ptr()) };
+        if rc < 0 {
+            return Err(fail(mpv_err(api, rc)));
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return Err(fail("timed out".into()));
+            }
+            // SAFETY: valid handle; the event stays valid until the next wait_event.
+            let ev = unsafe { &*(api.wait_event)(handle, left.as_secs_f64()) };
+            match ev.event_id {
+                ffi::MPV_EVENT_SHUTDOWN => return Err(fail("player shut down".into())),
+                ffi::MPV_EVENT_END_FILE if !ev.data.is_null() => {
+                    // SAFETY: END_FILE events carry an mpv_event_end_file.
+                    let end = unsafe { &*(ev.data as *const ffi::mpv_event_end_file) };
+                    if end.reason == ffi::MPV_END_FILE_REASON_ERROR {
+                        return Err(fail(mpv_err(api, end.error)));
+                    }
+                    break;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    })();
+    // SAFETY: no other users of this handle.
+    unsafe { (api.terminate_destroy)(handle) };
+    // The image VO wrote 00000001.png for its frame (flushed by now); take it.
+    let result = result.and_then(|()| {
+        let written = std::fs::read_dir(&dir)
+            .ok()
+            .and_then(|mut d| d.find_map(|e| e.ok().map(|e| e.path())))
+            .ok_or_else(|| fail("no frame decoded".into()))?;
+        std::fs::rename(&written, out)
+            .or_else(|_| std::fs::copy(&written, out).map(|_| ()))
+            .map_err(|e| fail(e.to_string()))
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
 /// Whether libmpv could be loaded (and why not).
 pub fn available() -> Result<(), MediaError> {
     ffi::api()
@@ -479,7 +615,7 @@ mod tests {
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
-        let p = Player::new(None, move |e| {
+        let p = Player::new(None, Scaling::Fill, move |e| {
             let _ = tx.send(e);
         })
         .unwrap();
@@ -501,5 +637,45 @@ mod tests {
             Some(Path::new("/definitely/not/a/file.mp4"))
         );
         drop(p);
+    }
+
+    /// Needs libmpv and ffmpeg (to make a test clip); skipped when either is missing.
+    #[test]
+    fn thumbnail_grabs_a_video_frame() {
+        if available().is_err() {
+            eprintln!("libmpv not available ({:?}); skipping", available());
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("pp6-thumb-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // PP6_TEST_CLIP: a ready-made clip (e.g. under Wine, where ffmpeg isn't on PATH).
+        let given = std::env::var_os("PP6_TEST_CLIP").map(PathBuf::from);
+        let clip = given.clone().unwrap_or_else(|| dir.join("clip.mp4"));
+        let made = given.is_some()
+            || std::process::Command::new("ffmpeg")
+                .args(["-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+                .arg("testsrc=duration=2:size=640x360:rate=10")
+                .args(["-pix_fmt", "yuv420p"])
+                .arg(&clip)
+                .status()
+                .is_ok_and(|s| s.success());
+        if !made {
+            eprintln!("ffmpeg not available; skipping");
+            return;
+        }
+        let out = dir.join("thumb.png");
+        thumbnail(&clip, &out, 256).unwrap();
+        let png = std::fs::read(&out).unwrap();
+        assert_eq!(&png[1..4], b"PNG");
+        // IHDR width/height (big-endian) right after the signature and chunk header.
+        let w = u32::from_be_bytes(png[16..20].try_into().unwrap());
+        let h = u32::from_be_bytes(png[20..24].try_into().unwrap());
+        assert_eq!(w, 256);
+        if given.is_none() {
+            assert_eq!(h, 144, "640×360 clip keeps its shape");
+        }
+        let err = thumbnail(&dir.join("missing.mp4"), &dir.join("x.png"), 256);
+        assert!(err.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -23,7 +23,14 @@ egui_glow = { version = "0.37", features = ["winit"] }
 glow = "0.17"
 glutin = "0.32"
 glutin-winit = "0.5"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "gif",
+    "bmp",
+    "webp",
+    "tiff",
+] }
 media.workspace = true
 pp6core.workspace = true
 pro6.workspace = true

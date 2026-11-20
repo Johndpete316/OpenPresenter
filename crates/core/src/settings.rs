@@ -53,6 +53,29 @@ pub struct OutputSettings {
     pub monitor_name: Option<String>,
     /// Fallback display index when the name isn't found.
     pub monitor_index: Option<usize>,
+    /// Switch the output display to this mode while the output is open
+    /// (`None` = leave the display as Windows has it).
+    pub resolution: Option<Resolution>,
+    /// How background images and videos fill the output.
+    pub media_scaling: MediaScaling,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Resolution {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaScaling {
+    /// Cover the whole output, cropping edges that don't fit (no black bars).
+    #[default]
+    Fill,
+    /// Show the whole picture, black bars where the shapes differ.
+    Fit,
+    /// Stretch to the output's shape.
+    Stretch,
 }
 
 impl Default for OutputSettings {
@@ -61,6 +84,8 @@ impl Default for OutputSettings {
             enabled: true,
             monitor_name: None,
             monitor_index: None,
+            resolution: None,
+            media_scaling: MediaScaling::Fill,
         }
     }
 }
@@ -189,6 +214,20 @@ mod tests {
         );
         assert_eq!(s.keys.prev, KeyBindings::default().prev);
         assert!(s.output.enabled);
+        assert_eq!(s.output.media_scaling, MediaScaling::Fill);
+        let o: Settings = toml::from_str(
+            "[output]\nmedia_scaling = \"fit\"\nresolution = { width = 1920, height = 1200 }\n",
+        )
+        .unwrap();
+        assert_eq!(o.output.media_scaling, MediaScaling::Fit);
+        assert_eq!(
+            o.output.resolution,
+            Some(Resolution {
+                width: 1920,
+                height: 1200
+            })
+        );
+        assert!(toml::to_string_pretty(&o).is_ok());
         let missing = Settings::load(Path::new("/definitely/not/here.toml")).unwrap();
         assert_eq!(missing, Settings::default());
     }

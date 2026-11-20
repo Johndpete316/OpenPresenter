@@ -48,6 +48,10 @@ pub enum UiAction {
     DeletePlaylist(usize),
     /// Output display chosen by description index (see `UiState::monitors`).
     ChooseMonitor(usize),
+    /// Output display mode (`None` = the display's current one).
+    SetResolution(Option<pp6core::Resolution>),
+    /// How background media fills the output.
+    SetMediaScaling(pp6core::MediaScaling),
     /// mpv audio device name; `None` = system default.
     SetAudioDevice(Option<String>),
     RemoveLibraryFolder(usize),
@@ -81,9 +85,13 @@ pub struct UiState {
     pub library: LibraryIndex,
     pub library_status: String,
     pub monitors: Vec<String>,
+    /// Resolutions the output display offers (filled when the output opens).
+    pub output_resolutions: Vec<(u32, u32)>,
     /// Media folders, scanned recursively (see `media_scan`).
     pub media: crate::media_scan::MediaScan,
     pub media_scanning: bool,
+    /// Video/Image tile thumbnails (`None` if the worker couldn't start).
+    pub media_thumbs: Option<crate::media_thumbs::MediaThumbs>,
     pub app_notices: Vec<String>,
     pub audio_devices: Vec<media::AudioDevice>,
     pub settings_open: bool,
@@ -1613,7 +1621,8 @@ fn media_panel(
                         ui.spacing_mut().item_spacing.x = gap;
                         for f in row {
                             let live = show.background_media.as_deref() == Some(f.as_path());
-                            let resp = media_tile(ui, f, Vec2::new(w, h), live);
+                            let resp =
+                                media_tile(ui, st.media_thumbs.as_mut(), f, Vec2::new(w, h), live);
                             if resp.clicked() {
                                 // Pre-load the next file shown so moving on is instant.
                                 let next = shown.get(idx + 1).map(|p| (*p).clone());
@@ -1697,7 +1706,13 @@ fn folder_node(
         });
 }
 
-fn media_tile(ui: &mut egui::Ui, path: &Path, img: Vec2, live: bool) -> egui::Response {
+fn media_tile(
+    ui: &mut egui::Ui,
+    thumbs: Option<&mut crate::media_thumbs::MediaThumbs>,
+    path: &Path,
+    img: Vec2,
+    live: bool,
+) -> egui::Response {
     let bar_h = 16.0;
     let (rect, resp) = ui.allocate_exact_size(img + Vec2::new(0.0, bar_h), Sense::click());
     if !ui.is_rect_visible(rect) {
@@ -1706,18 +1721,42 @@ fn media_tile(ui: &mut egui::Ui, path: &Path, img: Vec2, live: bool) -> egui::Re
     let img_rect = Rect::from_min_size(rect.min, img);
     let p = ui.painter();
     p.rect_filled(img_rect, 0.0, Color32::from_rgb(20, 20, 24));
-    let (glyph, tint) = if is_image(path) {
-        (icon::IMAGE, Color32::from_rgb(90, 150, 220))
+    let image = is_image(path);
+    let tex = thumbs
+        .and_then(|t| t.get(path))
+        .and_then(|r| r.as_ref().ok());
+    if let Some(t) = tex {
+        // Fit inside the tile, centred.
+        let size = t.size_vec2();
+        let s = (img.x / size.x).min(img.y / size.y);
+        let r = Rect::from_center_size(img_rect.center(), size * s);
+        egui::Image::new(t).paint_at(ui, r);
+        if !image {
+            // Small film badge so videos stand out from stills.
+            let badge = Rect::from_min_size(img_rect.min + Vec2::splat(3.0), Vec2::splat(18.0));
+            p.rect_filled(badge, 3.0, Color32::from_black_alpha(170));
+            p.text(
+                badge.center(),
+                Align2::CENTER_CENTER,
+                icon::FILM_STRIP,
+                theme::icon_font(12.0),
+                Color32::from_gray(230),
+            );
+        }
     } else {
-        (icon::FILM_STRIP, Color32::from_rgb(140, 120, 230))
-    };
-    p.text(
-        img_rect.center(),
-        Align2::CENTER_CENTER,
-        glyph,
-        theme::icon_font(28.0),
-        tint,
-    );
+        let (glyph, tint) = if image {
+            (icon::IMAGE, Color32::from_rgb(90, 150, 220))
+        } else {
+            (icon::FILM_STRIP, Color32::from_rgb(140, 120, 230))
+        };
+        p.text(
+            img_rect.center(),
+            Align2::CENTER_CENTER,
+            glyph,
+            theme::icon_font(28.0),
+            tint,
+        );
+    }
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -1815,6 +1854,71 @@ fn settings_general(
                 }
             }
         });
+    let res_label = |r: Option<pp6core::Resolution>| match r {
+        Some(r) => format!("{} × {}", r.width, r.height),
+        None => "Display's current setting".into(),
+    };
+    ui.horizontal(|ui| {
+        ui.label("Resolution");
+        egui::ComboBox::from_id_salt("settings-resolution")
+            .selected_text(res_label(settings.output.resolution))
+            .width(300.0)
+            .show_ui(ui, |ui| {
+                let mut choices: Vec<Option<pp6core::Resolution>> = vec![None];
+                choices.extend(
+                    st.output_resolutions
+                        .iter()
+                        .map(|&(width, height)| Some(pp6core::Resolution { width, height })),
+                );
+                // Keep a saved choice listed even if this display doesn't offer it.
+                if settings.output.resolution.is_some()
+                    && !choices.contains(&settings.output.resolution)
+                {
+                    choices.push(settings.output.resolution);
+                }
+                for c in choices {
+                    if ui
+                        .selectable_label(settings.output.resolution == c, res_label(c))
+                        .clicked()
+                        && settings.output.resolution != c
+                    {
+                        actions.push(UiAction::SetResolution(c));
+                    }
+                }
+            });
+    });
+    if st.output_resolutions.is_empty() {
+        ui.label(
+            RichText::new("Turn the output on to list its display's resolutions.")
+                .small()
+                .weak(),
+        );
+    }
+    ui.horizontal(|ui| {
+        use pp6core::MediaScaling as M;
+        ui.label("Backgrounds");
+        for (m, label, tip) in [
+            (
+                M::Fill,
+                "Fill",
+                "Cover the whole screen; edges that don't fit are cropped.",
+            ),
+            (
+                M::Fit,
+                "Fit",
+                "Show the whole picture; black bars where the shapes differ.",
+            ),
+            (M::Stretch, "Stretch", "Stretch to the screen's shape."),
+        ] {
+            if ui
+                .selectable_label(settings.output.media_scaling == m, label)
+                .on_hover_text(tip)
+                .clicked()
+            {
+                actions.push(UiAction::SetMediaScaling(m));
+            }
+        }
+    });
     ui.separator();
     ui.heading("Audio");
     let label = |d: &media::AudioDevice| {

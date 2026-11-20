@@ -64,6 +64,7 @@ pub enum RenderCmd {
     /// mpv has a new frame (posted from mpv's thread).
     MediaFrame,
     AudioDevice(Option<String>),
+    MediaScaling(media::Scaling),
     /// Read back what's on screen and save it as PNG (verification tool).
     Capture(PathBuf),
     Stop,

@@ -38,6 +38,8 @@ pub struct OutputWindow {
     pub tx: Sender<RenderCmd>,
     thread: Option<JoinHandle<()>>,
     pub monitor_name: String,
+    /// Resolutions the output's display offers (for the settings list).
+    pub resolutions: Vec<(u32, u32)>,
 }
 
 pub fn describe_monitors(event_loop: &ActiveEventLoop) -> Vec<String> {
@@ -98,6 +100,54 @@ fn pick_monitor(
     }
 }
 
+/// Distinct resolutions the display offers, largest first.
+pub fn resolutions(m: &MonitorHandle) -> Vec<(u32, u32)> {
+    let mut v: Vec<(u32, u32)> = m
+        .video_modes()
+        .map(|vm| (vm.size().width, vm.size().height))
+        .collect();
+    v.sort_by_key(|&(w, h)| std::cmp::Reverse((w * h, w)));
+    v.dedup();
+    v
+}
+
+/// Borderless at the display's current mode, or exclusive at `resolution` (the
+/// display's highest refresh rate for it) when one is asked for. A resolution the
+/// display doesn't offer falls back to borderless, logged.
+fn fullscreen_for(monitor: &MonitorHandle, resolution: Option<(u32, u32)>) -> Fullscreen {
+    let Some((w, h)) = resolution else {
+        return Fullscreen::Borderless(Some(monitor.clone()));
+    };
+    if (monitor.size().width, monitor.size().height) == (w, h) {
+        // Already in that mode: borderless avoids a needless mode switch.
+        return Fullscreen::Borderless(Some(monitor.clone()));
+    }
+    match monitor
+        .video_modes()
+        .filter(|vm| (vm.size().width, vm.size().height) == (w, h))
+        .max_by_key(|vm| (vm.refresh_rate_millihertz(), vm.bit_depth()))
+    {
+        Some(vm) => {
+            tracing::info!(
+                width = w,
+                height = h,
+                refresh_mhz = vm.refresh_rate_millihertz(),
+                "output switches display mode"
+            );
+            Fullscreen::Exclusive(vm)
+        }
+        None => {
+            tracing::warn!(
+                width = w,
+                height = h,
+                offered = ?resolutions(monitor),
+                "the output display doesn't offer that resolution; using its current one"
+            );
+            Fullscreen::Borderless(Some(monitor.clone()))
+        }
+    }
+}
+
 impl OutputWindow {
     /// Open a borderless fullscreen output on the chosen display (or a plain window
     /// when `windowed`, for development), set up GL, and start its render thread.
@@ -106,6 +156,8 @@ impl OutputWindow {
         choice: MonitorChoice,
         windowed: Option<(u32, u32)>,
         audio_device: Option<String>,
+        scaling: media::Scaling,
+        resolution: Option<(u32, u32)>,
         events: EventLoopProxy<UserEvent>,
     ) -> Result<OutputWindow, OutputError> {
         let (index, monitor) = pick_monitor(event_loop, &choice)?;
@@ -122,9 +174,10 @@ impl OutputWindow {
                 .with_inner_size(winit::dpi::PhysicalSize::new(w, h))
                 .with_position(monitor.position())
         } else {
-            attrs.with_fullscreen(Some(Fullscreen::Borderless(Some(monitor))))
+            attrs.with_fullscreen(Some(fullscreen_for(&monitor, resolution)))
         };
 
+        let resolutions = resolutions(&monitor);
         let (window, config) = DisplayBuilder::new()
             .with_window_attributes(Some(attrs.clone()))
             .build(event_loop, ConfigTemplateBuilder::new(), |configs| {
@@ -170,6 +223,7 @@ impl OutputWindow {
             height: size.height.max(1),
             self_tx: tx.clone(),
             audio_device,
+            scaling,
         };
         let thread = std::thread::Builder::new()
             .name("output-render".into())
@@ -181,6 +235,7 @@ impl OutputWindow {
             tx,
             thread: Some(thread),
             monitor_name,
+            resolutions,
         })
     }
 
@@ -202,6 +257,11 @@ impl OutputWindow {
         {
             // The render thread panicked: an unrecoverable fault. Re-raise it here.
             std::panic::resume_unwind(panic);
+        }
+        // A changed display mode isn't undone by closing the window: leave fullscreen
+        // first so Windows puts the display back the way it was.
+        if matches!(self.window.fullscreen(), Some(Fullscreen::Exclusive(_))) {
+            self.window.set_fullscreen(None);
         }
         tracing::info!(monitor = %self.monitor_name, "output window closed");
     }

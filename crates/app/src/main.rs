@@ -8,6 +8,7 @@ mod error;
 mod gl;
 mod keys;
 mod media_scan;
+mod media_thumbs;
 mod operator;
 mod output;
 mod raster;
@@ -312,6 +313,16 @@ fn main() -> ExitCode {
             }
         };
 
+    let mpv_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let media_thumbs =
+        match media_thumbs::spawn(paths.thumbs.join("media"), mpv_ready.clone(), proxy.clone()) {
+            Ok(m) => Some(m),
+            Err(e) => {
+                tracing::error!(error = %e, "couldn't start the media thumbnail worker");
+                None
+            }
+        };
+
     if let Some(b) = &args.background {
         core.send(Command::SetBackground {
             media: Some(b.clone()),
@@ -359,6 +370,7 @@ fn main() -> ExitCode {
             playlists_path: paths.playlists.display().to_string(),
             settings_open: args.open_settings,
             edit: ui_state_edit,
+            media_thumbs,
             ..UiState::default()
         },
         show: Arc::new(ShowState::default()),
@@ -373,6 +385,7 @@ fn main() -> ExitCode {
         raster_thread: Some(raster.thread),
         thumbs_tx,
         thumbs_rx,
+        mpv_ready,
         operator: None,
         output: None,
         remote,
@@ -472,6 +485,8 @@ struct App {
     raster_thread: Option<std::thread::JoinHandle<()>>,
     thumbs_tx: Sender<ThumbRequest>,
     thumbs_rx: Receiver<ThumbResult>,
+    /// Set once the output has loaded libmpv (video thumbnails wait for it).
+    mpv_ready: Arc<std::sync::atomic::AtomicBool>,
     operator: Option<OperatorWindow>,
     output: Option<OutputWindow>,
     remote: Option<web::WebRemote>,
@@ -494,6 +509,14 @@ struct App {
     started_once: bool,
     quitting: bool,
     exit_code: ExitCode,
+}
+
+fn media_scaling(s: pp6core::MediaScaling) -> media::Scaling {
+    match s {
+        pp6core::MediaScaling::Fill => media::Scaling::Fill,
+        pp6core::MediaScaling::Fit => media::Scaling::Fit,
+        pp6core::MediaScaling::Stretch => media::Scaling::Stretch,
+    }
 }
 
 impl App {
@@ -534,6 +557,8 @@ impl App {
             self.monitor_choice(),
             windowed,
             self.settings.audio_device.clone(),
+            media_scaling(self.settings.output.media_scaling),
+            self.settings.output.resolution.map(|r| (r.width, r.height)),
             self.proxy.clone(),
         ) {
             Ok(o) => {
@@ -543,6 +568,7 @@ impl App {
                 let (width, height) = o.size();
                 let _ = self.raster_tx.send(RasterCmd::Size { width, height });
                 self.sent_size = Some((width, height));
+                self.ui.output_resolutions = o.resolutions.clone();
                 self.output = Some(o);
             }
             Err(e) => {
@@ -813,6 +839,21 @@ impl App {
                     scan_media(self.settings.media_dirs.clone(), self.proxy.clone());
                 }
             }
+            UiAction::SetMediaScaling(sc) => {
+                self.settings.output.media_scaling = sc;
+                self.save_settings();
+                if let Some(o) = &self.output {
+                    let _ = o.tx.send(RenderCmd::MediaScaling(media_scaling(sc)));
+                }
+            }
+            UiAction::SetResolution(r) => {
+                self.settings.output.resolution = r;
+                self.save_settings();
+                self.disable_output();
+                if self.show.output_enabled {
+                    self.enable_output(el);
+                }
+            }
             UiAction::ChooseMonitor(i) => {
                 let name = el.available_monitors().nth(i).and_then(|m| m.name());
                 self.settings.output.monitor_name = name;
@@ -920,6 +961,9 @@ impl ApplicationHandler<UserEvent> for App {
                 let mut actions = Vec::new();
                 let log = self.crash.ui_log.snapshot();
                 self.ui.receive_thumbs(&op.egui.egui_ctx, &self.thumbs_rx);
+                if let Some(m) = &mut self.ui.media_thumbs {
+                    m.receive(&op.egui.egui_ctx);
+                }
                 self.ui.remote = match &self.remote {
                     Some(r) => ui::RemoteStatus {
                         url: Some(r.url().to_owned()),
@@ -1018,7 +1062,11 @@ impl ApplicationHandler<UserEvent> for App {
                     self.list_audio_devices();
                 }
             }
-            UserEvent::MediaWarm => self.list_audio_devices(),
+            UserEvent::MediaWarm => {
+                self.mpv_ready
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                self.list_audio_devices();
+            }
             UserEvent::RenderFailed { index, message } => {
                 tracing::warn!(slide = index + 1, %message, "slide not shown");
                 self.ui

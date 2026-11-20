@@ -2,8 +2,8 @@
 //! frames as textures, plays background media (mpv) into a framebuffer, and
 //! presents with vsync. Independent of any UI frame timing.
 //!
-//! Draw order: black → background media (canvas area) → slide background colour
-//! (if the slide sets one) → slide text. Background and text layers can each be
+//! Draw order: black → background media (whole output) → slide background colour
+//! (if the slide sets one, whole output) → slide text (canvas fitted, centred). Background and text layers can each be
 //! hidden (Clear Background / Clear Text).
 #![allow(unsafe_code)] // OpenGL calls are inherently unsafe; confined to this module.
 
@@ -17,7 +17,7 @@ use glow::HasContext as _;
 use glutin::context::{NotCurrentContext, NotCurrentGlContext as _, PossiblyCurrentContext};
 use glutin::display::{Display, GlDisplay as _};
 use glutin::surface::{GlSurface as _, Surface, SwapInterval, WindowSurface};
-use render::{PixelRect, SlideFrame};
+use render::SlideFrame;
 use winit::event_loop::EventLoopProxy;
 
 use crate::UserEvent;
@@ -33,6 +33,7 @@ pub struct GlParts {
     /// This thread's own command channel (mpv's "new frame" callback posts to it).
     pub self_tx: Sender<RenderCmd>,
     pub audio_device: Option<String>,
+    pub scaling: media::Scaling,
 }
 
 struct Texture {
@@ -79,6 +80,7 @@ fn run_inner(
         mut height,
         self_tx,
         audio_device,
+        scaling,
     } = parts;
     let ctx: PossiblyCurrentContext = context
         .make_current(&surface)
@@ -89,7 +91,13 @@ fn run_inner(
     let gl =
         unsafe { glow::Context::from_loader_function_cstr(|s| display.get_proc_address(s).cast()) };
     let mut r = Renderer::new(&gl)?;
-    let mut media = MediaLayer::new(display.clone(), self_tx, events.clone(), audio_device);
+    let mut media = MediaLayer::new(
+        display.clone(),
+        self_tx,
+        events.clone(),
+        audio_device,
+        scaling,
+    );
     tracing::info!(
         version = unsafe { gl.get_parameter_string(glow::VERSION) },
         renderer = unsafe { gl.get_parameter_string(glow::RENDERER) },
@@ -189,6 +197,11 @@ fn run_inner(
                 }
             }
             RenderCmd::AudioDevice(d) => media.set_audio_device(d),
+            RenderCmd::MediaScaling(sc) => {
+                media.set_scaling(sc);
+                media.render(&gl, r.media_rect(width, height), true);
+                present(&r, &media, width, height)?;
+            }
             RenderCmd::Resize {
                 width: w,
                 height: h,
@@ -320,30 +333,15 @@ impl Renderer {
         )
     }
 
-    /// The canvas area in GL coordinates (whole surface if nothing is live).
-    fn canvas_rect(f: Option<&SlideFrame>, sw: u32, sh: u32) -> GlRect {
-        match f {
-            Some(f) => {
-                let (ox, oy) = Self::frame_origin(f, sw, sh);
-                let c: PixelRect = f.placement.canvas;
-                GlRect {
-                    x: ox + c.x as i32,
-                    y: oy + (f.height - c.y - c.height) as i32,
-                    w: c.width,
-                    h: c.height,
-                }
-            }
-            None => GlRect {
-                x: 0,
-                y: 0,
-                w: sw,
-                h: sh,
-            },
-        }
-    }
-
+    /// Background media and the slide background colour cover the whole output
+    /// (no bars when the document's canvas is a different shape from the display).
     fn media_rect(&self, sw: u32, sh: u32) -> GlRect {
-        Self::canvas_rect(self.current_frame().map(|f| &**f), sw, sh)
+        GlRect {
+            x: 0,
+            y: 0,
+            w: sw,
+            h: sh,
+        }
     }
 
     /// Upload `frame` unless a texture for `key` already exists.
@@ -429,7 +427,7 @@ impl Renderer {
         }
         let Some(f) = frame else { return };
         if bg_on && let Some(bg) = f.background {
-            let c = Self::canvas_rect(Some(f), sw, sh);
+            let c = self.media_rect(sw, sh);
             let [r, g, b, a] = bg.map(|v| f32::from(v) / 255.0);
             unsafe {
                 gl.enable(glow::SCISSOR_TEST);
@@ -501,6 +499,7 @@ struct MediaLayer {
     self_tx: Sender<RenderCmd>,
     events: EventLoopProxy<UserEvent>,
     audio_device: Option<String>,
+    scaling: media::Scaling,
     players: Vec<media::Player>,
     paths: [Option<PathBuf>; 2],
     active: usize,
@@ -516,12 +515,14 @@ impl MediaLayer {
         self_tx: Sender<RenderCmd>,
         events: EventLoopProxy<UserEvent>,
         audio_device: Option<String>,
+        scaling: media::Scaling,
     ) -> Self {
         MediaLayer {
             display,
             self_tx,
             events,
             audio_device,
+            scaling,
             players: Vec::new(),
             paths: [None, None],
             active: 0,
@@ -550,7 +551,7 @@ impl MediaLayer {
         let started = Instant::now();
         for _ in 0..2 {
             let ev = self.events.clone();
-            let player = media::Player::new(self.audio_device.as_deref(), move |e| {
+            let player = media::Player::new(self.audio_device.as_deref(), self.scaling, move |e| {
                 if let media::MediaEvent::Failed(err) = e {
                     let _ = ev.send_event(UserEvent::MediaFailed(err.user_message()));
                 }
@@ -652,6 +653,15 @@ impl MediaLayer {
         if let Err(e) = result {
             self.report(&e);
         }
+    }
+
+    fn set_scaling(&mut self, sc: media::Scaling) {
+        for p in &self.players {
+            if let Err(e) = p.set_scaling(sc) {
+                self.report(&e);
+            }
+        }
+        self.scaling = sc;
     }
 
     fn set_audio_device(&mut self, d: Option<String>) {
