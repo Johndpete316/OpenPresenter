@@ -1,0 +1,159 @@
+---
+source: crates/pp6tool/src/report.rs
+expression: "render_text(&r, \"fixtures\")"
+---
+pp6tool report: fixtures
+9 file(s): 3 OK, 6 failed
+
+FILES
+  FAIL  invalid/bad_base64.pro6
+        'bad_base64.pro6' couldn't be opened: the text of slide 1 in group 1 is corrupted. The file was skipped; other files are unaffected.
+        detail: `RTFData` payload is not valid base64: Invalid symbol 64, offset 0. (at RVPresentationDocument/array[groups]/RVSlideGrouping[0]/array[slides]/RVDisplaySlide[0]/array[displayElements]/RVTextElement[0]/NSString[RTFData])
+  FAIL  invalid/bad_rect.pro6
+        'bad_rect.pro6' couldn't be opened: slide 1 in group 1 has invalid layout data. The file was skipped; other files are unaffected.
+        detail: element position "{1 2 3}" is not a valid RVRect3D `{x y z w h}` (at RVPresentationDocument/array[groups]/RVSlideGrouping[0]/array[slides]/RVDisplaySlide[0]/array[displayElements]/RVTextElement[0]/RVRect3D[position])
+  FAIL  invalid/missing_canvas.pro6
+        'missing_canvas.pro6' couldn't be opened: it doesn't say what size its slides are (no canvas `width`). The file was skipped; other files are unaffected.
+        detail: required attribute `width` is missing (at RVPresentationDocument)
+  FAIL  invalid/truncated.pro6
+        'truncated.pro6' couldn't be opened: the file is damaged or incomplete near line 11. The file was skipped; other files are unaffected.
+        detail: malformed XML at line 11, column 1: file ends before these elements are closed: RVPresentationDocument > array > RVSlideGrouping > array > RVDisplaySlide > array > RVTextElement (at RVPresentationDocument/array[groups]/RVSlideGrouping[0]/array[slides]/RVDisplaySlide[0]/array[displayElements]/RVTextElement[0])
+  FAIL  invalid/unbalanced_rtf.pro6
+        'unbalanced_rtf.pro6' couldn't be opened: the text of slide 1 in group 1 is corrupted. The file was skipped; other files are unaffected.
+        detail: RTF text is malformed: text ends with 1 unclosed group(s) (byte 55) (at RVPresentationDocument/array[groups]/RVSlideGrouping[0]/array[slides]/RVDisplaySlide[0]/array[displayElements]/RVTextElement[0])
+  FAIL  invalid/wrong_root.pro6
+        'wrong_root.pro6' couldn't be opened: it isn't a ProPresenter 6 presentation. The file was skipped; other files are unaffected.
+        detail: root element is <RVPlaylistDocument>, expected <RVPresentationDocument> (at RVPlaylistDocument)
+  OK    song_1024x768.pro6  1024x768  3 group(s), 5 slide(s), 1 disabled
+  OK    two_fonts_1920x1080.pro6  1920x1080  2 group(s), 2 slide(s), 0 disabled
+  OK    unknowns.pro6  1024x768  1 group(s), 1 slide(s), 0 disabled, 3 warning(s)
+
+CANVAS SIZES (files)
+  1024x768  2
+  1920x1080  1
+
+FONTS (files / runs) — every one must be installed on the show PC
+  Arial  3 / 15
+  Georgia  1 / 1
+
+GROUP NAMES (count; colours)
+  (unnamed)  1; [1 1 1 0]
+  Announcements  1; [1 0.6 0 1]
+  Chorus  1; [1 0.2 0.2 1]
+  Ref  1; [0.6 0.3 0.9 1]
+  Verse 1  1; [0.2 0.4 1 1]
+  Verse 2  1; [0.2 0.8 0.3 1]
+
+ELEMENTS AND ATTRIBUTES (count; * = not in spec; includes files that failed after XML parsing)
+  <NSColor>  7
+      @rvXMLDictionaryKey  7
+  <NSNumber>  7
+      @rvXMLDictionaryKey  7
+  <NSString>  23
+      @rvXMLIvarName  22
+  <RVDisplaySlide>  12
+      @UUID  12
+      @backgroundColor  8
+      @chordChartPath  8
+      @drawingBackgroundColor  8
+      @enabled  12
+      @highlightColor  8
+      @hotKey  8
+      @label  8
+      @notes  8
+  <RVPlaylistDocument>  1  *
+      @versionNumber  1  *
+  <RVPresentationDocument>  7
+      @CCLIDisplay  3
+      @CCLISongTitle  3
+      @backgroundColor  3
+      @buildNumber  3
+      @category  3
+      @chordChartPath  3
+      @docType  3
+      @drawingBackgroundColor  3
+      @futureRootAttr  1  *
+      @height  6
+      @lastDateUsed  3
+      @notes  3
+      @os  3
+      @resourcesDirectory  3
+      @selectedArrangementID  3
+      @usedCount  3
+      @versionNumber  7
+      @width  6
+  <RVRect3D>  12
+      @rvXMLIvarName  12
+  <RVSlideGrouping>  10
+      @color  10
+      @futureGroupAttr  1  *
+      @name  10
+      @uuid  10
+  <RVTextElement>  12
+      @UUID  12
+      @adjustsHeightToFit  8
+      @bezelRadius  8
+      @displayDelay  8
+      @displayName  12
+      @drawingFill  8
+      @drawingShadow  8
+      @drawingStroke  8
+      @fillColor  8
+      @fromTemplate  8
+      @futureTextAttr  1  *
+      @locked  8
+      @opacity  8
+      @persistent  8
+      @revealType  8
+      @rotation  8
+      @source  8
+      @typeID  8
+      @verticalAlignment  8
+  <RVTimeline>  3
+      @duration  3
+      @loop  3
+      @rvXMLIvarName  3
+      @selectedMediaTrackIndex  3
+      @timeOffset  3
+  <SyntheticArrangement>  1  *
+      @color  1  *
+      @name  1  *
+      @uuid  1  *
+  <SyntheticChild>  1  *
+      @rvXMLIvarName  1  *
+  <SyntheticGroupLike>  1  *
+      @name  1  *
+  <SyntheticImageElement>  1  *
+      @UUID  1  *
+      @source  1  *
+  <SyntheticMediaCue>  1  *
+      @UUID  1  *
+      @source  1  *
+  <SyntheticMediaTrack>  1  *
+      @path  1  *
+  <SyntheticRootChild>  1  *
+  <SyntheticTimeCue>  1  *
+      @slideUUID  1  *
+      @timeStamp  1  *
+  <array>  48
+      @rvXMLIvarName  48
+  <dictionary>  7
+      @rvXMLIvarName  7
+  <shadow>  7
+      @rvXMLIvarName  7
+
+UNHANDLED RTF CONTROL WORDS (count)
+  \cocoartf  2
+  \cocoasubrtf  2
+  \pardirnatural  1
+  \tx  1
+
+FILES WITH MEDIA / CUES (not supported until M8)
+  unknowns.pro6  slide cues 1, timeCues 1, mediaTracks 1
+
+DISABLED SLIDES: 1
+
+WARNINGS
+  unknowns.pro6: RVPresentationDocument/array[groups]: unexpected <SyntheticGroupLike> in array (expected <RVSlideGrouping>), kept as raw XML
+  unknowns.pro6: RVPresentationDocument/array[groups]/RVSlideGrouping[0]/array[slides]/RVDisplaySlide[0]/array[displayElements]/SyntheticImageElement[0]: display element <SyntheticImageElement> not modelled yet, kept as raw XML
+  unknowns.pro6: RVPresentationDocument: unmodelled child <SyntheticRootChild> kept as raw XML
