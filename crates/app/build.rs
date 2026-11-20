@@ -1,5 +1,5 @@
 //! Stamps the build with the git commit, so the log, crash reports and Settings say
-//! exactly which build is installed.
+//! exactly which build is installed. On Windows, also embeds the program icon.
 
 fn main() {
     let commit = std::process::Command::new("git")
@@ -14,4 +14,15 @@ fn main() {
     println!("cargo:rustc-env=PP6_BUILD={commit}");
     println!("cargo:rerun-if-changed=../../.git/HEAD");
     println!("cargo:rerun-if-changed=../../.git/index");
+
+    // Icon resource (ID 1): Explorer, the taskbar and the windows use it.
+    // Cross-compiling from Linux needs `llvm-rc`.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rerun-if-changed=assets/pp6.ico");
+        if let Err(e) = embed_resource::compile_for("assets/pp6.rc", ["pp6"], embed_resource::NONE)
+            .manifest_required()
+        {
+            panic!("couldn't embed the program icon: {e}");
+        }
+    }
 }

@@ -36,6 +36,7 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\pp6.exe
+SetupIconFile=..\crates\app\assets\pp6.ico
 ; If pp6 is running, the installer offers to close it (Restart Manager).
 CloseApplications=yes
 RestartApplications=no

@@ -27,3 +27,8 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+- `pp6.svg`: the program icon (original, part of this project). `pp6.ico` (16–256 px) and
+  `pp6-64.png` are rendered from it:
+  `rsvg-convert -w N -h N pp6.svg` per size, then packed into the `.ico` with Pillow.
+  `pp6.rc` embeds the `.ico` in `pp6.exe` (see `build.rs`); the installer uses it too.

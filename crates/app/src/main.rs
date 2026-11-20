@@ -146,6 +146,45 @@ fn parse_size(s: &str) -> Result<(u32, u32), String> {
 /// Version and the git commit it was built from, e.g. "0.1.0 (851e7e5)".
 pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("PP6_BUILD"), ")");
 
+/// Give a window the PP6 icon (title bar, taskbar, Alt-Tab). A missing icon is cosmetic:
+/// logged, never fatal.
+pub fn with_icon(attrs: winit::window::WindowAttributes) -> winit::window::WindowAttributes {
+    #[cfg(windows)]
+    {
+        use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
+        use winit::window::Icon;
+        // Resource 1 is the multi-size icon embedded by build.rs.
+        let small = Icon::from_resource(1, None);
+        let big = Icon::from_resource(1, Some(winit::dpi::PhysicalSize::new(64, 64)));
+        match (small, big) {
+            (Ok(small), Ok(big)) => attrs
+                .with_window_icon(Some(small))
+                .with_taskbar_icon(Some(big)),
+            (Err(e), _) | (_, Err(e)) => {
+                tracing::warn!(error = %e, "program icon couldn't be loaded");
+                attrs
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let icon = image::load_from_memory(include_bytes!("../assets/pp6-64.png"))
+            .map_err(|e| e.to_string())
+            .and_then(|img| {
+                let img = img.into_rgba8();
+                let (w, h) = img.dimensions();
+                winit::window::Icon::from_rgba(img.into_raw(), w, h).map_err(|e| e.to_string())
+            });
+        match icon {
+            Ok(icon) => attrs.with_window_icon(Some(icon)),
+            Err(e) => {
+                tracing::warn!(error = %e, "program icon couldn't be loaded");
+                attrs
+            }
+        }
+    }
+}
+
 struct Paths {
     settings: PathBuf,
     logs: PathBuf,
