@@ -106,18 +106,27 @@ pp6/
 - **M3 architecture note:** winit allows one event loop per process, and `eframe` takes it. The output window must share the operator UI's event loop, so M3 should use `egui-winit` + `egui_glow` directly instead of `eframe`. The output's GL still runs on its own thread. glow is pinned to 0.17 to match `egui_glow` 0.37. **Confirm with John before M3.**
 
 ### M3 — Core + Operator MVP
-- [ ] `core`: `ShowState`, `Command`, broadcast channel, crash-restore state file
-- [ ] Logging + panic hook + crash report wired in
-- [ ] Library index cache (path, title, mtime, search tokens); background revalidation; full parse only on open
-- [ ] egui operator UI per layout: toolbar, Preview, Library selector/search, Playlist, Presentation grid, Media bin
-- [ ] Presentation grid shows slides under group headers with PP6 group name + colour; arrangement order when one is selected
-- [ ] Arrangement picker in operator view: lists the presentation's arrangements, defaults to `selectedArrangementID`, switchable live without leaving the current slide
-- [ ] Disabled slides shown greyed out in the grid; skipped by `Next`/`Prev` from every source (UI, clicker, web); still clickable directly
-- [ ] Separate clear layers: Clear Text, Clear Background, Clear All as toolbar buttons with their own configurable key bindings
-- [ ] Background thumbnail generation + cache
-- [ ] Clicker / keyboard: configurable bindings (default PageDown/PageUp/arrows/Clear), work whether operator or output window has focus
-- [ ] Native playlists: simple file of presentation paths + arrangement ID; pre-parse the next item
+- [x] `core`: `ShowState`, `Command`, broadcast channel, crash-restore state file
+- [x] Logging + panic hook + crash report wired in
+- [x] Library index cache (path, title, mtime, search tokens); background revalidation; full parse only on open
+- [x] egui operator UI per layout: toolbar, Preview, Library selector/search, Playlist, Presentation grid, Media bin
+- [x] Presentation grid shows slides under group headers with PP6 group name + colour; arrangement order when one is selected
+- [x] Arrangement picker in operator view: lists the presentation's arrangements, defaults to `selectedArrangementID`, switchable live without leaving the current slide
+- [x] Disabled slides shown greyed out in the grid; skipped by `Next`/`Prev` from every source (UI, clicker, web); still clickable directly
+- [x] Separate clear layers: Clear Text, Clear Background, Clear All as toolbar buttons with their own configurable key bindings
+- [x] Background thumbnail generation + cache
+- [x] Clicker / keyboard: configurable bindings (default PageDown/PageUp/arrows/Clear), work whether operator or output window has focus
+- [x] Native playlists: simple file of presentation paths + arrangement ID; pre-parse the next item
 - **Accept:** can run a service from fixtures on Windows with a clicker.
+- **Status (2026-11-20):** everything is built; core behaviour is covered by tests, and the UI was checked with `--capture-ui` screenshots on Linux. **Still to do for acceptance:** a Windows run with a real clicker. Notes:
+  - Operator UI uses `egui-winit` + `egui_glow` (not `eframe`), as agreed.
+  - Core crate is `crates/core`, package `pp6core` (`core` clashes with Rust's built-in crate).
+  - The library index cache is JSON, not bincode: `bincode` 3.0.0 is a deprecation release.
+  - Key bindings are configured in `settings.toml` (`[keys]`); there's no in-app editor.
+  - Next at the last slide stays put; it doesn't jump to the next playlist item. **Ask John** whether it should.
+  - Triggering a slide brings back cleared text, but a cleared background stays cleared.
+  - Relaunch restores the live slide only if the restore file is < 6 h old.
+  - Data folders: settings in the per-user config dir; logs, restore file and caches in the per-user data and cache dirs (`directories` crate; `--data-dir` overrides).
 
 ### M4 — Bulk Resolution Tool
 - [ ] `pp6tool rescale --to 1024x768 <files|dir>`
@@ -189,6 +198,8 @@ Track findings here as real files arrive. "M0:" notes say how the parser current
 - [ ] Text overflow beyond the element box (`adjustsHeightToFit`, shrink-to-fit?). M2: draws past the box (clipped to canvas) with a warning.
 - [ ] `drawingBackgroundColor` semantics (slide vs document). M2: slide colour if the slide's flag is true, else the document's if its flag is true, else black.
 - [ ] Shadow, stroke (outline), rotation, underline, and fill corner radius: not drawn in M2 (each produces a render warning).
+- [ ] Arrangement XML structure. M3 reads `uuid`/`name`/`color` plus NSString group UUIDs below each arrangement (tolerant, read-only); verify with a real file.
+- [ ] Next/Prev at the end of a presentation: stay put (current) or move to the next playlist item? **Ask John.**
 - [ ] Characters missing from the slide's font: cosmic-text draws them from another font. M2 reports a warning; decide whether that is acceptable or should be an error.
 
 ## Required Tooling

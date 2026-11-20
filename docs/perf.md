@@ -28,6 +28,17 @@ font) with `--fonts fixtures/fonts`. **Windowed** (not fullscreen), 3 runs of `-
 | 2026-11-20 | M2 release | Linux / RTX 3080 / Wayland | Raster 1920×1080 slide | mean 7.2–10.3 ms, max 9.2–18.8 ms | hidden by neighbour pre-rendering |
 | 2026-11-20 | M2 release | Linux / RTX 3080 / Wayland | Font loading | 9–13 ms | 1001 faces, fontconfig cache warm |
 
+## M3 (2026-11-20): through the core, with the operator UI
+
+Same machine and fixture; `pp6 --open … --windowed-output --bench 30 --bench-interval-ms 100`,
+3 runs. Commands now go key/UI → core actor → raster worker (subscribed to the core directly) →
+output render thread. The operator window (egui) runs on the event-loop thread at the same time.
+
+| Date | Build | Machine | Metric | Value | Notes |
+|---|---|---|---|---|---|
+| 2026-11-20 | M3 release | Linux / RTX 3080 / Wayland | Cold start | 147–169 ms | operator window + output window + core + font load |
+| 2026-11-20 | M3 release | Linux / RTX 3080 / Wayland | Slide change (cached) | median 0.59–0.68 ms, p95 0.72–0.78 ms, max 0.73–0.84 ms | command sent → buffer swap |
+
 **Not yet measured:** Windows (the production host), fullscreen on a second display, and real
 `.pro6` files. The Windows numbers matter most. Fonts load differently there, and on a library
 PC with hundreds of fonts installed, font loading may dominate cold start.
