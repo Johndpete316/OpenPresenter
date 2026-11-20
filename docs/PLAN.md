@@ -182,32 +182,33 @@ pp6/
 
 ### M8 — Announcements: Media Cues + Looping / Auto-Advance
 Only the Announcements presentation uses these.
-- [ ] Reverse-engineer slide cues, `timeCues`, and media tracks from the real Announcements file
-- [ ] Find where per-slide timing lives (timeline cues vs slide cues) and model it
-- [ ] Auto-advance: core-owned timer advances slides per the stored timing; skips disabled slides
-- [ ] Loop: honour `RVTimeline.loop` — wrap from last enabled slide to first
-- [ ] Operator controls: Start/Stop loop button + indicator showing loop is running and time to next slide
-- [ ] Timer runs on the core actor, not the UI thread; a UI stall must not delay an advance
-- [ ] While looping (decided by John): Next/Prev step as usual and restart the timer for the slide they land on; any Clear (Text/Background/All) clears and **stops the loop**
-- [ ] While looping (decided by John): selecting/opening another presentation does **not** stop the loop
-- [ ] Loop-running indicator **near the Preview pane** (John), with time to the next slide
-- [ ] Putting a *different* presentation live **stops the loop** (John: no pausing)
-- [ ] Until supported: load the presentation with text and a non-fatal "media cues / auto-advance not supported yet" warning
+- [x] Reverse-engineer slide cues, `timeCues`, and media tracks from the real Announcements file
+- [x] Find where per-slide timing lives (timeline cues vs slide cues) and model it
+- [x] Auto-advance: core-owned timer advances slides per the stored timing; skips disabled slides
+- [x] Loop: **verified mechanism is `loopToBeginning="true"` on the last slide's timer** (not `RVTimeline.loop`, which is `false` in the real file). After that slide it wraps to the first enabled slide.
+- [x] Operator controls: Start/Stop loop button + indicator showing loop is running and time to next slide
+- [x] Timer runs on the core actor, not the UI thread; a UI stall must not delay an advance
+- [x] While looping (decided by John): Next/Prev step as usual and restart the timer for the slide they land on; any Clear (Text/Background/All) clears and **stops the loop**
+- [x] While looping (decided by John): selecting/opening another presentation does **not** stop the loop
+- [x] Loop-running indicator **near the Preview pane** (John), with time to the next slide
+- [x] Putting a *different* presentation live **stops the loop** (John: no pausing)
+- [x] Until supported: load the presentation with text and a non-fatal "media cues / auto-advance not supported yet" warning
 - **Accept:** Announcements file loops on its own with the same timing as PP6.
+- **Status (2026-11-20):** built against the **verified** format from `AA001 Welcome.pro6`. Each slide's `RVSlideTimerCue` gives its time, and `loopToBeginning` on the last slide loops back. The timer runs on the core thread. Like PP6, putting a timed presentation live starts it. John's rules apply: Next/Prev restart the timer; any Clear stops it (it stays stopped until Start loop or the presentation is put live again); selecting elsewhere keeps it; another presentation live stops it. Without a loop-back slide it stops at the end. The UI shows LOOP RUNNING + countdown + Stop near Preview. Timing tests run in real time. **Still to do for acceptance:** run the Welcome file on the Windows PC next to PP6 and compare timing (needs Bookman Old Style installed). **Confirm with John:** auto-start when a timed presentation goes live (PP6 behaviour), and that it stays stopped after Clear until Start loop.
 
 ## Unknowns to Verify
 Track findings here as real files arrive. "M0:" notes say how the parser currently handles each one. None are verified against a real file yet.
-- [ ] Canvas size attribute names on `RVPresentationDocument`. M0: spec says `width`/`height`; parser requires both and errors if missing.
-- [ ] Actual canvas sizes in the library (expected mostly 1024×768). M0: `pp6tool report` counts them.
+- [x] Canvas size attribute names on `RVPresentationDocument`. **Verified (real files):** `width`/`height`.
+- [x] Actual canvas sizes in the library. **Real files: all 1024×768** (3 of 3 so far).
 - [ ] RTF `\fs` → canvas pixel conversion matches PP6 (side-by-side screenshot diff)
-- [ ] Arrangement structure; whether arrangements reference groups by UUID. M0: `arrangements` kept raw; report lists its element names.
+- [x] Arrangement structure. **Verified:** `<RVSongArrangement name uuid color><array rvXMLIvarName="groupIDs"><NSString>group-uuid</NSString>…`, referencing groups by UUID.
 - [ ] Whether PP6 on Windows uses stale `WinFlowData`/`WinFontData` over `RTFData` after edits
-- [ ] `RVRect3D` field order (`{x y z w h}` assumed). M0: parsed with that assumption; malformed → `BadRect`.
+- [x] `RVRect3D` field order. **Verified:** `{x y z w h}` (`{20 20 0 984 728}` = 20 px margin on 1024×768).
 - [ ] Shadow string field meanings. M0: assumed `blur|r g b a|{x, y}`; raw fields always kept; mismatch → warning.
-- [ ] Media cue / timeline structure (Announcements only). M0: `cues`, `timeCues`, `mediaTracks` kept raw; report lists files using them.
-- [ ] Where per-slide auto-advance durations are stored
+- [ ] Media cue / timeline structure. The Welcome file has only slide timers, no media cues and empty `timeCues`/`mediaTracks`; a file with real media cues is still needed.
+- [x] Where per-slide auto-advance durations are stored. **Verified:** `RVSlideTimerCue` in each slide's `cues` (`duration` s, `actionType="9"` "Go to Next", `loopToBeginning="true"` on the last slide); the timeline is empty.
 - [x] Behaviour when the operator presses Next/Prev/Clear while a loop is running. **John:** Next/Prev do what they normally do and restart the timer for the slide they land on. Clear clears the current slide and stops the loop. Selecting another presentation does **not** stop the loop (John). Putting a different presentation live stops the loop (John).
-- [ ] Arrangement element structure and how `selectedArrangementID` maps to it. M0: `selectedArrangementID` read as a string.
+- [x] Arrangement element structure and `selectedArrangementID`. **Verified:** it holds the `uuid` of one `RVSongArrangement`.
 - [ ] XML syntax for named children: `<array rvXMLIvarName="…">`, `<NSString rvXMLIvarName="…">`, `rvXMLDictionaryKey` (assumed, not shown in spec). M0: matched on element name + ivar; mismatch → kept raw + warning.
 - [ ] Base64 payload line wrapping/whitespace. M0: whitespace stripped before decode; original text kept.
 - [ ] PP6 RTF flavour on Windows (Cocoa `\cocoartf` vs Windows-style font table), and whether text effects (`\outl`, `\strokewidth`, `\shad`) appear. M0: both flavours parse; report lists unhandled control words.
@@ -225,9 +226,19 @@ Track findings here as real files arrive. "M0:" notes say how the parser current
 - [ ] Shadow, stroke (outline), rotation, underline, and fill corner radius: not drawn in M2 (each produces a render warning).
 - [ ] How PP6 layers slide background colour vs background media, and its media scaling (fit/fill). M5: media under an optional slide colour; media fits the canvas area.
 - [ ] Does PP6 accept files edited here: new slides/groups (fresh UUIDs, no Win payloads), regenerated RTF, and arrangements written in the assumed structure?
-- [ ] Arrangement XML structure. M3 reads `uuid`/`name`/`color` plus NSString group UUIDs below each arrangement (tolerant, read-only); verify with a real file.
+- [x] Arrangement XML structure. **Verified** (see above); the M3/M7 assumption was right.
 - [x] Next/Prev at the end of a presentation. **John:** Next moves to the next playlist item (implemented). Prev at the first slide stays put; not specified, so not changed.
 - [ ] Characters missing from the slide's font: cosmic-text draws them from another font. M2 reports a warning; decide whether that is acceptable or should be an error.
+
+### Found in real files (2026-11-20, `pp6-examples/`: Welcome, two hymns)
+- [ ] **`WinFlowData` is a WPF `FlowDocument`** (XAML: paragraphs, runs, `FontFamily`, `FontSize`, `Foreground`), and **`WinFontData` is an `RVFont` XML** (kerning, line spacing, outline colour). PP6 for Windows may render from these rather than RTF, so dropping them on edit (M1/M7) **must be checked in PP6**. Alternative: regenerate `WinFlowData` from the edited text.
+- [x] `\fs` → size: `\fs108` in RTF = `FontSize="54"` in `WinFlowData`, which supports half-points ÷ 2 = canvas px. Still confirm visually.
+- [ ] RTF is Windows-flavoured (`\prortf1`, `\htmautsp`, `\loch\hich\dbch`, `\ltrch`) with paragraph sizes (`\li \fi \sa \sb`, all 0 so far) and **text outlines** (`\outl \strokewidth \strokec`, 87 runs); outlines aren't drawn yet.
+- [x] `\rquote` etc. were dropped; now decoded.
+- [ ] `RVSlideTimerCue@delayTime` (0 in all samples): meaning unknown; reported if non-zero, not applied.
+- [ ] `RVImageElement` (images on slides; `source` is a URL-encoded Windows path) and `RVTransition` (document transition): kept as raw XML, not drawn or used yet.
+- [ ] Shadow `n|r g b a|{x, y}`: first field was 0 with an offset of {4.95, -4.95}; probably blur radius, unverified.
+- [ ] Group colours are written with 15 decimals (`0.498039215686275`); preserved exactly.
 
 ## Required Tooling
 ### Dev Machine (CachyOS / Arch)

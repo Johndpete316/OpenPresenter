@@ -97,6 +97,17 @@ Work on **copies** of real presentations.
    - group names and colours are right, and the new arrangement appears and plays in order.
 5. Also run `pp6tool roundtrip` on the folder: saved files must parse and be stable.
 
+## M8: Welcome / announcements loop
+
+1. Install **Bookman Old Style** (all three sample files use it).
+2. Put `AA001 Welcome.pro6` live (click its first slide). The loop starts on its own, as in
+   PP6, and the Preview pane shows **LOOP RUNNING · next slide in N s**.
+3. Check the timing against PP6: 10 s per slide (one slide 7 s), the disabled slide skipped, and
+   after the last slide it goes back to the first.
+4. Next/Prev during the loop: step, and the countdown restarts for that slide.
+5. Clear (any): the loop stops and stays stopped (Next won't restart it); **Start loop** resumes.
+6. Select a song in the library: the loop keeps running. Put a song live: the loop stops.
+
 ## Known issues on the Linux dev machine (not the app)
 
 `mpv` and `ffmpeg` there currently fail to start (`libsndio.so.7` / `libjxl.so.0.12` missing
