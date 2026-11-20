@@ -28,6 +28,18 @@ pub enum UiAction {
     SetAudioDevice(Option<String>),
     RemoveLibraryFolder(usize),
     RemoveMediaFolder(usize),
+    /// New phone-remote PIN (logs all phones out).
+    NewPin,
+    /// Turn the phone remote on/off (saved).
+    RemoteEnabled(bool),
+}
+
+/// Phone remote status shown in the UI (refreshed by the app each frame).
+#[derive(Default)]
+pub struct RemoteStatus {
+    pub url: Option<String>,
+    pub pin: String,
+    pub clients: usize,
 }
 
 #[derive(Default)]
@@ -41,6 +53,7 @@ pub struct UiState {
     pub audio_devices: Vec<media::AudioDevice>,
     pub settings_open: bool,
     pub settings_path: String,
+    pub remote: RemoteStatus,
     pub(crate) textures: HashMap<ThumbKey, Result<TextureHandle, String>>,
     pub(crate) requested: HashSet<ThumbKey>,
 }
@@ -208,6 +221,34 @@ fn toolbar(
                 });
             if ui.button("Settings").clicked() {
                 st.settings_open = !st.settings_open;
+            }
+            ui.separator();
+            match &st.remote.url {
+                Some(url) => {
+                    ui.label(RichText::new(format!("Phone: {url}")).small());
+                    ui.label(
+                        RichText::new(format!("PIN {}", st.remote.pin))
+                            .strong()
+                            .monospace(),
+                    );
+                    if ui
+                        .small_button("New PIN")
+                        .on_hover_text("Logs out every phone")
+                        .clicked()
+                    {
+                        actions.push(UiAction::NewPin);
+                    }
+                    if st.remote.clients > 0 {
+                        ui.label(
+                            RichText::new(format!("{} connected", st.remote.clients))
+                                .small()
+                                .weak(),
+                        );
+                    }
+                }
+                None => {
+                    ui.label(RichText::new("Phone remote off").small().weak());
+                }
             }
             ui.separator();
             match &show.live {
@@ -714,6 +755,29 @@ fn settings_window(
                         .weak(),
                 );
             }
+            ui.separator();
+            ui.heading("Phone remote");
+            let mut remote_on = settings.web.enabled;
+            if ui.checkbox(&mut remote_on, "Enabled").changed() {
+                actions.push(UiAction::RemoteEnabled(remote_on));
+            }
+            match &st.remote.url {
+                Some(url) => {
+                    ui.label(format!("Open {url} on a phone on the same network and enter PIN {}.", st.remote.pin));
+                }
+                None if settings.web.enabled => {
+                    ui.label(RichText::new("Not running (see messages).").small());
+                }
+                None => {}
+            }
+            ui.label(
+                RichText::new(format!(
+                    "Port {} and PIN length are in [web] in settings.toml. On first start Windows asks to allow network access; allow it on private networks.",
+                    settings.web.port
+                ))
+                .small()
+                .weak(),
+            );
             ui.separator();
             ui.heading("Folders");
             ui.label("Library (.pro6):");

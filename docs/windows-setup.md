@@ -69,6 +69,20 @@ pp6.exe --open "C:\path\to\song.pro6" --monitor 1
 4. Clear Background (F2) removes the video; Clear Text (F3) leaves it playing.
 5. Click another media file: the one after the current file is pre-loaded, so it switches instantly.
 
+## M6: phone remote
+
+1. Start `pp6.exe`. The toolbar shows **Phone: http://192.168.x.y:8686  PIN 1234**.
+2. **Windows Firewall** asks on first start whether PP6 may use the network. Allow it on
+   **private** networks. If you missed the prompt: Windows Security → Firewall → Allow an app →
+   PP6 (private), or open TCP port 8686.
+3. On a phone on the same Wi-Fi, open that address and enter the PIN. Next / Prev / Clear
+   control the slides (Clear = Clear All). The page shows the current and next slide text and
+   updates live.
+4. Enter a wrong PIN: rejected. Five wrong PINs lock that phone out for 30 s, then longer.
+5. **New PIN** in the toolbar logs every phone out.
+6. Settings: `[web]` in `settings.toml` (`enabled`, `port`, `bind`, `pin_length` 4–6). The server
+   listens on the PC's LAN address only (not all interfaces) unless `bind` says otherwise.
+
 ## Known issues on the Linux dev machine (not the app)
 
 `mpv` and `ffmpeg` there currently fail to start (`libsndio.so.7` / `libjxl.so.0.12` missing

@@ -1,0 +1,28 @@
+[package]
+name = "web"
+description = "Phone remote: axum server with PIN login, WebSocket state push, same Commands as the clicker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pro6.workspace = true
+pp6core.workspace = true
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt", "net", "sync", "time", "macros"] }
+getrandom = "0.4"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tracing = "0.1.44"
+crossbeam-channel = "0.5.17"
+futures-util = "0.3"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util"] }
+tokio-tungstenite = "0.30"
+tower = { version = "0.5", features = ["util"] }

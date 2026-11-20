@@ -19,8 +19,8 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      # render tests use only the bundled fixture fonts, so they need no system fonts.
-      - run: cargo nextest run -p pro6 -p render -p pp6tool
+      # render tests use only the bundled fixture fonts; media tests skip when libmpv is absent.
+      - run: cargo nextest run -p pro6 -p pp6core -p render -p media -p web -p pp6tool
 
   windows:
     runs-on: windows-latest

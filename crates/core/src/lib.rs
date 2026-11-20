@@ -18,7 +18,7 @@ pub use command::Command;
 pub use order::{SlideRef, find_nearest, next_enabled, prev_enabled, slide_order};
 pub use playlist::{Playlist, PlaylistError, PlaylistItem};
 pub use restore::{LiveRestore, RestoreState};
-pub use settings::{KeyBindings, OutputSettings, Settings, SettingsError};
+pub use settings::{KeyBindings, OutputSettings, Settings, SettingsError, WebSettings};
 pub use state::{Live, Notice, NoticeLevel, ShowState};
 
 /// Write a file atomically: temp file in the same folder, flush to disk, rename.

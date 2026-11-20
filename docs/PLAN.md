@@ -154,12 +154,16 @@ pp6/
   - CI doesn't bundle `mpv-2.dll` (it isn't vendored); add it next to the exe when installing.
 
 ### M6 — Web Remote
-- [ ] axum on its own tokio thread, bound to LAN interface
-- [ ] PIN: 4–6 digits generated at launch, shown in UI, regenerate button; correct PIN → session cookie; rate-limit failures
-- [ ] Static mobile page: current + next slide text; Next / Prev / Clear buttons → same `Command`s (Clear → `ClearAll`)
-- [ ] WebSocket push on state change
-- [ ] Doc note: Windows Firewall prompt on first run
+- [x] axum on its own tokio thread, bound to LAN interface
+- [x] PIN: 4–6 digits generated at launch, shown in UI, regenerate button; correct PIN → session cookie; rate-limit failures
+- [x] Static mobile page: current + next slide text; Next / Prev / Clear buttons → same `Command`s (Clear → `ClearAll`)
+- [x] WebSocket push on state change
+- [x] Doc note: Windows Firewall prompt on first run
 - **Accept:** phone on LAN controls slides; wrong PIN rejected.
+- **Status (2026-11-20):** built and tested on Linux with a real server, HTTP and WebSocket against the real core. Login, wrong PIN (401), lockout (429 + Retry-After), commands, push, logout on a new PIN and unauthenticated WebSocket rejection all pass. The page was checked at phone size in headless Chrome. **Still to do for acceptance:** a phone on the church LAN (see docs/windows-setup.md). Notes:
+  - The page is embedded in the binary (no `tower-http` / static files to deploy).
+  - Binds to the PC's LAN IPv4 (auto-detected) unless `[web] bind` is set; port 8686.
+  - PIN 4 digits by default (4–6 configurable). Five wrong PINs lock that IP out for 30 s, doubling up to 10 min. A new PIN logs out every phone. Sessions are HttpOnly + SameSite=Strict cookies (also blocks cross-site command posts); there's no HTTPS (LAN only).
 
 ### M7 — Editor
 - [ ] Edit slide text, add/remove/reorder slides

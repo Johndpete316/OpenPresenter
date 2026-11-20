@@ -19,6 +19,30 @@ pub struct Settings {
     pub keys: KeyBindings,
     /// mpv audio device name (`None` = system default). Used from M5.
     pub audio_device: Option<String>,
+    pub web: WebSettings,
+}
+
+/// Phone remote.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebSettings {
+    pub enabled: bool,
+    pub port: u16,
+    /// Listen address; `None` = this PC's LAN address.
+    pub bind: Option<String>,
+    /// PIN digits, 4–6.
+    pub pin_length: u8,
+}
+
+impl Default for WebSettings {
+    fn default() -> Self {
+        WebSettings {
+            enabled: true,
+            port: 8686,
+            bind: None,
+            pin_length: 4,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -276,6 +276,13 @@ fn main() -> ExitCode {
         });
     }
 
+    let mut remote = None;
+    if settings.web.enabled {
+        match start_remote(&core, &settings) {
+            Ok(r) => remote = Some(r),
+            Err(msg) => app_notices.push(msg),
+        }
+    }
     let audio_proxy = proxy.clone();
     let _ = std::thread::Builder::new()
         .name("audio-devices".into())
@@ -309,6 +316,7 @@ fn main() -> ExitCode {
         thumbs_rx,
         operator: None,
         output: None,
+        remote,
         sent_size: None,
         monitor_override: args.monitor,
         windowed_output: args.windowed_output,
@@ -359,6 +367,33 @@ fn list_media(dirs: &[PathBuf]) -> Vec<PathBuf> {
     files
 }
 
+fn start_remote(core: &CoreHandle, settings: &Settings) -> Result<web::WebRemote, String> {
+    let bind = match settings
+        .web
+        .bind
+        .as_deref()
+        .map(str::parse::<std::net::IpAddr>)
+    {
+        Some(Ok(ip)) => Some(ip),
+        Some(Err(_)) => {
+            return Err(format!(
+                "The phone remote address {:?} in settings isn't valid.",
+                settings.web.bind
+            ));
+        }
+        None => None,
+    };
+    let config = web::WebConfig {
+        bind,
+        port: settings.web.port,
+        pin_length: settings.web.pin_length,
+    };
+    web::WebRemote::start(core.clone(), core.subscribe(None), &config).map_err(|e| {
+        tracing::error!(error = %e, "phone remote");
+        e.user_message()
+    })
+}
+
 struct Bench {
     remaining: usize,
     interval: Duration,
@@ -382,6 +417,7 @@ struct App {
     thumbs_rx: Receiver<ThumbResult>,
     operator: Option<OperatorWindow>,
     output: Option<OutputWindow>,
+    remote: Option<web::WebRemote>,
     sent_size: Option<(u32, u32)>,
     monitor_override: Option<usize>,
     windowed_output: bool,
@@ -486,6 +522,7 @@ impl App {
         {
             std::panic::resume_unwind(panic);
         }
+        self.remote = None; // stop the phone remote
         self.core.shutdown();
         if let Some(mut o) = self.operator.take() {
             o.destroy();
@@ -601,6 +638,22 @@ impl App {
                         p.set_extension("toml");
                     }
                     self.send(Command::PlaylistSave(Some(p)));
+                }
+            }
+            UiAction::NewPin => {
+                if let Some(r) = &self.remote {
+                    r.regenerate_pin();
+                }
+            }
+            UiAction::RemoteEnabled(on) => {
+                self.settings.web.enabled = on;
+                self.save_settings();
+                self.remote = None; // stops a running server
+                if on {
+                    match start_remote(&self.core, &self.settings) {
+                        Ok(r) => self.remote = Some(r),
+                        Err(msg) => self.ui.app_notices.push(msg),
+                    }
                 }
             }
             UiAction::SetAudioDevice(d) => {
@@ -726,6 +779,14 @@ impl ApplicationHandler<UserEvent> for App {
                 let mut actions = Vec::new();
                 let log = self.crash.ui_log.snapshot();
                 self.ui.receive_thumbs(&op.egui.egui_ctx, &self.thumbs_rx);
+                self.ui.remote = match &self.remote {
+                    Some(r) => ui::RemoteStatus {
+                        url: Some(r.url().to_owned()),
+                        pin: r.pin(),
+                        clients: r.clients(),
+                    },
+                    None => ui::RemoteStatus::default(),
+                };
                 let (show, settings, ui_state, thumbs) =
                     (&self.show, &self.settings, &mut self.ui, &self.thumbs_tx);
                 let capture = self
