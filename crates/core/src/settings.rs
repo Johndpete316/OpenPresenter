@@ -1,0 +1,171 @@
+//! User settings (TOML). Missing fields take defaults, so older files keep working.
+
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::Command;
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    /// Folders scanned for `.pro6` files.
+    pub library_dirs: Vec<PathBuf>,
+    /// Folders listed in the media bin.
+    pub media_dirs: Vec<PathBuf>,
+    /// Extra font folders (in addition to installed fonts).
+    pub font_dirs: Vec<PathBuf>,
+    pub output: OutputSettings,
+    pub keys: KeyBindings,
+    /// mpv audio device name (`None` = system default). Used from M5.
+    pub audio_device: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OutputSettings {
+    pub enabled: bool,
+    /// Display name as reported by the OS (preferred, survives re-plugging).
+    pub monitor_name: Option<String>,
+    /// Fallback display index when the name isn't found.
+    pub monitor_index: Option<usize>,
+}
+
+impl Default for OutputSettings {
+    fn default() -> Self {
+        OutputSettings {
+            enabled: true,
+            monitor_name: None,
+            monitor_index: None,
+        }
+    }
+}
+
+/// Key names follow winit's logical key names (`PageDown`, `ArrowRight`, `F1`,
+/// `Space`) or a single character (`.`, `b`). Matching is case-insensitive.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeyBindings {
+    pub next: Vec<String>,
+    pub prev: Vec<String>,
+    pub clear_text: Vec<String>,
+    pub clear_background: Vec<String>,
+    pub clear_all: Vec<String>,
+}
+
+impl Default for KeyBindings {
+    fn default() -> Self {
+        let v = |keys: &[&str]| keys.iter().map(|k| (*k).to_owned()).collect();
+        KeyBindings {
+            // Clickers send PageDown/PageUp (some send arrows); their "blank" button sends `.` or `b`.
+            next: v(&["PageDown", "ArrowRight", "ArrowDown", "Space"]),
+            prev: v(&["PageUp", "ArrowLeft", "ArrowUp"]),
+            clear_text: v(&["F3"]),
+            clear_background: v(&["F2"]),
+            clear_all: v(&["F1", ".", "b", "Clear"]),
+        }
+    }
+}
+
+impl KeyBindings {
+    /// The command bound to a key name, if any.
+    pub fn command_for(&self, key: &str) -> Option<Command> {
+        let hit = |list: &[String]| list.iter().any(|k| k.eq_ignore_ascii_case(key));
+        if hit(&self.next) {
+            Some(Command::Next)
+        } else if hit(&self.prev) {
+            Some(Command::Prev)
+        } else if hit(&self.clear_all) {
+            Some(Command::ClearAll)
+        } else if hit(&self.clear_text) {
+            Some(Command::ClearText)
+        } else if hit(&self.clear_background) {
+            Some(Command::ClearBackground)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SettingsError {
+    #[error("{path}: {source}", path = .path.display())]
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("{path}: {message}", path = .path.display())]
+    Format { path: PathBuf, message: String },
+}
+
+impl SettingsError {
+    pub fn user_message(&self) -> String {
+        match self {
+            SettingsError::Io { source, .. } => {
+                format!("Settings couldn't be read or saved ({source}). Defaults are used for now.")
+            }
+            SettingsError::Format { message, .. } => {
+                format!(
+                    "The settings file has a mistake ({message}). Defaults are used until it's fixed."
+                )
+            }
+        }
+    }
+}
+
+impl Settings {
+    /// Load settings; a missing file gives defaults.
+    pub fn load(path: &Path) -> Result<Settings, SettingsError> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => toml::from_str(&text).map_err(|e| SettingsError::Format {
+                path: path.into(),
+                message: e.to_string(),
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
+            Err(source) => Err(SettingsError::Io {
+                path: path.into(),
+                source,
+            }),
+        }
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), SettingsError> {
+        let text = toml::to_string_pretty(self).map_err(|e| SettingsError::Format {
+            path: path.into(),
+            message: e.to_string(),
+        })?;
+        crate::write_atomic(path, text.as_bytes()).map_err(|source| SettingsError::Io {
+            path: path.into(),
+            source,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_and_partial_files() {
+        let k = KeyBindings::default();
+        assert_eq!(k.command_for("pagedown"), Some(Command::Next));
+        assert_eq!(k.command_for("PageUp"), Some(Command::Prev));
+        assert_eq!(k.command_for("F1"), Some(Command::ClearAll));
+        assert_eq!(k.command_for("B"), Some(Command::ClearAll));
+        assert_eq!(k.command_for("F3"), Some(Command::ClearText));
+        assert_eq!(k.command_for("x"), None);
+        let s: Settings =
+            toml::from_str("library_dirs = [\"/lib\"]\n[keys]\nnext = [\"Enter\"]\n").unwrap();
+        assert_eq!(s.library_dirs, [PathBuf::from("/lib")]);
+        assert_eq!(s.keys.command_for("Enter"), Some(Command::Next));
+        assert_eq!(
+            s.keys.command_for("PageDown"),
+            None,
+            "a configured list replaces the default"
+        );
+        assert_eq!(s.keys.prev, KeyBindings::default().prev);
+        assert!(s.output.enabled);
+        let missing = Settings::load(Path::new("/definitely/not/here.toml")).unwrap();
+        assert_eq!(missing, Settings::default());
+    }
+}
