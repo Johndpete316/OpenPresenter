@@ -217,6 +217,40 @@ Only the Announcements presentation uses these.
 - **Accept:** Announcements file loops on its own with the same timing as PP6.
 - **Status (2026-11-20):** built against the **verified** format from `AA001 Welcome.pro6`. Each slide's `RVSlideTimerCue` gives its time, and `loopToBeginning` on the last slide loops back. The timer runs on the core thread. Like PP6, putting a timed presentation live starts it. John's rules apply: Next/Prev restart the timer; any Clear stops it (it stays stopped until Start loop or the presentation is put live again); selecting elsewhere keeps it; another presentation live stops it. Without a loop-back slide it stops at the end. The UI shows LOOP RUNNING + countdown + Stop near Preview. Timing tests run in real time. **Still to do for acceptance:** run the Welcome file on the Windows PC next to PP6 and compare timing (needs Bookman Old Style installed). **Windows run (2026-11-20):** the real Welcome file auto-started on Windows and advanced every 10.0 s. Note: at launch the first slide's countdown starts when it goes live, about 1 s before it's on screen. **Confirmed by John (2026-11-20):** auto-start when a timed presentation goes live, and it stays stopped after Clear until Start loop (or put live again).
 
+## Backlog (John, 2026-11-21)
+
+**Strategy: split library.** For a while the library holds both `.pro6` and `.opres` files.
+The long-term goal is `.opres` only, but that needs buy-in from the church team, so
+OpenPresenter has to fit their existing ProPresenter workflows as seamlessly as possible:
+`.pro6` files keep opening, editing and saving as `.pro6` (nothing converts silently),
+and every new feature works on both kinds of file unless a `.pro6` truly can't hold it.
+
+- [ ] **Remember the slide-tile size.** The size slider under the presentation grid
+  (`ui.rs`, "Tile size slider") resets on restart; save it in `settings.toml`.
+- [ ] **Right-click menu on slides in the presentation grid.**
+  - *Edit in editor*: opens the editor with that slide selected.
+  - *Quick edit*: a small window with just the slide's text (fix spelling, change words; no
+    formatting). Saves through the normal edit path (undo, `.pro6` stays `.pro6`).
+  - Change the slide's colour, its group (move to another / new group), and its type
+    (e.g. enabled/disabled, label), without opening the editor.
+- [ ] **Arrangement editor.** Today the editor has a basic arrangements section
+  (`editor.rs`, `arrangements`). Wanted: a proper one, dragging groups into an order,
+  repeating groups, duplicate/rename/delete arrangements, preview of the resulting order.
+- [ ] **New presentation.** No visible way to make one: the only path today is Paste Lyrics →
+  "A new presentation" inside the editor. Add *New presentation* to the toolbar / library.
+- [ ] **Where `.opres` files go.** New presentations are saved to the *first* library folder
+  (`lyrics.rs`, `Target::New`). Add a setting for the folder new `.opres` files are saved
+  in (kept apart from the `.pro6` library), and make sure it's scanned as a library folder.
+- [ ] **Import / Export at the top.** A menu in the toolbar: import (`.pro6` → library, pasted
+  or `.txt` lyrics), export (`.opres` → `.pro6` where possible, text/lyrics, PNG slides
+  via the existing renderer).
+- [ ] **Start a song from pasted text.** A direct entry point (toolbar / start screen) that
+  opens Paste Lyrics for a new song, with on-screen instructions for the format
+  (today's rules, `editor/lyrics.rs`: `[Name]` on its own line starts a group, a name used
+  again repeats that group, a blank line starts a new slide). The window has a one-line hint
+  now; this needs a proper example. Possibly also accept `Verse 1:` / `Chorus` headers as
+  pasted from lyric sites.
+
 ## Unknowns to Verify
 Track findings here as real files arrive. "M0:" notes say how the parser currently handles each one. None are verified against a real file yet.
 - [x] Canvas size attribute names on `RVPresentationDocument`. **Verified (real files):** `width`/`height`.
