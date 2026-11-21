@@ -52,7 +52,7 @@ pub enum Zoom {
     Pct(u32),
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum Tab {
     #[default]
     Text,
@@ -126,6 +126,9 @@ pub struct EditState {
     pub new_dir: Option<PathBuf>,
     /// Open the editor when this presentation becomes the selected one (a new one).
     pub open_when_selected: Option<PathBuf>,
+    /// A slide chosen before it exists (Add slide selects the new slide; the document
+    /// gets it a moment later), and how many more frames to wait for it.
+    pending_sel: Option<((usize, usize), u32)>,
     themes: themes::Themes,
     /// Paste Lyrics window, and a new presentation being saved from it.
     lyrics: lyrics::Lyrics,
@@ -402,6 +405,17 @@ pub fn editor(
     path: &Path,
     d: &Arc<doc::Document>,
 ) {
+    // A slide selected before it existed: take it once the document has it.
+    if let Some((p, left)) = st.edit.pending_sel {
+        if sel_valid(d, p) {
+            st.edit.select_slide(p.0, p.1);
+            st.edit.pending_sel = None;
+        } else if left == 0 {
+            st.edit.pending_sel = None;
+        } else {
+            st.edit.pending_sel = Some((p, left - 1));
+        }
+    }
     // Keep the selection valid after edits (and pick a slide if there's none).
     if let Some((g, s)) = st.edit.sel
         && d.groups.get(g).is_none_or(|gr| s >= gr.slides.len())
@@ -489,9 +503,15 @@ pub fn editor(
             copy_style::paste(st, actions, path, d, &scope);
         }
     }
+    // Each panel can select a slide an edit is about to make; the panels after it only
+    // ever see a selection that exists in `d` (see `settle_sel`).
+    let before = st.edit.sel;
     top_bar(ui, st, show, actions, path, d);
+    settle_sel(st, d, before);
     context_bar(ui, st, actions, path, d);
+    settle_sel(st, d, before);
     bottom_bar(ui, st, actions, path, d);
+    settle_sel(st, d, before);
     egui::Panel::left("editor-strip")
         .resizable(true)
         .default_size(230.0)
@@ -502,6 +522,7 @@ pub fn editor(
                 .inner_margin(6.0),
         )
         .show(ui, |ui| strip(ui, st, show, thumbs, actions, path, d));
+    settle_sel(st, d, before);
     egui::Panel::right("editor-inspector")
         .resizable(true)
         .default_size(290.0)
@@ -512,6 +533,7 @@ pub fn editor(
                 .inner_margin(8.0),
         )
         .show(ui, |ui| inspector(ui, st, actions, path, d));
+    settle_sel(st, d, before);
     egui::CentralPanel::default()
         .frame(egui::Frame::new().fill(Color32::from_gray(24)))
         .show(ui, |ui| canvas(ui, st, actions, path, d));
@@ -2934,6 +2956,28 @@ fn rulers(
     }
 }
 
+/// `(group, slide)` exists in `d`.
+fn sel_valid(d: &doc::Document, (g, s): (usize, usize)) -> bool {
+    d.groups.get(g).is_some_and(|gr| s < gr.slides.len())
+}
+
+/// A selection that doesn't exist in `d` yet (an edit will make it) waits as pending;
+/// meanwhile the slide selected at the start of the frame stays (or none).
+fn settle_sel(st: &mut UiState, d: &doc::Document, before: Option<(usize, usize)>) {
+    if let Some(p) = st.edit.sel
+        && !sel_valid(d, p)
+    {
+        // About a second at 60 fps; the edit normally lands within a frame or two.
+        st.edit.pending_sel = Some((p, 60));
+        st.edit.sel = before.filter(|&b| sel_valid(d, b));
+        if st.edit.sel.is_none() {
+            st.edit.element = None;
+            st.edit.multi.clear();
+            st.edit.drag = None;
+        }
+    }
+}
+
 // ───────────────────────────── arrangements ─────────────────────────────
 
 fn arrangements(
@@ -3090,6 +3134,60 @@ mod tests {
             out.extend(self.frame(vec![button(false)]));
             out
         }
+    }
+
+    #[test]
+    fn a_slide_selected_before_it_exists_waits_instead_of_crashing() {
+        // Add slide / "+" on an empty group select the new slide before the edit lands.
+        let mut h = Harness::new();
+        h.frame(vec![]);
+        let groups = h.doc.groups.len();
+        for tab in [
+            Tab::Text,
+            Tab::Image,
+            Tab::Slide,
+            Tab::Position,
+            Tab::Layers,
+        ] {
+            h.st.edit.tab = tab;
+            h.st.edit.select_slide(groups, 0);
+            h.frame(vec![]);
+            h.frame(vec![]);
+            assert!(
+                h.st.edit.sel.is_some_and(|p| sel_valid(&h.doc, p)),
+                "{tab:?}: a valid slide stays selected meanwhile"
+            );
+        }
+        // The edit lands: an empty group, then a slide in it. The pending one is taken.
+        let mut d = (*h.doc).clone();
+        Op::AddGroup {
+            at: groups,
+            name: "New".into(),
+            color: None,
+        }
+        .apply(&mut d)
+        .unwrap();
+        Op::AddSlide {
+            group: groups,
+            at: 0,
+            text: String::new(),
+        }
+        .apply(&mut d)
+        .unwrap();
+        // As a panel does it: select the new slide mid-frame, then settle.
+        let before = h.st.edit.sel;
+        h.st.edit.select_slide(groups, 0);
+        settle_sel(&mut h.st, &h.doc, before);
+        assert_eq!(
+            h.st.edit.sel, before,
+            "the old slide stays until the new one exists"
+        );
+        h.frame(vec![]);
+        assert_eq!(h.st.edit.sel, before, "still waiting");
+        h.doc = Arc::new(d);
+        Arc::make_mut(&mut h.show.docs).insert(h.path.clone(), h.doc.clone());
+        h.frame(vec![]);
+        assert_eq!(h.st.edit.sel, Some((groups, 0)), "taken once it exists");
     }
 
     #[test]
