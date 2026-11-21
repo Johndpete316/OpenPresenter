@@ -53,12 +53,18 @@ pub enum UiAction {
     /// How background media fills the output.
     SetMediaScaling(opcore::MediaScaling),
     SetFitMinSize(f64),
+    /// Slide tile width in the grid (saved when the slider is let go).
+    SetTileWidth(f32),
     SetGroupColors(Vec<opcore::GroupColor>),
     /// Re-read the library folders (a presentation was added).
     RefreshLibrary,
     /// mpv audio device name; `None` = system default.
     SetAudioDevice(Option<String>),
     RemoveLibraryFolder(usize),
+    /// Pick the folder new `.opres` presentations are saved in.
+    ChooseNewPresentationsFolder,
+    /// New presentations go back to the first library folder.
+    ResetNewPresentationsFolder,
     RemoveMediaFolder(usize),
     /// New phone-remote PIN (logs all phones out).
     NewPin,
@@ -292,9 +298,13 @@ pub fn draw(
         .library_dirs
         .first()
         .map(|d| d.join(crate::editor::THEMES_DIR));
-    if st.edit.library_dirs != settings.library_dirs {
-        st.edit.library_dirs.clone_from(&settings.library_dirs);
+    let folders = settings.library_folders();
+    if st.edit.library_dirs != folders {
+        st.edit.library_dirs = folders;
     }
+    st.edit.new_dir = settings.new_presentations_folder();
+    // A new presentation finished saving (from either window): open it.
+    crate::editor::lyrics::poll(st, &mut actions);
     // The editor takes the whole window under the toolbar. It shows its own copy
     // (unsaved edits), not the saved document.
     if st.edit.on
@@ -305,6 +315,19 @@ pub fn draw(
         settings_window(ui.ctx(), st, show, settings, log_lines, &mut actions);
         toast(ui.ctx(), st, show);
         return actions;
+    }
+    {
+        let selected = show
+            .selected
+            .as_ref()
+            .and_then(|p| show.docs.get(p).map(|d| (p.clone(), d.clone())));
+        crate::editor::lyrics::new_window(
+            ui.ctx(),
+            st,
+            thumbs,
+            &mut actions,
+            selected.as_ref().map(|(p, d)| (p.as_path(), &**d)),
+        );
     }
     egui::Panel::left("left")
         .resizable(true)
@@ -416,6 +439,23 @@ fn toolbar(
                     actions.push(UiAction::Core(Command::ClearBackground));
                 }
                 toolbar_gap(ui);
+                if tool_button(
+                    ui,
+                    icon::FILE_PLUS,
+                    "New",
+                    Color32::from_rgb(110, 110, 116),
+                    false,
+                    !st.edit.on,
+                )
+                .on_hover_text("New presentation: type or paste a song's words, or start blank")
+                .clicked()
+                {
+                    let selected = show
+                        .selected
+                        .as_ref()
+                        .is_some_and(|p| show.docs.get(p).is_some_and(|d| d.theme.is_none()));
+                    crate::editor::lyrics::open_new(st, ui.ctx(), selected);
+                }
                 let can_edit = show
                     .selected
                     .as_ref()
@@ -817,7 +857,7 @@ fn library(
                 .desired_width(ui.available_width()),
         );
     });
-    if settings.library_dirs.is_empty() {
+    if settings.library_folders().is_empty() {
         egui::Frame::new().inner_margin(8).show(ui, |ui| {
             ui.add(
                 egui::Label::new(
@@ -1441,12 +1481,16 @@ fn presentation(
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let mut w = st.tile_width();
                 ui.spacing_mut().slider_width = 110.0;
-                if ui
+                let resp = ui
                     .add(egui::Slider::new(&mut w, TILE_RANGE).show_value(false))
-                    .on_hover_text("Slide size")
-                    .changed()
-                {
+                    .on_hover_text("Slide size");
+                if resp.changed() {
                     st.tile_w = w;
+                }
+                // Saved once the slider is let go (or moved with the keyboard), not on
+                // every frame of a drag.
+                if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
+                    actions.push(UiAction::SetTileWidth(st.tile_w));
                 }
                 ui.label(theme::icon_text(icon::SQUARES_FOUR, 13.0).color(Color32::GRAY));
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
@@ -2113,7 +2157,14 @@ fn settings_folders(
     settings: &Settings,
     actions: &mut Vec<UiAction>,
 ) {
-    ui.heading("Library (.pro6)");
+    ui.heading("Library");
+    ui.label(
+        RichText::new(
+            "Folders with your presentations (.pro6 and .opres). Sub-folders are included.",
+        )
+        .small()
+        .weak(),
+    );
     for (i, d) in settings.library_dirs.iter().enumerate() {
         ui.horizontal(|ui| {
             if ui.small_button("Remove").clicked() {
@@ -2125,6 +2176,46 @@ fn settings_folders(
     if ui.button("Add library folder…").clicked() {
         actions.push(UiAction::AddLibraryFolder);
     }
+    ui.separator();
+    ui.heading("New presentations (.opres)");
+    ui.label(
+        RichText::new(
+            "New songs and presentations made in OpenPresenter are saved here as .opres \
+             files. Choose a folder of their own to keep them apart from the .pro6 library; \
+             it's part of the library either way. Existing .pro6 files stay where they are.",
+        )
+        .small()
+        .weak(),
+    );
+    ui.horizontal(|ui| {
+        match (
+            &settings.new_presentations_dir,
+            settings.new_presentations_folder(),
+        ) {
+            (Some(d), _) => {
+                ui.label(d.display().to_string());
+            }
+            (None, Some(d)) => {
+                ui.label(format!("{} (the first library folder)", d.display()));
+            }
+            (None, None) => {
+                ui.label(RichText::new("Not set: add a library folder or choose one.").italics());
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        if ui.button("Choose folder…").clicked() {
+            actions.push(UiAction::ChooseNewPresentationsFolder);
+        }
+        if settings.new_presentations_dir.is_some()
+            && ui
+                .button("Use the first library folder")
+                .on_hover_text("Files already saved in the chosen folder stay there.")
+                .clicked()
+        {
+            actions.push(UiAction::ResetNewPresentationsFolder);
+        }
+    });
     ui.separator();
     ui.heading("Media");
     for (i, d) in settings.media_dirs.iter().enumerate() {

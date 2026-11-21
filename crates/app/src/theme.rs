@@ -237,7 +237,12 @@ pub fn brand_header(ui: &mut Ui, version: &str) {
             ui.add(egui::Image::new((tex.id(), Vec2::splat(48.0))));
         }
         ui.vertical(|ui| {
-            ui.label(RichText::new("OpenPresenter").size(20.0).strong().color(brand::INK));
+            ui.label(
+                RichText::new("OpenPresenter")
+                    .size(20.0)
+                    .strong()
+                    .color(brand::INK),
+            );
             ui.weak(format!("Version {version}"));
         });
     });

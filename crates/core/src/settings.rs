@@ -9,8 +9,12 @@ use crate::Command;
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Folders scanned for `.pro6` files.
+    /// Folders scanned for presentations (`.pro6` and `.opres`).
     pub library_dirs: Vec<PathBuf>,
+    /// Where new presentations (`.opres`) are saved; `None` = the first library folder.
+    /// Also scanned as part of the library. Keeps OpenPresenter's own files apart from
+    /// the `.pro6` library while both are in use.
+    pub new_presentations_dir: Option<PathBuf>,
     /// Folders listed in the media bin.
     pub media_dirs: Vec<PathBuf>,
     /// Extra font folders (in addition to installed fonts).
@@ -21,6 +25,15 @@ pub struct Settings {
     pub audio_device: Option<String>,
     pub web: WebSettings,
     pub editor: EditorSettings,
+    pub view: ViewSettings,
+}
+
+/// How the operator window looks (remembered between runs).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ViewSettings {
+    /// Slide tile width in the presentation grid, in points (0 = the default size).
+    pub tile_width: f32,
 }
 
 /// Slide editor.
@@ -203,6 +216,25 @@ impl SettingsError {
 }
 
 impl Settings {
+    /// Every folder the library reads: the library folders, then the new-presentations
+    /// folder if it isn't one of them (or inside one).
+    pub fn library_folders(&self) -> Vec<PathBuf> {
+        let mut v = self.library_dirs.clone();
+        if let Some(d) = &self.new_presentations_dir
+            && !v.iter().any(|l| d.starts_with(l))
+        {
+            v.push(d.clone());
+        }
+        v
+    }
+
+    /// The folder new presentations are saved in.
+    pub fn new_presentations_folder(&self) -> Option<PathBuf> {
+        self.new_presentations_dir
+            .clone()
+            .or_else(|| self.library_dirs.first().cloned())
+    }
+
     /// Load settings; a missing file gives defaults.
     pub fn load(path: &Path) -> Result<Settings, SettingsError> {
         match std::fs::read_to_string(path) {
@@ -268,6 +300,24 @@ mod tests {
             })
         );
         assert!(toml::to_string_pretty(&o).is_ok());
+        let mut f = Settings {
+            library_dirs: vec![PathBuf::from("/lib")],
+            ..Settings::default()
+        };
+        assert_eq!(f.new_presentations_folder(), Some(PathBuf::from("/lib")));
+        assert_eq!(f.library_folders(), [PathBuf::from("/lib")]);
+        f.new_presentations_dir = Some(PathBuf::from("/lib/OpenPresenter"));
+        assert_eq!(
+            f.library_folders(),
+            [PathBuf::from("/lib")],
+            "already scanned"
+        );
+        f.new_presentations_dir = Some(PathBuf::from("/opres"));
+        assert_eq!(
+            f.library_folders(),
+            [PathBuf::from("/lib"), PathBuf::from("/opres")]
+        );
+        assert_eq!(f.new_presentations_folder(), Some(PathBuf::from("/opres")));
         let missing = Settings::load(Path::new("/definitely/not/here.toml")).unwrap();
         assert_eq!(missing, Settings::default());
     }

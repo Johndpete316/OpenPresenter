@@ -181,6 +181,49 @@ impl Theme {
         })
     }
 
+    /// The built-in look for a new presentation when there's nothing to copy: white
+    /// centred text on black, sized for `canvas`.
+    pub fn plain(canvas: CanvasSize) -> Theme {
+        let (w, h) = (f64::from(canvas.width), f64::from(canvas.height));
+        Theme {
+            format_version: FORMAT_VERSION,
+            uuid: crate::new_uuid(),
+            name: "Plain".into(),
+            canvas,
+            background: Some(Rgba {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            }),
+            background_image: None,
+            text_frame: Rect {
+                x: (w * 0.05).round(),
+                y: (h * 0.08).round(),
+                width: (w * 0.9).round(),
+                height: (h * 0.84).round(),
+            },
+            text: TextStyle {
+                run: RunStyle {
+                    font: "Arial".into(),
+                    // 72 on a 1080-high canvas.
+                    size: (h / 15.0).round(),
+                    color: Some([255, 255, 255]),
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                    letter_spacing: 0.0,
+                },
+                align: Align::Center,
+                line_spacing: 1.0,
+                valign: VAlign::Middle,
+                outline: None,
+                shadow: None,
+            },
+            path: PathBuf::new(),
+        }
+    }
+
     pub fn load(path: &Path) -> Result<Theme, ThemeError> {
         let bytes = std::fs::read(path).map_err(|source| ThemeError::Io {
             path: path.to_path_buf(),

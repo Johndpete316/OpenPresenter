@@ -216,9 +216,15 @@ async fn pin_login_lockout_commands_and_logout_on_new_pin() {
         401
     );
     assert_eq!(
-        http(&url, "GET", "/api/state", Some("openpresenter_session=forged"), None)
-            .await
-            .status,
+        http(
+            &url,
+            "GET",
+            "/api/state",
+            Some("openpresenter_session=forged"),
+            None
+        )
+        .await
+        .status,
         401
     );
 }

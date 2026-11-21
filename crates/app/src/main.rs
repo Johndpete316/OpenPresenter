@@ -146,7 +146,12 @@ fn parse_size(s: &str) -> Result<(u32, u32), String> {
 }
 
 /// Version and the git commit it was built from, e.g. "0.1.0 (851e7e5)".
-pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("OPENPRESENTER_BUILD"), ")");
+pub const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("OPENPRESENTER_BUILD"),
+    ")"
+);
 
 /// Give a window the OpenPresenter icon (title bar, taskbar, Alt-Tab). A missing icon is cosmetic:
 /// logged, never fatal.
@@ -275,7 +280,7 @@ fn main() -> ExitCode {
     let lib_proxy = proxy.clone();
     let _ = opcore::library::spawn_revalidate(
         cached.clone(),
-        settings.library_dirs.clone(),
+        settings.library_folders(),
         Some(paths.library_cache.clone()),
         move |idx, s| {
             let status = format!(
@@ -378,6 +383,7 @@ fn main() -> ExitCode {
             settings_path: paths.settings.display().to_string(),
             playlists_path: paths.playlists.display().to_string(),
             settings_open: args.open_settings,
+            tile_w: settings.view.tile_width,
             edit: ui_state_edit,
             media_thumbs,
             fonts_rx: Some(ui_fonts_rx),
@@ -794,7 +800,7 @@ impl App {
         let proxy = self.proxy.clone();
         let _ = opcore::library::spawn_revalidate(
             self.ui.library.clone(),
-            self.settings.library_dirs.clone(),
+            self.settings.library_folders(),
             Some(self.paths.library_cache.clone()),
             move |idx, s| {
                 let status = format!(
@@ -909,6 +915,21 @@ impl App {
                     self.save_settings();
                 }
             }
+            UiAction::ChooseNewPresentationsFolder => {
+                if let Some(d) = rfd::FileDialog::new()
+                    .set_title("Folder for new presentations (.opres)")
+                    .pick_folder()
+                {
+                    self.settings.new_presentations_dir = Some(d);
+                    self.save_settings();
+                    self.revalidate_library();
+                }
+            }
+            UiAction::ResetNewPresentationsFolder => {
+                self.settings.new_presentations_dir = None;
+                self.save_settings();
+                self.revalidate_library();
+            }
             UiAction::RemoveMediaFolder(i) => {
                 if i < self.settings.media_dirs.len() {
                     self.settings.media_dirs.remove(i);
@@ -922,6 +943,12 @@ impl App {
                 self.save_settings();
                 if let Some(o) = &self.output {
                     let _ = o.tx.send(RenderCmd::MediaScaling(media_scaling(sc)));
+                }
+            }
+            UiAction::SetTileWidth(w) => {
+                if self.settings.view.tile_width != w {
+                    self.settings.view.tile_width = w;
+                    self.save_settings();
                 }
             }
             UiAction::SetFitMinSize(v) => {

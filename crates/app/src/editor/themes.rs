@@ -589,7 +589,10 @@ mod tests {
 
     #[test]
     fn linked_presentations_are_found_by_theme() {
-        let dir = std::env::temp_dir().join(format!("openpresenter-themes-linked-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "openpresenter-themes-linked-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         let mut d = doc::load(&fixture("song_1024x768.pro6")).unwrap();
@@ -619,7 +622,8 @@ mod tests {
 
     #[test]
     fn themes_in_a_folder_are_listed_by_name() {
-        let dir = std::env::temp_dir().join(format!("openpresenter-themes-list-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("openpresenter-themes-list-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let d = doc::load(&fixture("song_1024x768.pro6")).unwrap();

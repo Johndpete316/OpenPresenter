@@ -646,7 +646,8 @@ mod tests {
             eprintln!("libmpv not available ({:?}); skipping", available());
             return;
         }
-        let dir = std::env::temp_dir().join(format!("openpresenter-thumb-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("openpresenter-thumb-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // OPENPRESENTER_TEST_CLIP: a ready-made clip (e.g. under Wine, where ffmpeg isn't on PATH).
         let given = std::env::var_os("OPENPRESENTER_TEST_CLIP").map(PathBuf::from);

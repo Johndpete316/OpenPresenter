@@ -19,8 +19,12 @@ fn main() {
     // Cross-compiling from Linux needs `llvm-rc`.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         println!("cargo:rerun-if-changed=assets/openpresenter.ico");
-        if let Err(e) = embed_resource::compile_for("assets/openpresenter.rc", ["openpresenter"], embed_resource::NONE)
-            .manifest_required()
+        if let Err(e) = embed_resource::compile_for(
+            "assets/openpresenter.rc",
+            ["openpresenter"],
+            embed_resource::NONE,
+        )
+        .manifest_required()
         {
             panic!("couldn't embed the program icon: {e}");
         }

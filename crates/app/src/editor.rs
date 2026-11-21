@@ -30,7 +30,7 @@ mod arrange;
 mod copy_style;
 mod fit;
 mod image;
-mod lyrics;
+pub(crate) mod lyrics;
 mod snap;
 mod text;
 mod themes;
@@ -122,10 +122,12 @@ pub struct EditState {
     /// the settings.
     pub themes_dir: Option<PathBuf>,
     pub library_dirs: Vec<PathBuf>,
+    /// Where new presentations are saved (from the settings).
+    pub new_dir: Option<PathBuf>,
     themes: themes::Themes,
     /// Paste Lyrics window, and a new presentation being saved from it.
     lyrics: lyrics::Lyrics,
-    lyrics_new: Option<crossbeam_channel::Receiver<Result<PathBuf, String>>>,
+    lyrics_new: Option<lyrics::Saving>,
     /// Default group colours (from the settings).
     pub group_colors: Vec<opcore::GroupColor>,
     /// Turn the editor back on after theme editing ends (Done).
@@ -461,7 +463,6 @@ pub fn editor(
     text::check_session(st, actions, path, d);
     image::poll(ui, st, actions, path, d);
     themes::poll(st);
-    lyrics::poll(st, actions);
     // Ctrl+Alt+C / Ctrl+Alt+V: copy / paste style (not while typing).
     if let Some((g, s)) = st.edit.sel
         && st.edit.session.is_none()

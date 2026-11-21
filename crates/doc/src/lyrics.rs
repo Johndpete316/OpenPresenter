@@ -6,6 +6,8 @@
 //! - A group name used again points at the same group (a repeat): its lines, if
 //!   any, are ignored when the group already has slides.
 //! - The order of the `[Name]` lines is the arrangement.
+//! - Headings as lyric websites write them also start a group, when they're alone
+//!   on a line: `Verse 1:`, `Chorus`, `(Bridge)`, `Pre-Chorus 2:` (see [`SECTION_WORDS`]).
 //!
 //! [`to_text`] goes the other way, so a presentation can be edited as text and
 //! re-flowed; [`Edit::SetLyrics`] applies text, keeping the slides (and their
@@ -44,10 +46,72 @@ impl Parsed {
     }
 }
 
-fn header(line: &str) -> Option<&str> {
+/// Words that, alone on a line (with an optional number, `:` or brackets), are a
+/// section heading as lyric websites write them.
+pub const SECTION_WORDS: &[&str] = &[
+    "verse",
+    "chorus",
+    "pre-chorus",
+    "pre chorus",
+    "prechorus",
+    "bridge",
+    "tag",
+    "intro",
+    "outro",
+    "ending",
+    "refrain",
+    "interlude",
+    "instrumental",
+    "vamp",
+    "hook",
+    "coda",
+];
+
+fn header(line: &str) -> Option<String> {
     let t = line.trim();
-    let name = t.strip_prefix('[')?.strip_suffix(']')?.trim();
-    (!name.is_empty() && !name.contains(['[', ']'])).then_some(name)
+    if let Some(name) = t.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+        let name = name.trim();
+        return (!name.is_empty() && !name.contains(['[', ']'])).then(|| name.to_owned());
+    }
+    site_header(t)
+}
+
+/// `Verse 1:`, `CHORUS`, `(Bridge)`, `Pre-Chorus 2` → the group name.
+fn site_header(t: &str) -> Option<String> {
+    let mut s = t.trim();
+    if let Some(inner) = s.strip_prefix('(').and_then(|r| r.strip_suffix(')')) {
+        s = inner.trim();
+    }
+    let s = s.strip_suffix(':').unwrap_or(s).trim();
+    let lower = s.to_lowercase();
+    let word = SECTION_WORDS
+        .iter()
+        .filter(|w| lower.starts_with(*w))
+        .max_by_key(|w| w.len())?;
+    let rest = s[word.len()..].trim();
+    // Only a number (and maybe a letter): "Verse 2", "Verse 2a". Not "Chorus of angels".
+    let ok = rest.is_empty()
+        || (rest.len() <= 4
+            && rest.chars().next().is_some_and(|c| c.is_ascii_digit())
+            && rest.chars().all(|c| c.is_ascii_alphanumeric()));
+    if !ok {
+        return None;
+    }
+    // Name as the editor writes it: "Verse 1", "Pre-Chorus".
+    let base = match *word {
+        "pre chorus" | "prechorus" | "pre-chorus" => "Pre-Chorus".to_owned(),
+        w => {
+            let mut c = w.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect())
+                .unwrap_or_default()
+        }
+    };
+    Some(if rest.is_empty() {
+        base
+    } else {
+        format!("{base} {rest}")
+    })
 }
 
 pub fn parse(text: &str) -> Parsed {
@@ -69,6 +133,7 @@ pub fn parse(text: &str) -> Parsed {
     for raw in text.replace("\r\n", "\n").replace('\r', "\n").split('\n') {
         let line = raw.trim_end();
         if let Some(name) = header(line) {
+            let name = name.as_str();
             flush(&mut p, cur, &mut slide);
             let g = match p
                 .groups
@@ -445,6 +510,23 @@ I've been set free
         assert_eq!(p.groups[0].name, UNNAMED);
         assert_eq!(p.groups[0].slides, vec!["one", "two"]);
         assert_eq!(p.order, vec![0]);
+    }
+
+    #[test]
+    fn headings_from_lyric_websites_start_groups() {
+        let p = parse(
+            "Verse 1:\nAmazing grace\n\nCHORUS\nMy chains are gone\n\n(Bridge)\nB\n\npre-chorus 2\nP\n\nchorus:\n\nChorus of angels sing\n",
+        );
+        let names: Vec<&str> = p.groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, ["Verse 1", "Chorus", "Bridge", "Pre-Chorus 2"]);
+        assert_eq!(p.order, vec![0, 1, 2, 3, 1]);
+        assert_eq!(
+            p.ignored_lines, 1,
+            "'Chorus of angels sing' is a lyric line (under the repeated Chorus), not a heading"
+        );
+        assert_eq!(site_header("Verse 2a"), Some("Verse 2a".into()));
+        assert_eq!(site_header("Versed in grace"), None);
+        assert_eq!(site_header("Tag x2"), None);
     }
 
     #[test]

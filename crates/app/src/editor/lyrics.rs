@@ -2,7 +2,13 @@
 //! presentation as lyrics (`[Group]` lines, blank lines between slides) with a live
 //! preview beside it. Apply replaces or appends to the presentation (one undo
 //! step), or makes a new presentation in the library.
+//!
+//! The same window opens from the toolbar as *New presentation* ([`open_new`],
+//! [`new_window`]): it always makes a new `.opres`, styled like the selected
+//! presentation, a theme, or the plain built-in look. With no text it makes a blank
+//! presentation and opens it in the editor.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -29,6 +35,10 @@ const PREVIEW_AFTER: f64 = 0.35;
 #[derive(Default)]
 pub struct Lyrics {
     pub open: bool,
+    /// Opened from the toolbar (New presentation), not from the editor.
+    standalone: bool,
+    /// Standalone: style new slides like the selected presentation.
+    like_selected: bool,
     text: String,
     target: Target,
     new_name: String,
@@ -40,14 +50,64 @@ pub struct Lyrics {
     preview: Option<Result<Arc<doc::Document>, String>>,
 }
 
+/// A new presentation being written, and whether to open it in the editor.
+pub struct Saving {
+    rx: crossbeam_channel::Receiver<Result<PathBuf, String>>,
+    edit: bool,
+}
+
+/// Canvas for the plain look when there's no presentation to take one from.
+const PLAIN_CANVAS: doc::CanvasSize = doc::CanvasSize {
+    width: 1920,
+    height: 1080,
+};
+
+/// Fills the text box when the operator asks for an example.
+const EXAMPLE: &str = "[Verse 1]
+Amazing grace how sweet the sound
+That saved a wretch like me
+
+I once was lost but now am found
+Was blind but now I see
+
+[Chorus]
+My chains are gone
+I've been set free
+
+[Verse 2]
+'Twas grace that taught my heart to fear
+And grace my fears relieved
+
+[Chorus]
+";
+
 /// Open with the presentation as text.
 pub fn open(st: &mut UiState, ctx: &egui::Context, d: &doc::Document) {
     let l = &mut st.edit.lyrics;
     l.open = true;
+    l.standalone = false;
     l.text = to_text(d);
     l.preview_for = None;
     l.preview = None;
     l.target = Target::Replace;
+    l.new_name.clear();
+    if st.edit.themes.is_empty() {
+        super::themes::refresh(st, ctx);
+    }
+}
+
+/// Open as *New presentation* (toolbar). `selected`: a presentation is selected, so
+/// new slides can look like it (the default, so a new song matches the others).
+pub fn open_new(st: &mut UiState, ctx: &egui::Context, selected: bool) {
+    let l = &mut st.edit.lyrics;
+    l.open = true;
+    l.standalone = true;
+    l.like_selected = selected;
+    l.text.clear();
+    l.preview_for = None;
+    l.preview = None;
+    l.target = Target::New;
+    l.theme = None;
     l.new_name.clear();
     if st.edit.themes.is_empty() {
         super::themes::refresh(st, ctx);
@@ -83,6 +143,7 @@ fn chosen_theme(st: &UiState, doc_path: &Path) -> Option<Box<Theme>> {
 
 /// A new presentation: one slide styled like `d`'s first text slide (or the
 /// theme), then the lyrics.
+/// With no text: one empty slide in the template's style (a blank presentation).
 fn new_presentation(
     d: &doc::Document,
     path: &Path,
@@ -140,6 +201,28 @@ fn new_presentation(
         doc::theme::rescale(&mut tmp, n.canvas);
         n = tmp;
     }
+    if text.trim().is_empty() {
+        n.groups[0].name = "Slides".into();
+        n.groups[0].src = None;
+        Op::SetText {
+            group: 0,
+            slide: 0,
+            text: String::new(),
+        }
+        .apply(&mut n)
+        .map_err(|e| e.user_message())?;
+        if let Some(t) = theme {
+            Op::ApplyTheme {
+                theme: t,
+                slides: Vec::new(),
+                all: true,
+                link: true,
+            }
+            .apply(&mut n)
+            .map_err(|e| e.user_message())?;
+        }
+        return Ok(n);
+    }
     Op::SetLyrics {
         text: text.to_owned(),
         mode: LyricsMode::Replace,
@@ -189,18 +272,81 @@ pub fn window(
     path: &Path,
     d: &doc::Document,
 ) {
-    if !st.edit.lyrics.open {
+    if !st.edit.lyrics.open || st.edit.lyrics.standalone {
         return;
     }
+    show(ctx, st, thumbs, actions, path, d, None);
+}
+
+/// The *New presentation* window (toolbar), over the operator view. `selected`: the
+/// presentation selected there, whose look a new song can copy.
+pub fn new_window(
+    ctx: &egui::Context,
+    st: &mut UiState,
+    thumbs: &Sender<ThumbRequest>,
+    actions: &mut Vec<UiAction>,
+    selected: Option<(&Path, &doc::Document)>,
+) {
+    let l = &st.edit.lyrics;
+    if !l.open || !l.standalone {
+        return;
+    }
+    let selected = selected.filter(|(_, d)| d.theme.is_none());
+    if selected.is_none() && l.like_selected {
+        st.edit.lyrics.like_selected = false;
+        st.edit.lyrics.preview_for = None;
+    }
+    // What new slides copy: the selected presentation, the theme, or the plain look.
+    let (path, template): (PathBuf, Cow<'_, doc::Document>) = match selected {
+        Some((p, d)) if st.edit.lyrics.like_selected => (p.to_path_buf(), Cow::Borrowed(d)),
+        _ => match st
+            .edit
+            .lyrics
+            .theme
+            .as_ref()
+            .and_then(|u| st.edit.themes.find(u))
+        {
+            Some(t) => (t.path.clone(), Cow::Owned(t.to_document())),
+            None => {
+                let canvas = selected.map_or(PLAIN_CANVAS, |(_, d)| d.canvas);
+                (
+                    PathBuf::from("new.opres"),
+                    Cow::Owned(Theme::plain(canvas).to_document()),
+                )
+            }
+        },
+    };
+    let title = selected.map(|(p, _)| crate::ui::title(p));
+    show(ctx, st, thumbs, actions, &path, &template, Some(title));
+}
+
+/// The window. `standalone`: `Some(title of the selected presentation, if any)`.
+fn show(
+    ctx: &egui::Context,
+    st: &mut UiState,
+    thumbs: &Sender<ThumbRequest>,
+    actions: &mut Vec<UiAction>,
+    path: &Path,
+    d: &doc::Document,
+    standalone: Option<Option<String>>,
+) {
     let now = ctx.input(|i| i.time);
     let screen = ctx.content_rect();
     let mut open = true;
-    egui::Window::new("Paste Lyrics")
+    let heading = if standalone.is_some() {
+        "New presentation"
+    } else {
+        "Paste Lyrics"
+    };
+    egui::Window::new(heading)
+        .id(egui::Id::unique("paste-lyrics"))
         .open(&mut open)
         .collapsible(false)
         .fixed_pos(screen.min + Vec2::new(40.0, 30.0))
         .fixed_size(Vec2::new(screen.width() - 80.0, screen.height() - 110.0))
-        .show(ctx, |ui| body(ui, st, thumbs, actions, path, d, now));
+        .show(ctx, |ui| {
+            body(ui, st, thumbs, actions, path, d, now, standalone.as_ref())
+        });
     if !open {
         st.edit.lyrics.open = false;
     }
@@ -218,6 +364,7 @@ pub fn window(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn body(
     ui: &mut egui::Ui,
     st: &mut UiState,
@@ -226,7 +373,77 @@ fn body(
     path: &Path,
     d: &doc::Document,
     now: f64,
+    standalone: Option<&Option<String>>,
 ) {
+    if let Some(selected) = standalone {
+        new_header(ui, st, selected.as_deref());
+    } else {
+        lyrics_header(ui, st);
+    }
+    if st.edit.lyrics.target == Target::New {
+        name_row(ui, st);
+    }
+    format_help(ui, st, standalone.is_some());
+    body_main(ui, st, thumbs, actions, path, d, now);
+}
+
+/// Top row from the toolbar: what new slides look like.
+fn new_header(ui: &mut egui::Ui, st: &mut UiState, selected: Option<&str>) {
+    ui.horizontal(|ui| {
+        let names: Vec<(String, String)> = st.edit.themes.names();
+        let l = &mut st.edit.lyrics;
+        let before = (l.like_selected, l.theme.clone());
+        ui.label("Look");
+        let current = if l.like_selected {
+            format!("like {}", selected.unwrap_or("the selected presentation"))
+        } else {
+            l.theme
+                .as_ref()
+                .and_then(|u| names.iter().find(|(id, _)| id == u))
+                .map_or("plain (white text on black)".to_owned(), |(_, n)| {
+                    format!("theme {n}")
+                })
+        };
+        egui::ComboBox::from_id_salt("new-look")
+            .selected_text(current)
+            .width(280.0)
+            .show_ui(ui, |ui| {
+                if let Some(t) = selected
+                    && ui
+                        .selectable_label(l.like_selected, format!("like {t}"))
+                        .on_hover_text("Same font, size, layout and background as the presentation selected in the library")
+                        .clicked()
+                {
+                    l.like_selected = true;
+                    l.theme = None;
+                }
+                if ui
+                    .selectable_label(!l.like_selected && l.theme.is_none(), "plain (white text on black)")
+                    .clicked()
+                {
+                    l.like_selected = false;
+                    l.theme = None;
+                }
+                for (id, n) in &names {
+                    if ui
+                        .selectable_label(
+                            !l.like_selected && l.theme.as_ref() == Some(id),
+                            format!("theme {n}"),
+                        )
+                        .clicked()
+                    {
+                        l.like_selected = false;
+                        l.theme = Some(id.clone());
+                    }
+                }
+            });
+        if (l.like_selected, l.theme.clone()) != before {
+            l.preview_for = None;
+        }
+    });
+}
+
+fn lyrics_header(ui: &mut egui::Ui, st: &mut UiState) {
     ui.horizontal(|ui| {
         let l = &mut st.edit.lyrics;
         let before = (l.target, l.theme.clone());
@@ -259,31 +476,82 @@ fn body(
             l.preview_for = None;
         }
     });
-    if st.edit.lyrics.target == Target::New {
-        ui.horizontal(|ui| {
-            ui.label("Name");
-            ui.add(
-                egui::TextEdit::singleline(&mut st.edit.lyrics.new_name)
-                    .hint_text("Song title")
-                    .desired_width(260.0),
-            );
-            match &st.edit.library_dirs.first() {
-                Some(dir) => ui.label(
-                    RichText::new(format!("saved in {}", dir.display()))
-                        .small()
-                        .weak(),
-                ),
-                None => ui.label(
-                    RichText::new("Add a library folder in Settings first.").color(Color32::YELLOW),
-                ),
+}
+
+fn name_row(ui: &mut egui::Ui, st: &mut UiState) {
+    ui.horizontal(|ui| {
+        ui.label("Name");
+        ui.add(
+            egui::TextEdit::singleline(&mut st.edit.lyrics.new_name)
+                .hint_text("Song title")
+                .desired_width(260.0),
+        );
+        match &st.edit.new_dir {
+            Some(dir) => ui.label(
+                RichText::new(format!(
+                    "saved as {}.opres in {} (Settings → Folders)",
+                    file_stem(st.edit.lyrics.new_name.trim()),
+                    dir.display()
+                ))
+                .small()
+                .weak(),
+            ),
+            None => ui.label(
+                RichText::new("Choose a folder for new presentations in Settings → Folders first.")
+                    .color(Color32::YELLOW),
+            ),
+        };
+    });
+}
+
+/// A file name for a presentation called `name`.
+fn file_stem(name: &str) -> String {
+    let n = name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
+    if n.is_empty() { "…".into() } else { n }
+}
+
+/// How to type a song: open by default from the toolbar, a line in the editor.
+fn format_help(ui: &mut egui::Ui, st: &mut UiState, standalone: bool) {
+    egui::CollapsingHeader::new(RichText::new("How to type or paste a song").strong())
+        .id_salt("lyrics-help")
+        .default_open(standalone)
+        .show(ui, |ui| {
+            let row = |ui: &mut egui::Ui, code: &str, what: &str| {
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        Vec2::new(170.0, 16.0),
+                        egui::Label::new(RichText::new(code).monospace().color(crate::theme::brand::ACCENT_START)),
+                    );
+                    ui.label(what);
+                });
             };
+            row(ui, "[Verse 1]", "A name in square brackets, on its own line, starts a group.");
+            row(ui, "Amazing grace how sweet…", "The lines under it are the slide's lines.");
+            row(ui, "(empty line)", "Starts the next slide in the same group.");
+            row(ui, "[Chorus]  (again)", "A name used again repeats that group: no need to type it twice. The order of the names is the arrangement.");
+            row(ui, "Verse 1:  Chorus  (Bridge)", "Headings as lyric websites write them work too.");
+            ui.label(
+                RichText::new("Text before the first name goes in a group called \"Lyrics\". Group colours come from Settings → General. Leave the text empty for a blank presentation.")
+                    .small()
+                    .weak(),
+            );
+            let l = &mut st.edit.lyrics;
+            if l.text.trim().is_empty() && ui.button("Show an example").clicked() {
+                l.text = EXAMPLE.to_owned();
+                l.changed_at = 0.0;
+            }
         });
-    }
-    ui.label(
-        RichText::new("[Name] on its own line starts a group (a name used again repeats it); a blank line starts a new slide.")
-            .small()
-            .weak(),
-    );
+}
+
+fn body_main(
+    ui: &mut egui::Ui,
+    st: &mut UiState,
+    thumbs: &Sender<ThumbRequest>,
+    actions: &mut Vec<UiAction>,
+    path: &Path,
+    d: &doc::Document,
+    now: f64,
+) {
     let parsed = parse(&st.edit.lyrics.text);
     let avail = ui.available_size();
     ui.horizontal_top(|ui| {
@@ -362,12 +630,20 @@ fn body(
     });
     ui.separator();
     ui.horizontal(|ui| {
-        let ready = !parsed.groups.is_empty()
-            && (st.edit.lyrics.target != Target::New
-                || (!st.edit.lyrics.new_name.trim().is_empty()
-                    && !st.edit.library_dirs.is_empty()));
+        let l = &st.edit.lyrics;
+        let new = l.target == Target::New;
+        let ready = if new {
+            !l.new_name.trim().is_empty() && st.edit.new_dir.is_some()
+        } else {
+            !parsed.groups.is_empty()
+        };
+        let label = match (new, l.text.trim().is_empty()) {
+            (false, _) => "Apply",
+            (true, true) => "Make blank presentation",
+            (true, false) => "Make presentation",
+        };
         if ui
-            .add_enabled(ready, egui::Button::new(RichText::new("Apply").strong()))
+            .add_enabled(ready, egui::Button::new(RichText::new(label).strong()))
             .clicked()
         {
             apply(st, ui.ctx(), actions, path, d);
@@ -448,15 +724,13 @@ fn apply(
             st.edit.lyrics.open = false;
         }
         Target::New => {
-            let Some(dir) = st.edit.library_dirs.first().cloned() else {
+            let Some(dir) = st.edit.new_dir.clone() else {
                 return;
             };
             let name = st.edit.lyrics.new_name.trim().to_owned();
-            let file: PathBuf = dir.join(format!(
-                "{}.{}",
-                name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_"),
-                doc::NATIVE_EXT
-            ));
+            let file: PathBuf = dir.join(format!("{}.{}", file_stem(&name), doc::NATIVE_EXT));
+            // A blank presentation opens in the editor; a song is ready to use.
+            let edit = text.trim().is_empty();
             if file.exists() || file.with_extension("pro6").exists() {
                 st.toast(format!(
                     "A presentation named '{name}' already exists in {}. Choose another name.",
@@ -473,12 +747,18 @@ fn apply(
                     let spawned = std::thread::Builder::new()
                         .name("new-presentation".into())
                         .spawn(move || {
-                            let _ = done_tx
-                                .send(doc::save(&n).map(|s| s.path).map_err(|e| e.user_message()));
+                            let r = match std::fs::create_dir_all(&dir) {
+                                Ok(()) => doc::save(&n).map(|s| s.path).map_err(|e| e.user_message()),
+                                Err(e) => Err(format!(
+                                    "The folder for new presentations, {}, couldn't be made ({e}). Choose another in Settings → Folders.",
+                                    dir.display()
+                                )),
+                            };
+                            let _ = done_tx.send(r);
                             tx_ctx.request_repaint();
                         });
                     match spawned {
-                        Ok(_) => st.edit.lyrics_new = Some(done_rx),
+                        Ok(_) => st.edit.lyrics_new = Some(Saving { rx: done_rx, edit }),
                         Err(e) => st.toast(format!("Couldn't save the new presentation: {e}")),
                     }
                     st.edit.lyrics.open = false;
@@ -491,15 +771,19 @@ fn apply(
 
 /// A new presentation finished saving: open it in the editor.
 pub fn poll(st: &mut UiState, actions: &mut Vec<UiAction>) {
-    let Some(rx) = &st.edit.lyrics_new else {
+    let Some(saving) = &st.edit.lyrics_new else {
         return;
     };
-    let Ok(r) = rx.try_recv() else { return };
+    let Ok(r) = saving.rx.try_recv() else { return };
+    let edit = saving.edit;
     st.edit.lyrics_new = None;
     match r {
         Ok(p) => {
             st.edit.sel = None;
             st.edit.element = None;
+            if edit {
+                st.edit.on = true;
+            }
             actions.push(UiAction::RefreshLibrary);
             actions.push(UiAction::Core(opcore::Command::Open(p)));
         }
@@ -513,11 +797,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn plain_look_and_blank_presentations() {
+        let tpl = Theme::plain(PLAIN_CANVAS).to_document();
+        let file = PathBuf::from("/x/New.opres");
+        let n = new_presentation(&tpl, &file, "", Vec::new(), None).unwrap();
+        assert_eq!(n.groups.len(), 1);
+        assert_eq!(n.groups[0].name, "Slides");
+        assert_eq!(n.groups[0].slides.len(), 1);
+        assert!(n.text_boxes().all(|t| t.plain_text().is_empty()));
+        assert_eq!(n.canvas, PLAIN_CANVAS);
+        let song = new_presentation(&tpl, &file, EXAMPLE, Vec::new(), None).unwrap();
+        let names: Vec<&str> = song.groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, ["Verse 1", "Chorus", "Verse 2"]);
+        let run = song
+            .text_boxes()
+            .next()
+            .unwrap()
+            .runs()
+            .next()
+            .unwrap()
+            .clone();
+        assert_eq!(run.font, "Arial");
+        assert_eq!(run.color, Some([255, 255, 255]));
+    }
+
+    #[test]
     fn a_new_presentation_from_lyrics_saves_as_opres_in_the_presentations_style() {
         let src =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/song_1024x768.pro6");
         let d = doc::load(&src).unwrap();
-        let dir = std::env::temp_dir().join(format!("openpresenter-lyrics-new-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("openpresenter-lyrics-new-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("New Song.opres");
