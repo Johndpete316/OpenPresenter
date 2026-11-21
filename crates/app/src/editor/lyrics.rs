@@ -223,13 +223,16 @@ fn new_presentation(
     if text.trim().is_empty() {
         n.groups[0].name = "Slides".into();
         n.groups[0].src = None;
-        Op::SetText {
-            group: 0,
-            slide: 0,
-            text: String::new(),
+        // Empty, but keeping one empty run so the box remembers its font for typing.
+        for e in &mut n.groups[0].slides[0].elements {
+            if let doc::Element::Text(t) = e
+                && t.problem.is_none()
+            {
+                let old = t.plain_text();
+                t.paragraphs = doc::rich::replace_plain(&t.paragraphs, &old, "");
+                t.paragraphs.truncate(1);
+            }
         }
-        .apply(&mut n)
-        .map_err(|e| e.user_message())?;
         if let Some(t) = theme {
             Op::ApplyTheme {
                 theme: t,
@@ -325,25 +328,42 @@ fn template<'a>(
         st.edit.lyrics.like_selected = false;
         st.edit.lyrics.preview_for = None;
     }
-    match selected {
-        Some((p, d)) if st.edit.lyrics.like_selected => (p.to_path_buf(), Cow::Borrowed(d)),
-        _ => match st
-            .edit
-            .lyrics
-            .theme
-            .as_ref()
-            .and_then(|u| st.edit.themes.find(u))
-        {
-            Some(t) => (t.path.clone(), Cow::Owned(t.to_document())),
-            None => {
-                let canvas = selected.map_or(PLAIN_CANVAS, |(_, d)| d.canvas);
-                (
-                    PathBuf::from("new.opres"),
-                    Cow::Owned(Theme::plain(canvas).to_document()),
-                )
-            }
-        },
+    // "Like" the selected presentation means its look (canvas, background, the main text
+    // box's place and style), as a theme would carry it, not a copy of its slide.
+    let like = selected
+        .filter(|_| st.edit.lyrics.like_selected)
+        .and_then(|(p, d)| look_of(d).map(|t| (p, t)));
+    if let Some((p, t)) = like {
+        return (p.to_path_buf(), Cow::Owned(t.to_document()));
     }
+    match st
+        .edit
+        .lyrics
+        .theme
+        .as_ref()
+        .and_then(|u| st.edit.themes.find(u))
+    {
+        Some(t) => (t.path.clone(), Cow::Owned(t.to_document())),
+        None => {
+            let canvas = selected.map_or(PLAIN_CANVAS, |(_, d)| d.canvas);
+            (
+                PathBuf::from("new.opres"),
+                Cow::Owned(Theme::plain(canvas).to_document()),
+            )
+        }
+    }
+}
+
+/// The look of `d`'s first slide with styled text, as a theme.
+fn look_of(d: &doc::Document) -> Option<Theme> {
+    d.groups.iter().enumerate().find_map(|(g, gr)| {
+        gr.slides.iter().enumerate().find_map(|(s, sl)| {
+            sl.text_boxes()
+                .any(|t| t.problem.is_none() && t.runs().next().is_some())
+                .then(|| Theme::from_slide("Look", d, (g, s)).ok())
+                .flatten()
+        })
+    })
 }
 
 /// Open the New presentation prompt (name and look; then a blank presentation in the
@@ -906,7 +926,8 @@ pub fn poll(st: &mut UiState, actions: &mut Vec<UiAction>) {
             st.edit.sel = None;
             st.edit.element = None;
             if edit {
-                st.edit.on = true;
+                // Turned on once it's selected, so the editor never shows the previous one.
+                st.edit.open_when_selected = Some(p.clone());
             }
             actions.push(UiAction::RefreshLibrary);
             actions.push(UiAction::Core(opcore::Command::Open(p)));
@@ -919,6 +940,31 @@ pub fn poll(st: &mut UiState, actions: &mut Vec<UiAction>) {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn like_another_presentation_takes_its_look_not_its_slides() {
+        let src =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/song_1024x768.pro6");
+        let d = doc::load(&src).unwrap();
+        let mut st = UiState::default();
+        st.edit.lyrics.like_selected = true;
+        let (_, tpl) = template(&mut st, Some((&src, &d)));
+        assert_eq!(tpl.groups.len(), 1);
+        assert_eq!(tpl.groups[0].slides.len(), 1);
+        let slide = &tpl.groups[0].slides[0];
+        assert_eq!(slide.elements.len(), 1, "only the main text box");
+        assert!(slide.notes.is_empty() && slide.label.is_empty());
+        assert_eq!(tpl.canvas, d.canvas);
+        let n = new_presentation(&tpl, Path::new("/x/T.opres"), "", Vec::new(), None).unwrap();
+        assert_eq!(n.slides().count(), 1, "a blank presentation has one slide");
+        let theirs = d.text_boxes().find(|t| t.runs().next().is_some()).unwrap();
+        let ours = n.text_boxes().next().unwrap();
+        assert_eq!(ours.frame, theirs.frame);
+        assert_eq!(
+            ours.runs().next().unwrap().font,
+            theirs.runs().next().unwrap().font
+        );
+    }
 
     #[test]
     fn plain_look_and_blank_presentations() {

@@ -124,6 +124,8 @@ pub struct EditState {
     pub library_dirs: Vec<PathBuf>,
     /// Where new presentations are saved (from the settings).
     pub new_dir: Option<PathBuf>,
+    /// Open the editor when this presentation becomes the selected one (a new one).
+    pub open_when_selected: Option<PathBuf>,
     themes: themes::Themes,
     /// Paste Lyrics window, and a new presentation being saved from it.
     lyrics: lyrics::Lyrics,

@@ -1103,7 +1103,9 @@ impl ApplicationHandler<UserEvent> for App {
                     .filter(|(_, due)| due.is_some_and(|d| Instant::now() >= d))
                     .map(|(p, _)| p.clone());
                 op.frame(
-                    |ui| actions = ui::draw(ui, ui_state, show, settings, thumbs, &log),
+                    // egui may run a frame twice (a discarded first pass when the layout
+                    // changes); keep what both passes asked for.
+                    |ui| actions.extend(ui::draw(ui, ui_state, show, settings, thumbs, &log)),
                     capture.as_deref(),
                 );
                 if capture.is_some() {

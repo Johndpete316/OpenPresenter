@@ -129,6 +129,8 @@ pub struct UiState {
     /// Open the New presentation window on the first frame (`--open-new`).
     pub open_new_at_start: bool,
     pub open_arrangements_at_start: bool,
+    /// The presentation a library refresh was last asked for (see `draw`).
+    pub library_refresh_for: Option<PathBuf>,
     /// The arrangement editor window.
     pub arrange: Option<crate::arrangements::ArrangeWindow>,
     /// Exports running in the background (Import/Export menu).
@@ -337,6 +339,24 @@ pub fn draw(
     // A new presentation finished saving (from either window): open it.
     crate::editor::lyrics::poll(st, &mut actions);
     crate::file_menu::poll(st);
+    if let Some(p) = &st.edit.open_when_selected
+        && show.selected.as_ref() == Some(p)
+        && show.docs.contains_key(p)
+    {
+        st.edit.open_when_selected = None;
+        st.edit.on = true;
+    }
+    // The selected presentation is in a library folder but not in the index (just made,
+    // imported or saved under a new name): re-read the library, once per file.
+    if let Some(p) = &show.selected
+        && st.library_refresh_for.as_ref() != Some(p)
+        && show.docs.contains_key(p)
+        && !st.library.entries.iter().any(|e| &e.path == p)
+        && settings.library_folders().iter().any(|d| p.starts_with(d))
+    {
+        st.library_refresh_for = Some(p.clone());
+        actions.push(UiAction::RefreshLibrary);
+    }
     // The editor takes the whole window under the toolbar. It shows its own copy
     // (unsaved edits), not the saved document.
     if st.edit.on
