@@ -181,6 +181,30 @@ pub fn poll(st: &mut UiState) {
     }
 }
 
+impl Themes {
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+
+    pub fn find(&self, uuid: &str) -> Option<&Theme> {
+        self.list.iter().find(|t| t.uuid == uuid)
+    }
+
+    /// (UUID, name) of every theme.
+    pub fn names(&self) -> Vec<(String, String)> {
+        self.list
+            .iter()
+            .map(|t| (t.uuid.clone(), t.name.clone()))
+            .collect()
+    }
+}
+
+/// Read the theme list (without opening the window).
+pub fn refresh(st: &mut UiState, ctx: &egui::Context) {
+    let dir = st.edit.themes_dir.clone();
+    spawn(st, ctx, move || list(dir));
+}
+
 /// Open the Themes window (and read the theme list).
 pub fn open(st: &mut UiState, ctx: &egui::Context) {
     st.edit.themes.open = true;

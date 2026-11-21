@@ -788,6 +788,26 @@ impl App {
         }
     }
 
+    /// Re-read the library folders in the background (new files show up).
+    fn revalidate_library(&mut self) {
+        self.ui.library_status = "Checking library…".into();
+        let proxy = self.proxy.clone();
+        let _ = pp6core::library::spawn_revalidate(
+            self.ui.library.clone(),
+            self.settings.library_dirs.clone(),
+            Some(self.paths.library_cache.clone()),
+            move |idx, s| {
+                let status = format!(
+                    "{} presentations ({} re-read, {} unreadable)",
+                    idx.entries.len(),
+                    s.parsed,
+                    s.failed
+                );
+                let _ = proxy.send_event(UserEvent::Library(Box::new(idx), status));
+            },
+        );
+    }
+
     fn save_settings(&mut self) {
         if let Err(e) = self.settings.save(&self.paths.settings) {
             self.ui.app_notices.push(e.user_message());
@@ -806,23 +826,13 @@ impl App {
                         self.settings.library_dirs.push(d);
                         self.save_settings();
                     }
-                    self.ui.library_status = "Checking library…".into();
-                    let proxy = self.proxy.clone();
-                    let _ = pp6core::library::spawn_revalidate(
-                        self.ui.library.clone(),
-                        self.settings.library_dirs.clone(),
-                        Some(self.paths.library_cache.clone()),
-                        move |idx, s| {
-                            let status = format!(
-                                "{} presentations ({} re-read, {} unreadable)",
-                                idx.entries.len(),
-                                s.parsed,
-                                s.failed
-                            );
-                            let _ = proxy.send_event(UserEvent::Library(Box::new(idx), status));
-                        },
-                    );
+                    self.revalidate_library();
                 }
+            }
+            UiAction::RefreshLibrary => self.revalidate_library(),
+            UiAction::SetGroupColors(c) => {
+                self.settings.editor.group_colors = c;
+                self.save_settings();
             }
             UiAction::AddMediaFolder => {
                 if let Some(d) = rfd::FileDialog::new()

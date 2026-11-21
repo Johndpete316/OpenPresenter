@@ -30,6 +30,7 @@ mod arrange;
 mod copy_style;
 mod fit;
 mod image;
+mod lyrics;
 mod snap;
 mod text;
 mod themes;
@@ -122,6 +123,11 @@ pub struct EditState {
     pub themes_dir: Option<PathBuf>,
     pub library_dirs: Vec<PathBuf>,
     themes: themes::Themes,
+    /// Paste Lyrics window, and a new presentation being saved from it.
+    lyrics: lyrics::Lyrics,
+    lyrics_new: Option<crossbeam_channel::Receiver<Result<PathBuf, String>>>,
+    /// Default group colours (from the settings).
+    pub group_colors: Vec<pp6core::GroupColor>,
     /// Turn the editor back on after theme editing ends (Done).
     reopen_after_theme: bool,
     /// Copied style (Copy Style), for pasting.
@@ -455,6 +461,7 @@ pub fn editor(
     text::check_session(st, actions, path, d);
     image::poll(ui, st, actions, path, d);
     themes::poll(st);
+    lyrics::poll(st, actions);
     // Ctrl+Alt+C / Ctrl+Alt+V: copy / paste style (not while typing).
     if let Some((g, s)) = st.edit.sel
         && st.edit.session.is_none()
@@ -503,6 +510,7 @@ pub fn editor(
         .show(ui, |ui| canvas(ui, st, actions, path, d));
     text::native_prompt(ui.ctx(), st, actions, path);
     themes::window(ui.ctx(), st, show, actions, path, d);
+    lyrics::window(ui.ctx(), st, thumbs, actions, path, d);
     let mut pending = false;
     if st.edit.close_requested {
         pending = st.edit.session.as_ref().is_some_and(|s| s.dirty());
@@ -642,6 +650,14 @@ fn top_bar(
                     st.edit.notes_for = None;
                 }
                 ui.separator();
+                if ui
+                    .add_enabled(d.theme.is_none(), egui::Button::new("Paste Lyrics…"))
+                    .on_hover_text("Edit the presentation as lyrics text, or paste a song's words to make its slides")
+                    .clicked()
+                {
+                    text::commit(st, actions, path, d);
+                    lyrics::open(st, ui.ctx(), d);
+                }
                 if ui
                     .add_enabled(d.theme.is_none(), egui::Button::new("Theme…"))
                     .on_hover_text("Make, apply and edit themes")

@@ -12,6 +12,7 @@ pub mod convert;
 pub mod edit;
 pub mod file;
 pub mod history;
+pub mod lyrics;
 pub mod model;
 pub mod rich;
 pub mod style;

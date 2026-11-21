@@ -222,6 +222,15 @@ pub enum Edit {
     RemoveArrangement {
         uuid: String,
     },
+    /// Lyrics text → groups, slides and arrangement (see [`crate::lyrics`]).
+    /// `colors`: default group colours by name; `theme`: style for new slides
+    /// (else they copy the presentation's first slide).
+    SetLyrics {
+        text: String,
+        mode: crate::lyrics::LyricsMode,
+        colors: Vec<(String, Rgba)>,
+        theme: Option<Box<crate::Theme>>,
+    },
     /// Several edits as one step (one undo, all or nothing).
     Batch {
         label: String,
@@ -313,6 +322,7 @@ impl Edit {
             Edit::RenameArrangement { .. } => "Rename arrangement".into(),
             Edit::SetArrangementGroups { .. } => "Change arrangement".into(),
             Edit::RemoveArrangement { .. } => "Delete arrangement".into(),
+            Edit::SetLyrics { .. } => "Paste lyrics".into(),
             Edit::Batch { label, .. } => label.clone(),
         }
     }
@@ -381,6 +391,13 @@ impl Edit {
             | Edit::SetHidden { hidden: false, .. } => vec![Feature::SlideStructure],
             Edit::SetLocked { .. } => vec![Feature::LayerLock],
             Edit::ApplyTheme { theme, .. } => theme.features(),
+            Edit::SetLyrics { theme, .. } => {
+                let mut v = vec![Feature::Text, Feature::SlideStructure];
+                if let Some(t) = theme {
+                    v.extend(t.features());
+                }
+                v
+            }
             Edit::SetHidden { hidden: true, .. } => vec![Feature::LayerHide],
             Edit::SetBackgroundImage { image: Some(b), .. } => {
                 let mut v = vec![Feature::ImageBackground];
@@ -596,6 +613,17 @@ impl Edit {
                     return Err(not_found("element"));
                 }
                 s.elements.remove(*element);
+                Ok(())
+            }
+            Edit::SetLyrics {
+                text,
+                mode,
+                colors,
+                theme,
+            } => {
+                let mut copy = doc.clone();
+                crate::lyrics::apply(&mut copy, text, *mode, colors, theme.as_deref())?;
+                *doc = copy;
                 Ok(())
             }
             Edit::ApplyTheme {
@@ -986,6 +1014,10 @@ fn group_ids(doc: &Document, seq: &[usize]) -> Result<Vec<String>, EditError> {
                 .ok_or_else(|| not_found("group"))
         })
         .collect()
+}
+
+pub(crate) fn set_text_pub(t: &mut TextBox, text: &str) -> Result<(), EditError> {
+    set_text(t, text)
 }
 
 fn set_text(t: &mut TextBox, text: &str) -> Result<(), EditError> {

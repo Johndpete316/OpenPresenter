@@ -29,11 +29,36 @@ pub struct Settings {
 pub struct EditorSettings {
     /// Fit Text never shrinks the main text size below this (canvas pixels).
     pub fit_min_size: f64,
+    /// Colours for groups made by Paste Lyrics, by name ("Verse" also matches
+    /// "Verse 2").
+    pub group_colors: Vec<GroupColor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroupColor {
+    pub name: String,
+    pub color: [u8; 3],
 }
 
 impl Default for EditorSettings {
     fn default() -> Self {
-        EditorSettings { fit_min_size: 24.0 }
+        let c = |name: &str, color: [u8; 3]| GroupColor {
+            name: name.into(),
+            color,
+        };
+        EditorSettings {
+            fit_min_size: 24.0,
+            group_colors: vec![
+                c("Verse", [40, 110, 230]),
+                c("Pre-Chorus", [240, 140, 30]),
+                c("Chorus", [220, 40, 50]),
+                c("Bridge", [150, 60, 200]),
+                c("Tag", [20, 160, 140]),
+                c("Intro", [120, 120, 120]),
+                c("Outro", [120, 120, 120]),
+                c("Ending", [120, 120, 120]),
+            ],
+        }
     }
 }
 

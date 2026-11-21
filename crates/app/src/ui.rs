@@ -53,6 +53,9 @@ pub enum UiAction {
     /// How background media fills the output.
     SetMediaScaling(pp6core::MediaScaling),
     SetFitMinSize(f64),
+    SetGroupColors(Vec<pp6core::GroupColor>),
+    /// Re-read the library folders (a presentation was added).
+    RefreshLibrary,
     /// mpv audio device name; `None` = system default.
     SetAudioDevice(Option<String>),
     RemoveLibraryFolder(usize),
@@ -280,6 +283,11 @@ pub fn draw(
     }
     toolbar(ui, st, show, settings, &mut actions);
     st.edit.fit_min_size = settings.editor.fit_min_size;
+    if st.edit.group_colors != settings.editor.group_colors {
+        st.edit
+            .group_colors
+            .clone_from(&settings.editor.group_colors);
+    }
     st.edit.themes_dir = settings
         .library_dirs
         .first()
@@ -1981,6 +1989,47 @@ fn settings_general(
             actions.push(UiAction::SetFitMinSize(v));
         }
     });
+    egui::CollapsingHeader::new("Group colours for Paste Lyrics")
+        .id_salt("settings-group-colours")
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new("New groups get the colour of the first name their name starts with (\"Verse\" also colours \"Verse 2\"). Groups already in the presentation keep theirs.")
+                    .small()
+                    .weak(),
+            );
+            let mut list = settings.editor.group_colors.clone();
+            let mut changed = false;
+            let mut remove = None;
+            for (i, gc) in list.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    changed |= ui
+                        .add(egui::TextEdit::singleline(&mut gc.name).desired_width(160.0))
+                        .lost_focus();
+                    let mut c = Color32::from_rgb(gc.color[0], gc.color[1], gc.color[2]);
+                    if ui.color_edit_button_srgba(&mut c).changed() {
+                        gc.color = [c.r(), c.g(), c.b()];
+                        changed = true;
+                    }
+                    if ui.small_button("Remove").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                list.remove(i);
+                changed = true;
+            }
+            if ui.button("Add a name").clicked() {
+                list.push(pp6core::GroupColor {
+                    name: "New".into(),
+                    color: [128, 128, 128],
+                });
+                changed = true;
+            }
+            if changed {
+                actions.push(UiAction::SetGroupColors(list));
+            }
+        });
     ui.separator();
     ui.heading("Audio");
     let label = |d: &media::AudioDevice| {

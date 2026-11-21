@@ -19,8 +19,8 @@ pub use playlist::{
     ItemRef, Playlist, PlaylistError, PlaylistFile, PlaylistItem, load_dir as load_playlists,
 };
 pub use settings::{
-    EditorSettings, KeyBindings, MediaScaling, OutputSettings, Resolution, Settings, SettingsError,
-    WebSettings,
+    EditorSettings, GroupColor, KeyBindings, MediaScaling, OutputSettings, Resolution, Settings,
+    SettingsError, WebSettings,
 };
 pub use state::{Editing, Live, LoopState, Notice, NoticeLevel, ShowState};
 

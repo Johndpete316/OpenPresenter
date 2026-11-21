@@ -374,14 +374,24 @@ Filled in from real files and testing in PP6. Starting state:
   - **Not done:** the plan's "many presentations from the library (multi-select)" is a checklist in the Themes window, not multi-select in the operator's library list.
 
 ### E8 — Paste Lyrics to Slides
-- [ ] **Paste Lyrics** opens a full-height text view with a live slide preview beside it
-- [ ] A blank line starts a new slide. A line matching `[Name]` (e.g. `[Verse 1]`, `[Chorus]`, `[Ref]`) starts a new group with that name.
-- [ ] Repeated group names reuse the same group, so a second `[Chorus]` points at the existing Chorus. The arrangement follows the paste order.
-- [ ] Group colours: known names reuse their existing colour; defaults per name are configurable
-- [ ] Applies the chosen theme, or the current presentation's style
-- [ ] Works on a new presentation, or replaces or appends to the current one
-- [ ] Reverse direction: show an existing presentation as editable lyrics text with `[Group]` headers, re-flowed on apply
+- [x] **Paste Lyrics** opens a full-height text view with a live slide preview beside it
+- [x] A blank line starts a new slide. A line matching `[Name]` (e.g. `[Verse 1]`, `[Chorus]`, `[Ref]`) starts a new group with that name.
+- [x] Repeated group names reuse the same group, so a second `[Chorus]` points at the existing Chorus. The arrangement follows the paste order.
+- [x] Group colours: known names reuse their existing colour; defaults per name are configurable
+- [x] Applies the chosen theme, or the current presentation's style
+- [x] Works on a new presentation, or replaces or appends to the current one
+- [x] Reverse direction: show an existing presentation as editable lyrics text with `[Group]` headers, re-flowed on apply
 - **Accept:** pasting a song with verses, chorus and repeats produces the right groups, slides and arrangement, and round-trips through the text view unchanged.
+- **Status (2026-11-21):** done. Acceptance test: `paste_a_song_and_round_trip_it_through_the_text_view` in `crates/doc/tests/lyrics.rs` (groups, slide counts, arrangement Verse 1 → Chorus → Verse 2 → Chorus → Bridge → Chorus; the text view shows exactly the pasted text; applying it unchanged changes nothing; it survives a `.pro6` save). `reflowing_an_existing_presentation_keeps_untouched_slides_byte_identical` checks that re-flowing the song fixture's own text gives a byte-identical `.pro6`.
+  - **Window** (Paste Lyrics… in the top bar): opens with the presentation as text (the reverse direction: groups in the selected arrangement's order, `[Name]` lines, blank lines between slides, a repeat is just its `[Name]`). Text on the left, the resulting slides on the right, rendered by `render` a moment after typing stops, with the group count, slide count and order.
+  - **Rules** (`doc::lyrics`): `[Name]` starts a group; a name used again is a repeat (case doesn't matter), and lines under a repeat are ignored if the group already has slides (the window counts them); a blank line starts a slide; text before any name goes in a group called "Lyrics"; a name with nothing under it anywhere is dropped.
+  - **Replace:** groups that keep their name keep their slides: a slide whose text is unchanged is untouched (same UUID and `.pro6` XML), a changed one keeps its look and takes the new words, extra slides are new. Groups not in the text are removed (and from arrangements). The arrangement follows the text: the selected arrangement is updated, or a "Lyrics" arrangement is made when the order isn't simply each group once.
+  - **Append:** new groups go after the existing ones; a name the presentation already has points at that group. The selected arrangement gets the order added.
+  - **New presentation:** a `.opres` named in the window, in the first library folder, with the current presentation's first text slide as the style (raw `.pro6` elements left out); saved on a worker thread, then opened in the editor and added to the library.
+  - **Style of new slides:** a copy of the presentation's first text slide, or a chosen theme (applied to the new slides only).
+  - **Colours:** groups that keep their name keep their colour; new ones take the first default whose name their name starts with (Settings → General → Editor → Group colours for Paste Lyrics: Verse, Pre-Chorus, Chorus, Bridge, Tag, Intro, Outro, Ending; editable).
+  - **One step:** Replace and Append are one `SetLyrics` edit, one undo step.
+  - **Limits:** slides without text aren't in the text view, so Replace removes them (the window says how many). Only the first text box with text is the lyrics; a slide's other text boxes keep their text when re-flowed, and are emptied on new slides.
 
 ## Unknowns to Verify
 - [ ] Every `Unverified` row in the Compatibility Matrix
