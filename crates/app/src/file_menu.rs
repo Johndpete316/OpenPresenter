@@ -1,8 +1,9 @@
 //! Import / Export, in the toolbar (docs/PLAN.md, Backlog).
 //!
-//! Import copies presentations into the library (a `.pro6` into the first library
-//! folder, a `.opres` into the new-presentations folder; nothing is converted), opens
-//! a lyrics `.txt` in the New presentation window, or imports a playlist. Export
+//! Import makes a new song from typed or pasted words, copies presentations into the
+//! library (a `.pro6` into the first library folder, a `.opres` into the
+//! new-presentations folder; nothing is converted), opens a lyrics `.txt` in the song
+//! window, or imports a playlist. Export
 //! writes the selected presentation's words as text, its slides as PNG pictures, or
 //! (for a `.opres` that came from a `.pro6`) a ProPresenter 6 file.
 
@@ -37,7 +38,19 @@ pub fn button(
     .on_hover_text("Bring presentations, lyrics and playlists in; save copies out");
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(300.0);
-        ui.label(RichText::new("Import").strong());
+        theme::menu_heading(ui, "Import");
+        if ui
+            .button("New song from typed or pasted words…")
+            .on_hover_text("Paste a song's words (from a lyrics site or a document); groups and slides are made from them")
+            .clicked()
+        {
+            let selected = show
+                .selected
+                .as_ref()
+                .is_some_and(|p| show.docs.get(p).is_some_and(|d| d.theme.is_none()));
+            crate::editor::lyrics::open_new(st, ui.ctx(), selected);
+            ui.close();
+        }
         let lib = settings.library_dirs.first();
         if ui
             .add_enabled(lib.is_some(), egui::Button::new("Presentations (.pro6, .opres)…"))
@@ -54,7 +67,7 @@ pub fn button(
         }
         if ui
             .button("Song words from a text file (.txt)…")
-            .on_hover_text("Opens the New presentation window with the file's text, ready to check and save")
+            .on_hover_text("Opens the song window with the file's text, ready to check and save")
             .clicked()
         {
             import_lyrics(st, ui.ctx(), show);
@@ -62,17 +75,15 @@ pub fn button(
         if ui.button("Playlist…").clicked() {
             actions.push(UiAction::ImportPlaylist);
         }
-        ui.separator();
+        ui.add_space(4.0);
+        theme::menu_heading(ui, "Export");
         let selected = show
             .selected
             .as_ref()
             .and_then(|p| show.docs.get(p).map(|d| (p.clone(), d.clone())));
-        match &selected {
-            Some((p, _)) => ui.label(
-                RichText::new(format!("Export {}", crate::ui::title(p))).strong(),
-            ),
-            None => ui.label(RichText::new("Export").strong()),
-        };
+        if let Some((p, _)) = &selected {
+            ui.label(RichText::new(crate::ui::title(p)).small().weak());
+        }
         let Some((path, d)) = selected else {
             ui.label(
                 RichText::new("Select a presentation in the library or a playlist first.")

@@ -209,6 +209,22 @@ pub fn section_header<R>(ui: &mut Ui, title: &str, right: impl FnOnce(&mut Ui) -
         .inner
 }
 
+/// A heading inside a menu: a dark band with small capitals in the accent colour, so it
+/// reads as a title, not an item to click.
+pub fn menu_heading(ui: &mut Ui, title: &str) {
+    let h = 22.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::hover());
+    let band = rect.expand2(Vec2::new(ui.spacing().menu_margin.left as f32, 0.0));
+    ui.painter().rect_filled(band, 0.0, color::HEADER);
+    ui.painter().text(
+        rect.left_center() + Vec2::new(2.0, 0.0),
+        Align2::LEFT_CENTER,
+        title.to_uppercase(),
+        FontId::proportional(11.0),
+        brand::ACCENT_START,
+    );
+}
+
 const LOGO_PNG: &[u8] = include_bytes!("../assets/openpresenter-64.png");
 /// The full GPL-3.0 text, shown from Settings (GPL section 0, "Appropriate Legal Notices").
 pub const LICENSE_TEXT: &str = include_str!("../../../LICENSE");

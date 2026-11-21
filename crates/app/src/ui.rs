@@ -358,7 +358,7 @@ pub fn draw(
     }
     if st.open_new_at_start {
         st.open_new_at_start = false;
-        crate::editor::lyrics::open_new(st, ui.ctx(), show.selected.is_some());
+        crate::editor::lyrics::open_blank(st, ui.ctx(), show.selected.is_some());
     }
     {
         let selected = show
@@ -367,13 +367,9 @@ pub fn draw(
             .and_then(|p| show.docs.get(p).map(|d| (p.clone(), d.clone())));
         crate::grid_menu::quick_edit_window(ui.ctx(), st, show, &mut actions);
         crate::arrangements::window(ui.ctx(), st, show, thumbs, &mut actions);
-        crate::editor::lyrics::new_window(
-            ui.ctx(),
-            st,
-            thumbs,
-            &mut actions,
-            selected.as_ref().map(|(p, d)| (p.as_path(), &**d)),
-        );
+        let sel = selected.as_ref().map(|(p, d)| (p.as_path(), &**d));
+        crate::editor::lyrics::new_window(ui.ctx(), st, thumbs, &mut actions, sel);
+        crate::editor::lyrics::blank_dialog(ui.ctx(), st, &mut actions, sel);
     }
     egui::Panel::left("left")
         .resizable(true)
@@ -485,23 +481,6 @@ fn toolbar(
                     actions.push(UiAction::Core(Command::ClearBackground));
                 }
                 toolbar_gap(ui);
-                if tool_button(
-                    ui,
-                    icon::FILE_PLUS,
-                    "New",
-                    Color32::from_rgb(110, 110, 116),
-                    false,
-                    !st.edit.on,
-                )
-                .on_hover_text("New presentation: type or paste a song's words, or start blank")
-                .clicked()
-                {
-                    let selected = show
-                        .selected
-                        .as_ref()
-                        .is_some_and(|p| show.docs.get(p).is_some_and(|d| d.theme.is_none()));
-                    crate::editor::lyrics::open_new(st, ui.ctx(), selected);
-                }
                 crate::file_menu::button(ui, st, show, settings, actions);
                 let can_edit = show
                     .selected
@@ -894,9 +873,14 @@ fn library(
     actions: &mut Vec<UiAction>,
 ) {
     let search = &mut st.search;
+    let mut new_clicked = None;
     section_header(ui, "Library", |ui| {
-        if small_icon(ui, icon::FOLDER_PLUS, "Add a library folder").clicked() {
-            actions.push(UiAction::AddLibraryFolder);
+        if small_icon(ui, icon::FILE_PLUS, "New presentation").clicked() {
+            let selected = show
+                .selected
+                .as_ref()
+                .is_some_and(|p| show.docs.get(p).is_some_and(|d| d.theme.is_none()));
+            new_clicked = Some(selected);
         }
         ui.add(
             egui::TextEdit::singleline(search)
@@ -904,6 +888,9 @@ fn library(
                 .desired_width(ui.available_width()),
         );
     });
+    if let Some(selected) = new_clicked {
+        crate::editor::lyrics::open_blank(st, ui.ctx(), selected);
+    }
     if settings.library_folders().is_empty() {
         egui::Frame::new().inner_margin(8).show(ui, |ui| {
             ui.add(

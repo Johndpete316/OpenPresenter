@@ -241,7 +241,7 @@ and every new feature works on both kinds of file unless a `.pro6` truly can't h
   right-click to remove, "repeat after"), the group pool (click or drag to add, any number
   of times), and the slides the order plays. From the grid each change saves at once; from
   the editor it's part of the editor copy.
-- [x] **New presentation.** Toolbar *New*: a window to type or paste a song, styled like the
+- [x] **New presentation.** The Library header's New button (replacing add-folder, which is in Settings → Folders) asks for a name and a look, then opens a blank presentation in the editor. Import/Export → *New song from typed or pasted words* opens the song window, styled like the
   selected presentation, a theme, or a plain built-in look (`Theme::plain`); empty text
   makes a blank presentation and opens it in the editor.
 - [x] **Where `.opres` files go.** Settings → Folders → *New presentations (.opres)*

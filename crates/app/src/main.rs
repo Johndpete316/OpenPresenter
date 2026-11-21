@@ -99,7 +99,7 @@ struct Args {
     /// Open the Settings window at startup.
     #[arg(long)]
     open_settings: bool,
-    /// Open the New presentation window at startup (development / screenshots).
+    /// Open the New presentation prompt at startup (development / screenshots).
     #[arg(long)]
     open_new: bool,
     /// Open the arrangement editor for --open's presentation (development / screenshots).

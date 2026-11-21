@@ -3,10 +3,12 @@
 //! preview beside it. Apply replaces or appends to the presentation (one undo
 //! step), or makes a new presentation in the library.
 //!
-//! The same window opens from the toolbar as *New presentation* ([`open_new`],
+//! The same window opens from Import/Export as *New song from text* ([`open_new`],
 //! [`new_window`]): it always makes a new `.opres`, styled like the selected
-//! presentation, a theme, or the plain built-in look. With no text it makes a blank
-//! presentation and opens it in the editor.
+//! presentation, a theme, or the plain built-in look.
+//!
+//! *New presentation* (the library's + button, [`open_blank`], [`blank_dialog`]) only asks
+//! for a name and a look, then opens a blank presentation in the editor.
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -35,6 +37,8 @@ const PREVIEW_AFTER: f64 = 0.35;
 #[derive(Default)]
 pub struct Lyrics {
     pub open: bool,
+    /// The New presentation name prompt is open.
+    blank: bool,
     /// Opened from the toolbar (New presentation), not from the editor.
     standalone: bool,
     /// Standalone: style new slides like the selected presentation.
@@ -307,12 +311,21 @@ pub fn new_window(
         return;
     }
     let selected = selected.filter(|(_, d)| d.theme.is_none());
-    if selected.is_none() && l.like_selected {
+    let (path, template) = template(st, selected);
+    let title = selected.map(|(p, _)| crate::ui::title(p));
+    show(ctx, st, thumbs, actions, &path, &template, Some(title));
+}
+
+/// What new slides copy: the selected presentation, the theme, or the plain look.
+fn template<'a>(
+    st: &mut UiState,
+    selected: Option<(&'a Path, &'a doc::Document)>,
+) -> (PathBuf, Cow<'a, doc::Document>) {
+    if selected.is_none() && st.edit.lyrics.like_selected {
         st.edit.lyrics.like_selected = false;
         st.edit.lyrics.preview_for = None;
     }
-    // What new slides copy: the selected presentation, the theme, or the plain look.
-    let (path, template): (PathBuf, Cow<'_, doc::Document>) = match selected {
+    match selected {
         Some((p, d)) if st.edit.lyrics.like_selected => (p.to_path_buf(), Cow::Borrowed(d)),
         _ => match st
             .edit
@@ -330,9 +343,98 @@ pub fn new_window(
                 )
             }
         },
-    };
+    }
+}
+
+/// Open the New presentation prompt (name and look; then a blank presentation in the
+/// editor). `selected`: a presentation is selected, so it can look like it.
+pub fn open_blank(st: &mut UiState, ctx: &egui::Context, selected: bool) {
+    let l = &mut st.edit.lyrics;
+    l.blank = true;
+    l.open = false;
+    l.like_selected = selected;
+    l.theme = None;
+    l.text.clear();
+    l.target = Target::New;
+    l.new_name.clear();
+    if st.edit.themes.is_empty() {
+        super::themes::refresh(st, ctx);
+    }
+}
+
+/// The New presentation prompt.
+pub fn blank_dialog(
+    ctx: &egui::Context,
+    st: &mut UiState,
+    actions: &mut Vec<UiAction>,
+    selected: Option<(&Path, &doc::Document)>,
+) {
+    if !st.edit.lyrics.blank {
+        return;
+    }
+    let selected = selected.filter(|(_, d)| d.theme.is_none());
     let title = selected.map(|(p, _)| crate::ui::title(p));
-    show(ctx, st, thumbs, actions, &path, &template, Some(title));
+    let mut create = false;
+    let mut cancel = false;
+    let modal = egui::Modal::new(egui::Id::unique("new-presentation")).show(ctx, |ui| {
+        ui.set_width(520.0);
+        ui.label(RichText::new("New presentation").size(18.0).strong());
+        ui.add_space(4.0);
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut st.edit.lyrics.new_name)
+                .hint_text("Name, e.g. the song title")
+                .desired_width(f32::INFINITY),
+        );
+        if !r.has_focus() && st.edit.lyrics.new_name.is_empty() {
+            r.request_focus();
+        }
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        ui.add_space(4.0);
+        new_header(ui, st, title.as_deref());
+        match &st.edit.new_dir {
+            Some(dir) => ui.label(
+                RichText::new(format!(
+                    "Saved as {}.opres in {} (change it in Settings, Folders). It opens in the editor, ready for slides.",
+                    file_stem(st.edit.lyrics.new_name.trim()),
+                    dir.display()
+                ))
+                .small()
+                .weak(),
+            ),
+            None => ui.label(
+                RichText::new("Choose a folder for new presentations in Settings, Folders first.")
+                    .color(Color32::YELLOW),
+            ),
+        };
+        ui.add_space(6.0);
+        let ready = !st.edit.lyrics.new_name.trim().is_empty() && st.edit.new_dir.is_some();
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(ready, egui::Button::new(RichText::new("Create").strong()))
+                .clicked()
+                || (enter && ready)
+            {
+                create = true;
+            }
+            if ui.button("Cancel").clicked() {
+                cancel = true;
+            }
+        });
+    });
+    if cancel || modal.should_close() {
+        st.edit.lyrics.blank = false;
+        return;
+    }
+    if create {
+        let (path, template) = template(st, selected);
+        st.edit.lyrics.text.clear();
+        st.edit.lyrics.target = Target::New;
+        apply(st, ctx, actions, &path, &template);
+        // A name clash keeps the prompt open (the toast says why).
+        if st.edit.lyrics_new.is_some() {
+            st.edit.lyrics.blank = false;
+        }
+    }
 }
 
 /// The window. `standalone`: `Some(title of the selected presentation, if any)`.
@@ -349,7 +451,7 @@ fn show(
     let screen = ctx.content_rect();
     let mut open = true;
     let heading = if standalone.is_some() {
-        "New presentation"
+        "New song from text"
     } else {
         "Paste Lyrics"
     };
