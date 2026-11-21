@@ -235,3 +235,61 @@ fn rescaled_document_renders_like_the_original_fitted() {
         );
     }
 }
+
+#[test]
+fn rotation_turns_the_box_about_its_centre() {
+    let mut f = fonts();
+    let mut d = load("render_1024x768.pro6");
+    let upright = render(&mut f, &d, 0, 1024, 768).unwrap();
+    let (x0, y0, x1, y1) = ink_bbox(&upright);
+    let set = |d: &mut doc::Document, deg: f64| {
+        for e in &mut d.groups[0].slides[0].elements {
+            if let doc::Element::Text(t) = e {
+                t.rotation = deg;
+            }
+        }
+    };
+    // 360° is no rotation.
+    set(&mut d, 360.0);
+    let same = render(&mut f, &d, 0, 1024, 768).unwrap();
+    assert_eq!(same.text, upright.text);
+    assert!(
+        same.warnings
+            .iter()
+            .all(|w| !w.message.contains("rotation"))
+    );
+
+    // 90°: the ink's width and height swap around the same centre (one text box).
+    set(&mut d, 90.0);
+    let turned = render(&mut f, &d, 0, 1024, 768).unwrap();
+    assert!(
+        turned
+            .warnings
+            .iter()
+            .all(|w| !w.message.contains("rotation"))
+    );
+    let (a0, b0, a1, b1) = ink_bbox(&turned);
+    let near_u = |a: u32, b: u32| a.abs_diff(b) <= 4;
+    assert!(
+        near_u(a1 - a0, y1 - y0) && near_u(b1 - b0, x1 - x0),
+        "{:?} vs {:?}",
+        (a0, b0, a1, b1),
+        (x0, y0, x1, y1)
+    );
+    let centre = |p: u32, q: u32| (p + q) / 2;
+    let t = d.groups[0].slides[0].text_boxes().next().unwrap().frame;
+    let (bcx, bcy) = ((t.x + t.width / 2.0) as u32, (t.y + t.height / 2.0) as u32);
+    // Ink centre relative to the box centre turns by 90° clockwise: (dx, dy) -> (-dy, dx).
+    let (dx, dy) = (
+        centre(x0, x1) as i64 - bcx as i64,
+        centre(y0, y1) as i64 - bcy as i64,
+    );
+    let (ex, ey) = (
+        centre(a0, a1) as i64 - bcx as i64,
+        centre(b0, b1) as i64 - bcy as i64,
+    );
+    assert!(
+        (ex + dy).abs() <= 3 && (ey - dx).abs() <= 3,
+        "({dx},{dy}) -> ({ex},{ey})"
+    );
+}

@@ -104,6 +104,8 @@ pub struct UiState {
     pub target_playlist: usize,
     pub remote: RemoteStatus,
     pub edit: crate::editor::EditState,
+    /// Editor canvas renderer (`None` if it couldn't start).
+    pub canvas: Option<crate::canvas::CanvasRenderer>,
     /// Video/Image panel hidden (toolbar toggle).
     pub media_hidden: bool,
     /// Folder shown in the Video/Image panel (`None` = everything).
@@ -237,6 +239,17 @@ pub fn draw(
         st.app_notice_at = Some(Instant::now());
     }
     toolbar(ui, st, show, settings, &mut actions);
+    // The editor takes the whole window under the toolbar. It shows its own copy
+    // (unsaved edits), not the saved document.
+    if st.edit.on
+        && let Some(path) = show.selected.clone()
+        && let Some(d) = show.edited_doc(&path).cloned()
+    {
+        crate::editor::editor(ui, st, show, thumbs, &mut actions, &path, &d);
+        settings_window(ui.ctx(), st, show, settings, log_lines, &mut actions);
+        toast(ui.ctx(), st, show);
+        return actions;
+    }
     egui::Panel::left("left")
         .resizable(true)
         .default_size(330.0)
@@ -359,10 +372,15 @@ fn toolbar(
                     st.edit.on,
                     can_edit || st.edit.on,
                 )
-                .on_hover_text("Edit text, slides, groups and arrangements")
+                .on_hover_text("Edit slides: text, layout, groups and arrangements")
                 .clicked()
                 {
-                    st.edit.on = !st.edit.on;
+                    if st.edit.on {
+                        // Leaving asks about unsaved edits first.
+                        st.edit.close_requested = true;
+                    } else {
+                        st.edit.on = true;
+                    }
                 }
                 toolbar_gap(ui);
                 if tool_button(
@@ -635,7 +653,7 @@ fn preview(
     ui.add_space(4.0);
 }
 
-fn paint_error(ui: &egui::Ui, rect: Rect, message: &str) {
+pub(crate) fn paint_error(ui: &egui::Ui, rect: Rect, message: &str) {
     ui.painter()
         .rect_filled(rect, 0.0, Color32::from_rgb(60, 10, 10));
     ui.painter().text(
@@ -1281,17 +1299,6 @@ fn text_on(bg: Color32) -> Color32 {
     }
 }
 
-/// A thumbnail at `size` (used by the editor grid).
-pub(crate) fn tile_image(
-    ui: &mut egui::Ui,
-    tex: Option<&Result<TextureHandle, String>>,
-    size: Vec2,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    paint_thumb(ui, rect, tex);
-    response
-}
-
 fn paint_thumb(ui: &egui::Ui, rect: Rect, tex: Option<&Result<TextureHandle, String>>) {
     match tex {
         Some(Ok(t)) => {
@@ -1327,12 +1334,6 @@ fn presentation(
         };
         return;
     };
-    if st.edit.on {
-        // The editor shows its own copy (unsaved edits), not the saved document.
-        let edited = show.edited_doc(&path).cloned().unwrap_or(doc);
-        crate::editor::grid_edit(ui, st, show, thumbs, actions, &path, &edited);
-        return;
-    }
     let arrangement = show.arrangement_for(&path);
     let arrangements = doc.arrangements();
     let unsaved = if show.unsaved.contains(&path) {

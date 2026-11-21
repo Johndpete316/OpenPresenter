@@ -92,8 +92,8 @@ pub fn pro6_support(feature: Feature) -> Support {
         SlideStructure | Text | FontFamily | FontSize | TextColor | Bold | Italic | Underline
         | HorizontalAlign | VerticalAlign | ElementFrame | ElementRotation | ElementOpacity
         | BackgroundColor => Support::Supported,
-        LineSpacing | LetterSpacing | TextShadow | TextOutline | ImageElement
-        | ImageBackground | ImageAdjustColor | LayerLock | LayerHide => Support::Unverified,
+        LineSpacing | LetterSpacing | TextShadow | TextOutline | ImageElement | ImageBackground
+        | ImageAdjustColor | LayerLock | LayerHide => Support::Unverified,
         Vignette => Support::NativeOnly,
     }
 }
@@ -112,7 +112,10 @@ mod tests {
         assert_eq!(pro6_support(Feature::FontFamily), Support::Supported);
         assert_eq!(pro6_support(Feature::Vignette), Support::NativeOnly);
         assert_eq!(pro6_support(Feature::TextShadow), Support::Unverified);
-        assert!(needs_native(Feature::TextShadow), "unverified counts as native-only");
+        assert!(
+            needs_native(Feature::TextShadow),
+            "unverified counts as native-only"
+        );
         assert!(!needs_native(Feature::SlideStructure));
     }
 }

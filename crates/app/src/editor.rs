@@ -1,32 +1,105 @@
-//! Edit mode for the presentation grid: slide text, slides, groups, arrangements.
-//! Clicking a slide selects it for editing; nothing goes live from here. Edits go to
-//! the editor copy (`ShowState::editing`); the output and grid change only on Save.
+//! The slide editor (docs/EDITOR-PLAN.md E1). Layout modelled on ProPresenter:
+//!
+//! ```text
+//! ┌ top bar: title • | Undo Redo | Save Revert |              Close editor ┐
+//! ├ contextual bar (what's selected)                                       ┤
+//! │ slide strip   │ rulers + canvas (rendered by `render`)   │ inspector   │
+//! │ (groups)      │                                          │ Text/Slide  │
+//! ├ bottom bar: X Y W H R | zoom | notes | background colour               ┤
+//! ```
+//!
+//! Every change is a `doc::Edit` sent to the core, which applies it to the editor
+//! copy (`ShowState::editing`): the output and the operator's grid only change on
+//! Save. A drag is one edit, sent on release; while dragging, the canvas renders a
+//! preview copy so what you see is what the output will show.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use egui::{Color32, RichText, Stroke, Vec2};
+use doc::{Edit as Op, Element, new_uuid};
+use egui::{
+    Align2, Color32, CursorIcon, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2,
+};
 use pp6core::{Command, ShowState};
-use doc::{Edit as Op, new_uuid};
 
 use crate::thumbs::ThumbRequest;
-use crate::ui::{UiAction, UiState, color32, tile_image};
+use crate::ui::{UiAction, UiState, color32, paint_error};
 
-const TILE_W: u32 = 160;
+const RULER: f32 = 18.0;
+const HANDLE: f32 = 4.5;
+/// Rotation handle distance above the box, in screen points.
+const ROTATE_ARM: f32 = 22.0;
+/// Smallest element size, in canvas pixels.
+const MIN_SIZE: f64 = 8.0;
+const SELECT: Color32 = Color32::from_rgb(90, 160, 255);
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub enum Zoom {
+    #[default]
+    Fit,
+    /// Percent: 100 = one canvas pixel per screen point.
+    Pct(u32),
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    #[default]
+    Text,
+    Slide,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Grab {
+    Move,
+    /// Resize by a handle: -1 / 0 / 1 for left-centre-right and top-middle-bottom.
+    Resize(i8, i8),
+    Rotate,
+}
+
+struct Drag {
+    grab: Grab,
+    element: usize,
+    /// Pointer at the start, canvas pixels.
+    start: Pos2,
+    frame: doc::Rect,
+    rotation: f64,
+    now_frame: doc::Rect,
+    now_rotation: f64,
+    /// Preview document for the canvas while dragging.
+    preview: Option<(doc::Rect, f64, Arc<doc::Document>)>,
+}
 
 #[derive(Default)]
 pub struct EditState {
     pub on: bool,
+    /// Asked to leave the editor (asks about unsaved edits first).
+    pub close_requested: bool,
     /// Selected slide (group, slide index).
     sel: Option<(usize, usize)>,
+    /// Selected element (index into the slide's elements).
+    element: Option<usize>,
     text: String,
-    /// Which slide (path, UUID) `text` was loaded from.
-    text_for: Option<(PathBuf, String)>,
+    /// Which text box (path, slide UUID, element) `text` was loaded from.
+    text_for: Option<(PathBuf, String, usize)>,
+    focus_text: bool,
+    notes: String,
+    notes_for: Option<(PathBuf, String)>,
     rename: Option<(usize, String)>,
     confirm_delete_group: Option<usize>,
     arrangement: Option<String>,
     arrangement_name: String,
+    zoom: Zoom,
+    /// Canvas offset when zoomed in beyond the view (screen points).
+    pan: Vec2,
+    tab: Tab,
+    drag: Option<Drag>,
+    /// Slide being dragged in the strip.
+    strip_drag: Option<(usize, usize)>,
+    /// Canvas rectangle on screen and points per canvas pixel, last frame.
+    view: Option<(Rect, f32)>,
+    /// Slide tiles in the strip, last frame.
+    tiles: Vec<((usize, usize), Rect)>,
 }
 
 impl EditState {
@@ -34,6 +107,19 @@ impl EditState {
     pub fn select(&mut self, group: usize, slide: usize) {
         self.on = true;
         self.sel = Some((group, slide));
+    }
+
+    /// Select a text box too (development / screenshots).
+    pub fn select_element(&mut self, element: usize) {
+        self.element = Some(element);
+    }
+
+    fn select_slide(&mut self, g: usize, s: usize) {
+        if self.sel != Some((g, s)) {
+            self.sel = Some((g, s));
+            self.element = None;
+            self.drag = None;
+        }
     }
 }
 
@@ -45,14 +131,13 @@ fn edit(actions: &mut Vec<UiAction>, path: &Path, op: Op) {
     }));
 }
 
-fn slide_text(doc: &doc::Document, g: usize, s: usize) -> String {
-    doc.groups()
-        .get(g)
-        .and_then(|gr| gr.slides().get(s))
-        // A blank slide's placeholder is already empty text.
-        .and_then(|sl| sl.text_boxes().next())
-        .map(doc::TextBox::plain_text)
-        .unwrap_or_default()
+/// An edit that merges with the previous one of the same `key` into one undo step.
+fn edit_merging(actions: &mut Vec<UiAction>, path: &Path, op: Op, key: String) {
+    actions.push(UiAction::Core(Command::EditMerging {
+        presentation: path.to_path_buf(),
+        edit: op,
+        key,
+    }));
 }
 
 fn to_rgba(c: Color32) -> doc::Rgba {
@@ -65,230 +150,564 @@ fn to_rgba(c: Color32) -> doc::Rgba {
     }
 }
 
-pub fn grid_edit(
+fn flat_index(d: &doc::Document, g: usize, s: usize) -> usize {
+    d.groups[..g].iter().map(|g| g.slides.len()).sum::<usize>() + s
+}
+
+fn text_box(d: &doc::Document, g: usize, s: usize, e: usize) -> Option<&doc::TextBox> {
+    match d.groups.get(g)?.slides.get(s)?.elements.get(e)? {
+        Element::Text(t) => Some(t),
+        Element::Pro6(_) => None,
+    }
+}
+
+/// Close the editor, asking first about unsaved edits.
+fn close_prompt(
+    ctx: &egui::Context,
+    st: &mut UiState,
+    show: &ShowState,
+    path: &Path,
+    actions: &mut Vec<UiAction>,
+) {
+    if !st.edit.close_requested {
+        return;
+    }
+    if !show.unsaved.contains(path) {
+        st.edit.close_requested = false;
+        st.edit.on = false;
+        return;
+    }
+    let mut close = None;
+    egui::Modal::new(egui::Id::unique("editor-close")).show(ctx, |ui| {
+        ui.set_max_width(380.0);
+        ui.heading(format!("Save changes to {}?", crate::ui::title(path)));
+        ui.label("Your edits haven't been saved yet.");
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button(RichText::new("Save").strong()).clicked() {
+                close = Some(Some(true));
+            }
+            if ui.button("Don't save").clicked() {
+                close = Some(Some(false));
+            }
+            if ui.button("Cancel").clicked() {
+                close = Some(None);
+            }
+        });
+    });
+    match close {
+        Some(Some(true)) => {
+            actions.push(UiAction::Core(Command::Save(path.to_path_buf())));
+            st.edit.on = false;
+            st.edit.close_requested = false;
+        }
+        Some(Some(false)) => {
+            actions.push(UiAction::Core(Command::Revert(path.to_path_buf())));
+            st.edit.on = false;
+            st.edit.close_requested = false;
+        }
+        Some(None) => st.edit.close_requested = false,
+        None => {}
+    }
+}
+
+/// The whole editor, filling `ui` (below the app toolbar).
+pub fn editor(
     ui: &mut egui::Ui,
     st: &mut UiState,
     show: &ShowState,
     thumbs: &Sender<ThumbRequest>,
     actions: &mut Vec<UiAction>,
     path: &Path,
-    doc: &Arc<doc::Document>,
+    d: &Arc<doc::Document>,
 ) {
-    let unsaved = show.unsaved.contains(path);
-    ui.horizontal_wrapped(|ui| {
-        ui.heading(format!(
-            "Editing: {}{}",
-            crate::ui::title(path),
-            if unsaved { " •" } else { "" }
-        ));
-        if ui.button("Done editing").clicked() {
-            st.edit.on = false;
-        }
-        let save = egui::Button::new(RichText::new("Save").strong()).fill(if unsaved {
-            Color32::from_rgb(40, 90, 40)
-        } else {
-            Color32::TRANSPARENT
-        });
-        if ui.add_enabled(unsaved, save).clicked() {
-            actions.push(UiAction::Core(Command::Save(path.to_path_buf())));
-        }
-        if ui
-            .add_enabled(unsaved, egui::Button::new("Revert"))
-            .on_hover_text("Throw away unsaved changes (the saved file is untouched)")
-            .clicked()
-        {
-            actions.push(UiAction::Core(Command::Revert(path.to_path_buf())));
-            st.edit.text_for = None;
-        }
-        let editing = show.editing.get(path);
-        let undo = editing.and_then(|e| e.undo.as_deref());
-        let redo = editing.and_then(|e| e.redo.as_deref());
-        // Shortcuts only when no text field has focus (those have their own undo).
-        let (key_undo, key_redo) = if ui.memory(|m| m.focused().is_none()) {
-            ui.input(|i| {
-                let z = i.key_pressed(egui::Key::Z) && i.modifiers.command;
-                (
-                    z && !i.modifiers.shift,
-                    (z && i.modifiers.shift)
-                        || (i.key_pressed(egui::Key::Y) && i.modifiers.command),
-                )
-            })
-        } else {
-            (false, false)
-        };
-        let r = ui
-            .add_enabled(undo.is_some(), egui::Button::new("Undo"))
-            .on_hover_text(undo.map_or("Nothing to undo".to_owned(), |l| {
-                format!("Undo {l} (Ctrl+Z)")
-            }));
-        if (r.clicked() || key_undo) && undo.is_some() {
-            actions.push(UiAction::Core(Command::Undo(path.to_path_buf())));
-            st.edit.text_for = None;
-        }
-        let r = ui
-            .add_enabled(redo.is_some(), egui::Button::new("Redo"))
-            .on_hover_text(redo.map_or("Nothing to redo".to_owned(), |l| {
-                format!("Redo {l} (Ctrl+Shift+Z)")
-            }));
-        if (r.clicked() || key_redo) && redo.is_some() {
-            actions.push(UiAction::Core(Command::Redo(path.to_path_buf())));
-            st.edit.text_for = None;
-        }
-        if unsaved {
-            ui.label(
-                RichText::new("unsaved changes")
-                    .color(Color32::YELLOW)
-                    .small(),
-            );
-        }
-        if doc.mode == doc::Mode::Native {
-            ui.label(
-                RichText::new(format!(
-                    "saves as {}.{} (OpenPresent only)",
-                    crate::ui::title(path),
-                    doc::NATIVE_EXT
-                ))
-                .small()
-                .weak(),
-            )
-            .on_hover_text("This presentation uses something a ProPresenter 6 file can't hold. The original .pro6 is left as it was.");
-        }
-    });
-
-    // Keep the selection valid after edits.
+    // Keep the selection valid after edits (and pick a slide if there's none).
     if let Some((g, s)) = st.edit.sel
-        && doc.groups().get(g).is_none_or(|gr| s >= gr.slides().len())
+        && d.groups.get(g).is_none_or(|gr| s >= gr.slides.len())
     {
         st.edit.sel = None;
     }
+    if st.edit.sel.is_none() {
+        st.edit.element = None;
+        st.edit.drag = None;
+        st.edit.sel = d
+            .groups
+            .iter()
+            .position(|g| !g.slides.is_empty())
+            .map(|g| (g, 0));
+    }
+    if let (Some((g, s)), Some(e)) = (st.edit.sel, st.edit.element)
+        && text_box(d, g, s, e).is_none()
+    {
+        st.edit.element = None;
+        st.edit.drag = None;
+    }
 
-    arrangements(ui, st, actions, path, doc);
-    ui.separator();
+    top_bar(ui, st, show, actions, path, d);
+    context_bar(ui, st, actions, path, d);
+    bottom_bar(ui, st, actions, path, d);
+    egui::Panel::left("editor-strip")
+        .resizable(true)
+        .default_size(230.0)
+        .size_range(170.0..=420.0)
+        .frame(
+            egui::Frame::new()
+                .fill(crate::theme::color::PANEL)
+                .inner_margin(6.0),
+        )
+        .show(ui, |ui| strip(ui, st, thumbs, actions, path, d));
+    egui::Panel::right("editor-inspector")
+        .resizable(true)
+        .default_size(290.0)
+        .size_range(220.0..=480.0)
+        .frame(
+            egui::Frame::new()
+                .fill(crate::theme::color::PANEL)
+                .inner_margin(8.0),
+        )
+        .show(ui, |ui| inspector(ui, st, actions, path, d));
+    egui::CentralPanel::default()
+        .frame(egui::Frame::new().fill(Color32::from_gray(24)))
+        .show(ui, |ui| canvas(ui, st, actions, path, d));
+    close_prompt(ui.ctx(), st, show, path, actions);
+}
 
-    let height = TILE_W as f32 * doc.canvas.height as f32 / doc.canvas.width as f32;
-    let editor_h = if st.edit.sel.is_some() { 190.0 } else { 0.0 };
-    egui::ScrollArea::vertical()
-        .id_salt("edit-grid")
-        .max_height((ui.available_height() - editor_h).max(120.0))
+// ───────────────────────────── bars ─────────────────────────────
+
+fn top_bar(
+    ui: &mut egui::Ui,
+    st: &mut UiState,
+    show: &ShowState,
+    actions: &mut Vec<UiAction>,
+    path: &Path,
+    d: &doc::Document,
+) {
+    let unsaved = show.unsaved.contains(path);
+    egui::Panel::top("editor-top")
+        .frame(egui::Frame::new().fill(crate::theme::color::HEADER).inner_margin(6.0))
         .show(ui, |ui| {
-            let n_groups = doc.groups().len();
-            for (gi, group) in doc.groups().iter().enumerate() {
-                group_header(ui, st, actions, path, gi, group, n_groups);
-                let spacing = ui.spacing().item_spacing.x;
-                let per_row = (((ui.available_width().min(ui.clip_rect().width()) + spacing - 12.0)
-                    / (TILE_W as f32 + spacing))
-                    .floor() as usize)
-                    .max(1);
-                let n = group.slides().len();
-                let idx: Vec<usize> = (0..n).collect();
-                for row in idx.chunks(per_row) {
-                    ui.horizontal(|ui| {
-                        for &si in row {
-                            let flat = doc.groups()[..gi]
-                                .iter()
-                                .map(|g| g.slides().len())
-                                .sum::<usize>()
-                                + si;
-                            ui.vertical(|ui| {
-                                let (_, tex) = st.thumb_public(thumbs, doc, flat);
-                                let resp = tile_image(ui, tex, Vec2::new(TILE_W as f32, height));
-                                let selected = st.edit.sel == Some((gi, si));
-                                let stroke = if selected {
-                                    Stroke::new(3.0, Color32::from_rgb(90, 160, 255))
-                                } else {
-                                    Stroke::new(1.0, color32(group.color))
-                                };
-                                if !group.slides()[si].enabled {
-                                    ui.painter().rect_filled(
-                                        resp.rect,
-                                        0.0,
-                                        Color32::from_black_alpha(170),
-                                    );
-                                }
-                                ui.painter().rect_stroke(
-                                    resp.rect,
-                                    2.0,
-                                    stroke,
-                                    egui::StrokeKind::Outside,
-                                );
-                                if resp.clicked() {
-                                    st.edit.sel = Some((gi, si));
-                                }
-                                ui.horizontal(|ui| {
-                                    if si > 0
-                                        && ui.small_button("<").on_hover_text("Move left").clicked()
-                                    {
-                                        edit(
-                                            actions,
-                                            path,
-                                            Op::MoveSlide {
-                                                group: gi,
-                                                slide: si,
-                                                to_group: gi,
-                                                to: si - 1,
-                                            },
-                                        );
-                                        st.edit.sel = Some((gi, si - 1));
-                                    }
-                                    if si + 1 < n
-                                        && ui
-                                            .small_button(">")
-                                            .on_hover_text("Move right")
-                                            .clicked()
-                                    {
-                                        edit(
-                                            actions,
-                                            path,
-                                            Op::MoveSlide {
-                                                group: gi,
-                                                slide: si,
-                                                to_group: gi,
-                                                to: si + 1,
-                                            },
-                                        );
-                                        st.edit.sel = Some((gi, si + 1));
-                                    }
-                                    if ui.small_button("Dup").on_hover_text("Duplicate").clicked() {
-                                        edit(
-                                            actions,
-                                            path,
-                                            Op::DuplicateSlide {
-                                                group: gi,
-                                                slide: si,
-                                            },
-                                        );
-                                    }
-                                    if ui
-                                        .small_button("Del")
-                                        .on_hover_text("Delete slide")
-                                        .clicked()
-                                    {
-                                        edit(
-                                            actions,
-                                            path,
-                                            Op::RemoveSlide {
-                                                group: gi,
-                                                slide: si,
-                                            },
-                                        );
-                                        st.edit.sel = None;
-                                    }
-                                });
-                            });
+            ui.horizontal(|ui| {
+                ui.heading(format!(
+                    "{}{}",
+                    crate::ui::title(path),
+                    if unsaved { " •" } else { "" }
+                ))
+                .on_hover_text(if unsaved { "Unsaved changes" } else { "Saved" });
+                ui.separator();
+                let editing = show.editing.get(path);
+                let undo = editing.and_then(|e| e.undo.as_deref());
+                let redo = editing.and_then(|e| e.redo.as_deref());
+                // Shortcuts only when no text field has focus (those have their own undo).
+                let (key_undo, key_redo) = if ui.memory(|m| m.focused().is_none()) {
+                    ui.input(|i| {
+                        let z = i.key_pressed(egui::Key::Z) && i.modifiers.command;
+                        (
+                            z && !i.modifiers.shift,
+                            (z && i.modifiers.shift)
+                                || (i.key_pressed(egui::Key::Y) && i.modifiers.command),
+                        )
+                    })
+                } else {
+                    (false, false)
+                };
+                let r = ui
+                    .add_enabled(undo.is_some(), egui::Button::new("Undo"))
+                    .on_hover_text(undo.map_or("Nothing to undo".to_owned(), |l| {
+                        format!("Undo {l} (Ctrl+Z)")
+                    }));
+                if (r.clicked() || key_undo) && undo.is_some() {
+                    actions.push(UiAction::Core(Command::Undo(path.to_path_buf())));
+                    st.edit.text_for = None;
+                    st.edit.notes_for = None;
+                }
+                let r = ui
+                    .add_enabled(redo.is_some(), egui::Button::new("Redo"))
+                    .on_hover_text(redo.map_or("Nothing to redo".to_owned(), |l| {
+                        format!("Redo {l} (Ctrl+Shift+Z)")
+                    }));
+                if (r.clicked() || key_redo) && redo.is_some() {
+                    actions.push(UiAction::Core(Command::Redo(path.to_path_buf())));
+                    st.edit.text_for = None;
+                    st.edit.notes_for = None;
+                }
+                ui.separator();
+                let save = egui::Button::new(RichText::new("Save").strong()).fill(if unsaved {
+                    Color32::from_rgb(40, 90, 40)
+                } else {
+                    Color32::TRANSPARENT
+                });
+                let key_save = ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command);
+                if (ui.add_enabled(unsaved, save).on_hover_text("Save (Ctrl+S)").clicked() || key_save)
+                    && unsaved
+                {
+                    actions.push(UiAction::Core(Command::Save(path.to_path_buf())));
+                }
+                if ui
+                    .add_enabled(unsaved, egui::Button::new("Revert"))
+                    .on_hover_text("Throw away unsaved changes (the saved file is untouched)")
+                    .clicked()
+                {
+                    actions.push(UiAction::Core(Command::Revert(path.to_path_buf())));
+                    st.edit.text_for = None;
+                    st.edit.notes_for = None;
+                }
+                if d.mode == doc::Mode::Native {
+                    ui.label(
+                        RichText::new(format!(
+                            "saves as {}.{} (OpenPresent only)",
+                            crate::ui::title(path),
+                            doc::NATIVE_EXT
+                        ))
+                        .small()
+                        .weak(),
+                    )
+                    .on_hover_text("This presentation uses something a ProPresenter 6 file can't hold. The original .pro6 is left as it was.");
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Close editor").clicked() {
+                        st.edit.close_requested = true;
+                    }
+                });
+            });
+        });
+}
+
+fn context_bar(
+    ui: &mut egui::Ui,
+    st: &mut UiState,
+    actions: &mut Vec<UiAction>,
+    path: &Path,
+    d: &doc::Document,
+) {
+    egui::Panel::top("editor-context")
+        .frame(egui::Frame::new().fill(crate::theme::color::PANEL).inner_margin(egui::Margin::symmetric(8, 5)))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let Some((g, s)) = st.edit.sel else {
+                    ui.label(RichText::new("This presentation has no slides yet: add one with + Slide in the strip.").weak());
+                    return;
+                };
+                let Some(e) = st.edit.element else {
+                    ui.label(
+                        RichText::new(format!(
+                            "Slide {} in {} — click a text box on the canvas to select it.",
+                            s + 1,
+                            d.groups[g].name
+                        ))
+                        .weak(),
+                    );
+                    return;
+                };
+                let Some(t) = text_box(d, g, s, e) else { return };
+                ui.label(RichText::new("Text box").strong());
+                if !t.name.is_empty() {
+                    ui.label(RichText::new(format!("“{}”", t.name)).weak());
+                }
+                ui.separator();
+                if ui.button("Edit text").on_hover_text("Double-click the box on the canvas").clicked() {
+                    st.edit.tab = Tab::Text;
+                    st.edit.focus_text = true;
+                }
+                let rotation = t.rotation.rem_euclid(360.0);
+                if rotation != 0.0
+                    && ui
+                        .button(format!("Straighten ({rotation:.0}°)"))
+                        .clicked()
+                {
+                    edit(
+                        actions,
+                        path,
+                        Op::SetRotation {
+                            group: g,
+                            slide: s,
+                            element: e,
+                            degrees: 0.0,
+                        },
+                    );
+                }
+                if t.locked {
+                    ui.label(RichText::new("Locked: it can't be moved or resized here.").color(Color32::YELLOW));
+                }
+            });
+        });
+}
+
+fn bottom_bar(
+    ui: &mut egui::Ui,
+    st: &mut UiState,
+    actions: &mut Vec<UiAction>,
+    path: &Path,
+    d: &doc::Document,
+) {
+    egui::Panel::bottom("editor-bottom")
+        .frame(
+            egui::Frame::new()
+                .fill(crate::theme::color::HEADER)
+                .inner_margin(egui::Margin::symmetric(8, 5)),
+        )
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                // Position readout (live while dragging).
+                let geom = match (&st.edit.drag, st.edit.sel, st.edit.element) {
+                    (Some(dr), _, _) => Some((dr.now_frame, dr.now_rotation)),
+                    (None, Some((g, s)), Some(e)) => {
+                        text_box(d, g, s, e).map(|t| (t.frame, t.rotation))
+                    }
+                    _ => None,
+                };
+                let readout = match geom {
+                    Some((f, r)) => format!(
+                        "X {:.0}  Y {:.0}  W {:.0}  H {:.0}  R {:.0}°",
+                        f.x,
+                        f.y,
+                        f.width,
+                        f.height,
+                        r.rem_euclid(360.0)
+                    ),
+                    None => format!("Canvas {} × {}", d.canvas.width, d.canvas.height),
+                };
+                ui.add_sized(
+                    [250.0, 18.0],
+                    egui::Label::new(RichText::new(readout).monospace()),
+                );
+                ui.separator();
+                let zoom_name = |z: Zoom| match z {
+                    Zoom::Fit => "Fit".to_owned(),
+                    Zoom::Pct(p) => format!("{p}%"),
+                };
+                egui::ComboBox::from_id_salt("editor-zoom")
+                    .width(64.0)
+                    .selected_text(zoom_name(st.edit.zoom))
+                    .show_ui(ui, |ui| {
+                        for z in [Zoom::Fit, Zoom::Pct(50), Zoom::Pct(100), Zoom::Pct(200)] {
+                            if ui
+                                .selectable_value(&mut st.edit.zoom, z, zoom_name(z))
+                                .clicked()
+                            {
+                                st.edit.pan = Vec2::ZERO;
+                            }
                         }
                     });
+                ui.separator();
+                let Some((g, s)) = st.edit.sel else { return };
+                let slide = &d.groups[g].slides[s];
+                sync_notes(st, path, slide);
+                ui.label("Notes");
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut st.edit.notes)
+                        .desired_width(260.0)
+                        .hint_text("Slide notes (not shown on the output)"),
+                );
+                if r.lost_focus() && st.edit.notes != slide.notes {
+                    edit(
+                        actions,
+                        path,
+                        Op::SetSlideNotes {
+                            group: g,
+                            slide: s,
+                            notes: st.edit.notes.clone(),
+                        },
+                    );
                 }
-                if n == 0 {
-                    ui.label(RichText::new("(empty group: use + Slide)").small().weak());
+                ui.separator();
+                background_picker(ui, actions, path, d, g, s);
+            });
+        });
+}
+
+fn sync_notes(st: &mut UiState, path: &Path, slide: &doc::Slide) {
+    let key = (path.to_path_buf(), slide.uuid.clone());
+    if st.edit.notes_for.as_ref() != Some(&key) {
+        st.edit.notes.clone_from(&slide.notes);
+        st.edit.notes_for = Some(key);
+    }
+}
+
+fn background_picker(
+    ui: &mut egui::Ui,
+    actions: &mut Vec<UiAction>,
+    path: &Path,
+    d: &doc::Document,
+    g: usize,
+    s: usize,
+) {
+    let slide = &d.groups[g].slides[s];
+    let mut on = slide.background.is_some();
+    if ui
+        .checkbox(&mut on, "Background")
+        .on_hover_text("This slide's own background colour")
+        .changed()
+    {
+        let color = on.then(|| {
+            slide.background.or(d.background).unwrap_or(doc::Rgba {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            })
+        });
+        edit(
+            actions,
+            path,
+            Op::SetSlideBackground {
+                group: g,
+                slide: s,
+                color,
+            },
+        );
+    }
+    if let Some(c) = slide.background {
+        let [r, gg, b, _] = c.to_rgba8();
+        let mut col = Color32::from_rgb(r, gg, b);
+        if egui::color_picker::color_edit_button_srgba(
+            ui,
+            &mut col,
+            egui::color_picker::Alpha::Opaque,
+        )
+        .changed()
+        {
+            edit_merging(
+                actions,
+                path,
+                Op::SetSlideBackground {
+                    group: g,
+                    slide: s,
+                    color: Some(to_rgba(col)),
+                },
+                format!("background:{}", slide.uuid),
+            );
+        }
+    }
+}
+
+// ───────────────────────────── slide strip ─────────────────────────────
+
+/// Where a dragged slide would go: insert at `index` in `group` (before removal).
+#[derive(Clone, Copy)]
+struct Slot {
+    group: usize,
+    index: usize,
+    y: f32,
+}
+
+fn strip(
+    ui: &mut egui::Ui,
+    st: &mut UiState,
+    thumbs: &Sender<ThumbRequest>,
+    actions: &mut Vec<UiAction>,
+    path: &Path,
+    d: &Arc<doc::Document>,
+) {
+    egui::ScrollArea::vertical()
+        .id_salt("editor-strip-scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            arrangements(ui, st, actions, path, d);
+            ui.separator();
+            let mut slots: Vec<Slot> = Vec::new();
+            st.edit.tiles.clear();
+            let n_groups = d.groups.len();
+            let tile_w = (ui.available_width() - 4.0).max(60.0);
+            let tile_h = tile_w * d.canvas.height as f32 / d.canvas.width.max(1) as f32;
+            for (gi, group) in d.groups.iter().enumerate() {
+                let header = group_header(ui, st, actions, path, d, gi, n_groups);
+                slots.push(Slot {
+                    group: gi,
+                    index: 0,
+                    y: header.bottom() + 1.0,
+                });
+                for (si, slide) in group.slides.iter().enumerate() {
+                    let flat = flat_index(d, gi, si);
+                    let (rect, resp) =
+                        ui.allocate_exact_size(Vec2::new(tile_w, tile_h), Sense::click_and_drag());
+                    st.edit.tiles.push(((gi, si), rect));
+                    let (_, tex) = st.thumb_public(thumbs, d, flat);
+                    match tex {
+                        Some(Ok(t)) => {
+                            egui::Image::new(t).paint_at(ui, rect);
+                        }
+                        Some(Err(e)) => paint_error(ui, rect, e),
+                        None => {
+                            ui.painter().rect_filled(rect, 0.0, Color32::from_gray(18));
+                        }
+                    }
+                    let p = ui.painter();
+                    if !slide.enabled {
+                        p.rect_filled(rect, 0.0, Color32::from_black_alpha(170));
+                    }
+                    let selected = st.edit.sel == Some((gi, si));
+                    p.rect_stroke(
+                        rect,
+                        2.0,
+                        if selected {
+                            Stroke::new(3.0, SELECT)
+                        } else {
+                            Stroke::new(1.0, color32(group.color))
+                        },
+                        StrokeKind::Outside,
+                    );
+                    let label = if slide.label.is_empty() {
+                        format!("{}", si + 1)
+                    } else {
+                        format!("{}  {}", si + 1, slide.label)
+                    };
+                    let badge = Rect::from_min_size(
+                        rect.min,
+                        Vec2::new(22.0 + 6.5 * label.len() as f32, 16.0),
+                    );
+                    p.rect_filled(badge, 2.0, Color32::from_black_alpha(160));
+                    p.text(
+                        badge.left_center() + Vec2::new(4.0, 0.0),
+                        Align2::LEFT_CENTER,
+                        label,
+                        FontId::proportional(11.0),
+                        Color32::WHITE,
+                    );
+                    if slide.pro6_incompatible {
+                        let b = Rect::from_min_size(
+                            rect.right_top() + Vec2::new(-52.0, 2.0),
+                            Vec2::new(50.0, 15.0),
+                        );
+                        p.rect_filled(b, 3.0, Color32::from_rgb(170, 40, 40));
+                        p.text(
+                            b.center(),
+                            Align2::CENTER_CENTER,
+                            "not PP6",
+                            FontId::proportional(10.0),
+                            Color32::WHITE,
+                        );
+                    }
+                    if resp.clicked() {
+                        st.edit.select_slide(gi, si);
+                    }
+                    if resp.drag_started() {
+                        st.edit.strip_drag = Some((gi, si));
+                        st.edit.select_slide(gi, si);
+                    }
+                    let resp = if slide.pro6_incompatible {
+                        resp.on_hover_text("Uses something a ProPresenter 6 file can't hold")
+                    } else {
+                        resp
+                    };
+                    resp.context_menu(|ui| slide_menu(ui, st, actions, path, d, gi, si));
+                    slots.push(Slot {
+                        group: gi,
+                        index: si + 1,
+                        y: rect.bottom() + 2.0,
+                    });
+                    ui.add_space(4.0);
                 }
-                ui.add_space(6.0);
+                if group.slides.is_empty() {
+                    ui.label(RichText::new("(empty group)").small().weak());
+                }
+                ui.add_space(8.0);
             }
             if ui.button("+ Add group").clicked() {
                 edit(
                     actions,
                     path,
                     Op::AddGroup {
-                        at: doc.groups().len(),
+                        at: d.groups.len(),
                         name: "New Group".into(),
                         color: Some(doc::Rgba {
                             r: 0.5,
@@ -299,22 +718,171 @@ pub fn grid_edit(
                     },
                 );
             }
+            strip_drop(ui, st, actions, path, &slots);
         });
+}
 
-    if let Some((g, s)) = st.edit.sel {
-        slide_editor(ui, st, actions, path, doc, g, s);
+/// Drag a slide to reorder it, within its group or into another one.
+fn strip_drop(
+    ui: &mut egui::Ui,
+    st: &mut UiState,
+    actions: &mut Vec<UiAction>,
+    path: &Path,
+    slots: &[Slot],
+) {
+    let Some((sg, ss)) = st.edit.strip_drag else {
+        return;
+    };
+    let (pointer, released) = ui.input(|i| (i.pointer.interact_pos(), i.pointer.any_released()));
+    let target = pointer.and_then(|p| {
+        slots
+            .iter()
+            .min_by(|a, b| (a.y - p.y).abs().total_cmp(&(b.y - p.y).abs()))
+            .copied()
+    });
+    if let Some(t) = target {
+        let x = ui.min_rect().x_range();
+        ui.painter().hline(x, t.y, Stroke::new(3.0, SELECT));
+        ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+    }
+    if released {
+        st.edit.strip_drag = None;
+        if let Some(t) = target {
+            let to = if t.group == sg && t.index > ss {
+                t.index - 1
+            } else {
+                t.index
+            };
+            if !(t.group == sg && to == ss) {
+                edit(
+                    actions,
+                    path,
+                    Op::MoveSlide {
+                        group: sg,
+                        slide: ss,
+                        to_group: t.group,
+                        to,
+                    },
+                );
+                st.edit.select_slide(t.group, to);
+            }
+        }
     }
 }
 
+fn slide_menu(
+    ui: &mut egui::Ui,
+    st: &mut UiState,
+    actions: &mut Vec<UiAction>,
+    path: &Path,
+    d: &doc::Document,
+    gi: usize,
+    si: usize,
+) {
+    let slide = &d.groups[gi].slides[si];
+    if ui.button("Duplicate").clicked() {
+        edit(
+            actions,
+            path,
+            Op::DuplicateSlide {
+                group: gi,
+                slide: si,
+            },
+        );
+        st.edit.select_slide(gi, si + 1);
+        ui.close();
+    }
+    if ui.button("Add slide after").clicked() {
+        edit(
+            actions,
+            path,
+            Op::AddSlide {
+                group: gi,
+                at: si + 1,
+                text: String::new(),
+            },
+        );
+        st.edit.select_slide(gi, si + 1);
+        ui.close();
+    }
+    let toggle = if slide.enabled { "Disable" } else { "Enable" };
+    if ui.button(toggle).clicked() {
+        edit(
+            actions,
+            path,
+            Op::SetSlideEnabled {
+                group: gi,
+                slide: si,
+                enabled: !slide.enabled,
+            },
+        );
+        ui.close();
+    }
+    ui.menu_button("Move to group", |ui| {
+        for (i, other) in d.groups.iter().enumerate() {
+            if i != gi && ui.button(&other.name).clicked() {
+                let to = other.slides.len();
+                edit(
+                    actions,
+                    path,
+                    Op::MoveSlide {
+                        group: gi,
+                        slide: si,
+                        to_group: i,
+                        to,
+                    },
+                );
+                st.edit.select_slide(i, to);
+                ui.close();
+            }
+        }
+    });
+    if ui.button("New group after this one").clicked() {
+        edit(
+            actions,
+            path,
+            Op::AddGroup {
+                at: gi + 1,
+                name: "New Group".into(),
+                color: Some(doc::Rgba {
+                    r: 0.5,
+                    g: 0.5,
+                    b: 0.5,
+                    a: 1.0,
+                }),
+            },
+        );
+        ui.close();
+    }
+    ui.separator();
+    if ui
+        .button(RichText::new("Delete slide").color(Color32::LIGHT_RED))
+        .clicked()
+    {
+        edit(
+            actions,
+            path,
+            Op::RemoveSlide {
+                group: gi,
+                slide: si,
+            },
+        );
+        st.edit.sel = None;
+        ui.close();
+    }
+}
+
+/// Group name with its PP6 colour and a menu. Returns the header's rect.
 fn group_header(
     ui: &mut egui::Ui,
     st: &mut UiState,
     actions: &mut Vec<UiAction>,
     path: &Path,
+    d: &doc::Document,
     gi: usize,
-    group: &doc::Group,
     n_groups: usize,
-) {
+) -> Rect {
+    let group = &d.groups[gi];
     ui.horizontal(|ui| {
         let mut c = color32(group.color);
         if egui::color_picker::color_edit_button_srgba(
@@ -322,22 +890,26 @@ fn group_header(
             &mut c,
             egui::color_picker::Alpha::Opaque,
         )
+        .on_hover_text("Group colour")
         .changed()
         {
-            edit(
+            edit_merging(
                 actions,
                 path,
                 Op::RecolorGroup {
                     group: gi,
                     color: Some(to_rgba(c)),
                 },
+                format!("recolor:{}", group.uuid),
             );
         }
         match &mut st.edit.rename {
             Some((g, name)) if *g == gi => {
-                let r = ui.text_edit_singleline(name);
-                let done = r.lost_focus() || ui.small_button("OK").clicked();
-                if done {
+                let r = ui.add(
+                    egui::TextEdit::singleline(name).desired_width(ui.available_width() - 30.0),
+                );
+                r.request_focus();
+                if r.lost_focus() {
                     let new = name.trim().to_owned();
                     if !new.is_empty() && new != group.name {
                         edit(
@@ -353,112 +925,287 @@ fn group_header(
                 }
             }
             _ => {
-                ui.strong(if group.name.is_empty() {
+                let name = if group.name.is_empty() {
                     "(unnamed group)"
                 } else {
                     &group.name
-                });
-                if ui.small_button("Rename").clicked() {
+                };
+                if ui
+                    .add(egui::Label::new(RichText::new(name).strong()).sense(Sense::click()))
+                    .on_hover_text("Double-click to rename")
+                    .double_clicked()
+                {
                     st.edit.rename = Some((gi, group.name.clone()));
                 }
             }
         }
-        if gi > 0
-            && ui
-                .small_button("^")
-                .on_hover_text("Move group up")
-                .clicked()
-        {
-            edit(
-                actions,
-                path,
-                Op::MoveGroup {
-                    from: gi,
-                    to: gi - 1,
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.menu_button(
+                crate::theme::icon_text(crate::theme::icon::LIST, 14.0),
+                |ui| {
+                    if ui.button("Rename").clicked() {
+                        st.edit.rename = Some((gi, group.name.clone()));
+                        ui.close();
+                    }
+                    if ui.button("Add slide").clicked() {
+                        edit(
+                            actions,
+                            path,
+                            Op::AddSlide {
+                                group: gi,
+                                at: group.slides.len(),
+                                text: String::new(),
+                            },
+                        );
+                        st.edit.select_slide(gi, group.slides.len());
+                        ui.close();
+                    }
+                    if gi > 0 && ui.button("Move up").clicked() {
+                        edit(
+                            actions,
+                            path,
+                            Op::MoveGroup {
+                                from: gi,
+                                to: gi - 1,
+                            },
+                        );
+                        st.edit.sel = None;
+                        ui.close();
+                    }
+                    if gi + 1 < n_groups && ui.button("Move down").clicked() {
+                        edit(
+                            actions,
+                            path,
+                            Op::MoveGroup {
+                                from: gi,
+                                to: gi + 1,
+                            },
+                        );
+                        st.edit.sel = None;
+                        ui.close();
+                    }
+                    ui.separator();
+                    if st.edit.confirm_delete_group == Some(gi) {
+                        let label = format!(
+                            "Really delete '{}' and its {} slide(s)?",
+                            group.name,
+                            group.slides.len()
+                        );
+                        if ui
+                            .button(RichText::new(label).color(Color32::LIGHT_RED))
+                            .clicked()
+                        {
+                            edit(actions, path, Op::RemoveGroup { group: gi });
+                            st.edit.confirm_delete_group = None;
+                            st.edit.sel = None;
+                            ui.close();
+                        }
+                    } else if ui
+                        .button(RichText::new("Delete group…").color(Color32::LIGHT_RED))
+                        .clicked()
+                    {
+                        st.edit.confirm_delete_group = Some(gi);
+                    }
                 },
-            );
-        }
-        if gi + 1 < n_groups
-            && ui
-                .small_button("v")
-                .on_hover_text("Move group down")
-                .clicked()
-        {
-            edit(
-                actions,
-                path,
-                Op::MoveGroup {
-                    from: gi,
-                    to: gi + 1,
-                },
-            );
-        }
-        if ui.small_button("+ Slide").clicked() {
-            edit(
-                actions,
-                path,
-                Op::AddSlide {
-                    group: gi,
-                    at: group.slides().len(),
-                    text: String::new(),
-                },
-            );
-            st.edit.sel = Some((gi, group.slides().len()));
-        }
-        if st.edit.confirm_delete_group == Some(gi) {
-            let label = format!(
-                "Really delete '{}' and its {} slide(s)?",
-                group.name,
-                group.slides().len()
             );
             if ui
-                .small_button(RichText::new(label).color(Color32::LIGHT_RED))
+                .small_button("+")
+                .on_hover_text("Add a slide to this group")
                 .clicked()
             {
-                edit(actions, path, Op::RemoveGroup { group: gi });
-                st.edit.confirm_delete_group = None;
-                st.edit.sel = None;
+                edit(
+                    actions,
+                    path,
+                    Op::AddSlide {
+                        group: gi,
+                        at: group.slides.len(),
+                        text: String::new(),
+                    },
+                );
+                st.edit.select_slide(gi, group.slides.len());
             }
-            if ui.small_button("Cancel").clicked() {
-                st.edit.confirm_delete_group = None;
-            }
-        } else if ui.small_button("Delete group").clicked() {
-            st.edit.confirm_delete_group = Some(gi);
-        }
-    });
+        });
+    })
+    .response
+    .rect
 }
 
-fn slide_editor(
+// ───────────────────────────── inspector ─────────────────────────────
+
+fn inspector(
     ui: &mut egui::Ui,
     st: &mut UiState,
     actions: &mut Vec<UiAction>,
     path: &Path,
-    doc: &doc::Document,
+    d: &doc::Document,
+) {
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut st.edit.tab, Tab::Text, "Text");
+        ui.selectable_value(&mut st.edit.tab, Tab::Slide, "Slide");
+    });
+    ui.separator();
+    let Some((g, s)) = st.edit.sel else {
+        ui.label(RichText::new("No slide selected.").weak());
+        return;
+    };
+    match st.edit.tab {
+        Tab::Text => text_tab(ui, st, actions, path, d, g, s),
+        Tab::Slide => slide_tab(ui, st, actions, path, d, g, s),
+    }
+}
+
+fn text_tab(
+    ui: &mut egui::Ui,
+    st: &mut UiState,
+    actions: &mut Vec<UiAction>,
+    path: &Path,
+    d: &doc::Document,
     g: usize,
     s: usize,
 ) {
-    let Some(slide) = doc.groups().get(g).and_then(|gr| gr.slides().get(s)) else {
+    let slide = &d.groups[g].slides[s];
+    // No box selected: the slide's first text box, as before.
+    let e = st.edit.element.or_else(|| {
+        slide
+            .elements
+            .iter()
+            .position(|e| matches!(e, Element::Text(_)))
+    });
+    let Some((e, t)) = e.and_then(|e| text_box(d, g, s, e).map(|t| (e, t))) else {
+        ui.label(RichText::new("This slide has no text box.").weak());
         return;
     };
-    let key = (path.to_path_buf(), slide.uuid.clone());
+    let key = (path.to_path_buf(), slide.uuid.clone(), e);
     if st.edit.text_for.as_ref() != Some(&key) {
-        st.edit.text = slide_text(doc, g, s);
+        st.edit.text = t.plain_text();
         st.edit.text_for = Some(key);
     }
-    ui.separator();
+    if let Some(problem) = &t.problem {
+        let why = match problem {
+            doc::TextProblem::Unreadable { message } => message.clone(),
+            doc::TextProblem::FontNotInTable { .. } => {
+                "Its text refers to a font that isn't listed in the slide.".to_owned()
+            }
+            doc::TextProblem::NoStyledText => "It has no font or size set.".to_owned(),
+        };
+        ui.label(
+            RichText::new(format!("This text box can't be edited: {why}")).color(Color32::YELLOW),
+        );
+        return;
+    }
+    let r = ui.add(
+        egui::TextEdit::multiline(&mut st.edit.text)
+            .desired_rows(6)
+            .desired_width(f32::INFINITY)
+            .hint_text("Slide text (Enter = new line)"),
+    );
+    if std::mem::take(&mut st.edit.focus_text) {
+        r.request_focus();
+    }
+    let ctrl_enter =
+        r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
+    let changed = st.edit.text.trim_end_matches('\n') != t.plain_text();
     ui.horizontal(|ui| {
-        ui.strong(format!("Slide {} in {}", s + 1, doc.groups()[g].name));
-        let has_text = slide.text_boxes().next().is_some();
-        if !has_text {
-            ui.label(RichText::new("This slide has no text box.").color(Color32::YELLOW));
+        if (ui
+            .add_enabled(changed, egui::Button::new("Apply text"))
+            .on_hover_text("Ctrl+Enter")
+            .clicked()
+            || ctrl_enter)
+            && changed
+        {
+            edit(
+                actions,
+                path,
+                Op::SetBoxText {
+                    group: g,
+                    slide: s,
+                    element: e,
+                    text: st.edit.text.trim_end_matches('\n').to_owned(),
+                },
+            );
         }
-        ui.label("Move to group:");
-        egui::ComboBox::from_id_salt("move-to-group")
-            .selected_text(doc.groups()[g].name.clone())
+        if changed && ui.button("Discard").clicked() {
+            st.edit.text_for = None;
+        }
+    });
+    ui.add_space(8.0);
+    // Style summary (from the first run; rich text editing replaces this).
+    if let Some(run) = t.runs().next() {
+        let colour = run.color.map_or("default (black)".to_owned(), |[r, g, b]| {
+            format!("#{r:02X}{g:02X}{b:02X}")
+        });
+        let mut style = Vec::new();
+        if run.bold {
+            style.push("bold");
+        }
+        if run.italic {
+            style.push("italic");
+        }
+        if run.underline {
+            style.push("underline");
+        }
+        egui::Grid::new("text-style").num_columns(2).show(ui, |ui| {
+            ui.label(RichText::new("Font").weak());
+            ui.label(&run.font);
+            ui.end_row();
+            ui.label(RichText::new("Size").weak());
+            ui.label(format!("{:.0}", run.size));
+            ui.end_row();
+            ui.label(RichText::new("Colour").weak());
+            ui.label(colour);
+            ui.end_row();
+            if !style.is_empty() {
+                ui.label(RichText::new("Style").weak());
+                ui.label(style.join(", "));
+                ui.end_row();
+            }
+        });
+        ui.label(
+            RichText::new("New text takes the font, size and colour of the box's first line.")
+                .small()
+                .weak(),
+        );
+    }
+}
+
+fn slide_tab(
+    ui: &mut egui::Ui,
+    st: &mut UiState,
+    actions: &mut Vec<UiAction>,
+    path: &Path,
+    d: &doc::Document,
+    g: usize,
+    s: usize,
+) {
+    let slide = &d.groups[g].slides[s];
+    ui.label(RichText::new(format!("Slide {} in {}", s + 1, d.groups[g].name)).strong());
+    if !slide.label.is_empty() {
+        ui.label(format!("Label: {}", slide.label));
+    }
+    let mut enabled = slide.enabled;
+    if ui
+        .checkbox(&mut enabled, "Enabled")
+        .on_hover_text("Disabled slides are skipped by Next / Prev")
+        .changed()
+    {
+        edit(
+            actions,
+            path,
+            Op::SetSlideEnabled {
+                group: g,
+                slide: s,
+                enabled,
+            },
+        );
+    }
+    ui.horizontal(|ui| {
+        ui.label("Group");
+        egui::ComboBox::from_id_salt("slide-group")
+            .selected_text(d.groups[g].name.clone())
             .show_ui(ui, |ui| {
-                for (i, other) in doc.groups().iter().enumerate() {
+                for (i, other) in d.groups.iter().enumerate() {
                     if i != g && ui.selectable_label(false, &other.name).clicked() {
-                        let to = other.slides().len();
+                        let to = other.slides.len();
                         edit(
                             actions,
                             path,
@@ -469,44 +1216,605 @@ fn slide_editor(
                                 to,
                             },
                         );
-                        st.edit.sel = Some((i, to));
+                        st.edit.select_slide(i, to);
                     }
                 }
             });
     });
+    if let Some(t) = slide.timer {
+        ui.label(format!(
+            "Advances after {:.1} s{}",
+            t.duration.as_secs_f64(),
+            if t.loop_to_beginning {
+                ", then back to the first slide"
+            } else {
+                ""
+            }
+        ));
+    }
+    ui.add_space(6.0);
+    ui.label("Notes");
+    sync_notes(st, path, slide);
     let r = ui.add(
-        egui::TextEdit::multiline(&mut st.edit.text)
-            .desired_rows(5)
-            .desired_width(f32::INFINITY)
-            .hint_text("Slide text (Enter = new line)"),
+        egui::TextEdit::multiline(&mut st.edit.notes)
+            .desired_rows(4)
+            .desired_width(f32::INFINITY),
     );
-    let ctrl_enter =
-        r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
-    ui.horizontal(|ui| {
-        if ui
-            .button("Apply text")
-            .on_hover_text("Ctrl+Enter")
-            .clicked()
-            || ctrl_enter
+    if r.lost_focus() && st.edit.notes != slide.notes {
+        edit(
+            actions,
+            path,
+            Op::SetSlideNotes {
+                group: g,
+                slide: s,
+                notes: st.edit.notes.clone(),
+            },
+        );
+    }
+    ui.add_space(6.0);
+    ui.horizontal(|ui| background_picker(ui, actions, path, d, g, s));
+    if slide.pro6_incompatible {
+        ui.add_space(6.0);
+        ui.label(RichText::new("This slide uses something a ProPresenter 6 file can't hold; it only opens correctly in OpenPresent.").color(Color32::from_rgb(255, 130, 130)));
+    }
+}
+
+// ───────────────────────────── canvas ─────────────────────────────
+
+fn centre(f: &doc::Rect) -> Pos2 {
+    Pos2::new((f.x + f.width / 2.0) as f32, (f.y + f.height / 2.0) as f32)
+}
+
+fn rotate(v: Vec2, degrees: f64) -> Vec2 {
+    let (sin, cos) = (degrees as f32).to_radians().sin_cos();
+    Vec2::new(v.x * cos - v.y * sin, v.x * sin + v.y * cos)
+}
+
+/// `p` (canvas pixels) in the box's own unrotated axes, relative to its centre.
+fn to_local(f: &doc::Rect, rotation: f64, p: Pos2) -> Vec2 {
+    rotate(p - centre(f), -rotation)
+}
+
+fn hit(f: &doc::Rect, rotation: f64, p: Pos2) -> bool {
+    let l = to_local(f, rotation, p);
+    l.x.abs() <= f.width as f32 / 2.0 && l.y.abs() <= f.height as f32 / 2.0
+}
+
+/// A handle's position (canvas pixels): `(hx, hy)` in -1..=1 from the centre.
+fn handle_pos(f: &doc::Rect, rotation: f64, hx: i8, hy: i8) -> Pos2 {
+    centre(f)
+        + rotate(
+            Vec2::new(
+                f32::from(hx) * f.width as f32 / 2.0,
+                f32::from(hy) * f.height as f32 / 2.0,
+            ),
+            rotation,
+        )
+}
+
+const HANDLES: [(i8, i8); 8] = [
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
+    (0, 1),
+    (-1, 1),
+    (-1, 0),
+];
+
+/// Where the drag would put the element, given the pointer (canvas pixels).
+fn drag_update(dr: &mut Drag, p: Pos2) {
+    let f = dr.frame;
+    match dr.grab {
+        Grab::Move => {
+            let delta = p - dr.start;
+            dr.now_frame = doc::Rect {
+                x: (f.x + f64::from(delta.x)).round(),
+                y: (f.y + f64::from(delta.y)).round(),
+                ..f
+            };
+        }
+        Grab::Resize(hx, hy) => {
+            // In the box's own axes: the grabbed edges follow the pointer, the
+            // opposite edges stay put (also when rotated).
+            let d = rotate(p - dr.start, -dr.rotation);
+            let mut dw = f64::from(hx) * f64::from(d.x);
+            let mut dh = f64::from(hy) * f64::from(d.y);
+            dw = dw.max(MIN_SIZE - f.width).round();
+            dh = dh.max(MIN_SIZE - f.height).round();
+            let shift = rotate(
+                Vec2::new(
+                    (f64::from(hx) * dw / 2.0) as f32,
+                    (f64::from(hy) * dh / 2.0) as f32,
+                ),
+                dr.rotation,
+            );
+            let c = centre(&f) + shift;
+            let (w, h) = (f.width + dw, f.height + dh);
+            dr.now_frame = doc::Rect {
+                x: (f64::from(c.x) - w / 2.0).round(),
+                y: (f64::from(c.y) - h / 2.0).round(),
+                width: w,
+                height: h,
+            };
+        }
+        Grab::Rotate => {
+            let v = p - centre(&f);
+            if v.length() > 1.0 {
+                let deg = f64::from(v.y.atan2(v.x).to_degrees()) + 90.0;
+                dr.now_rotation = deg.rem_euclid(360.0).round();
+            }
+        }
+    }
+}
+
+fn canvas(
+    ui: &mut egui::Ui,
+    st: &mut UiState,
+    actions: &mut Vec<UiAction>,
+    path: &Path,
+    d: &Arc<doc::Document>,
+) {
+    let full = ui.max_rect();
+    let area = Rect::from_min_max(full.min + Vec2::splat(RULER), full.max);
+    let (cw, ch) = (d.canvas.width.max(1) as f32, d.canvas.height.max(1) as f32);
+    let fit = ((area.width() - 32.0) / cw)
+        .min((area.height() - 32.0) / ch)
+        .max(0.02);
+    let scale = match st.edit.zoom {
+        Zoom::Fit => fit,
+        Zoom::Pct(p) => p as f32 / 100.0,
+    };
+    let size = Vec2::new(cw, ch) * scale;
+    let resp = ui.interact(
+        area,
+        ui.scope_id().with("editor-canvas"),
+        Sense::click_and_drag(),
+    );
+    if st.edit.zoom != Zoom::Fit && resp.hovered() {
+        st.edit.pan += ui.input(|i| i.smooth_scroll_delta);
+    }
+    let max_pan = ((size - area.size()) / 2.0 + Vec2::splat(16.0)).max(Vec2::ZERO);
+    st.edit.pan = st.edit.pan.clamp(-max_pan, max_pan);
+    let rect = Rect::from_center_size(area.center() + st.edit.pan, size);
+    st.edit.view = Some((rect, scale));
+    let painter = ui.painter_at(area);
+
+    let Some((g, s)) = st.edit.sel else {
+        painter.text(
+            area.center(),
+            Align2::CENTER_CENTER,
+            "No slides",
+            FontId::proportional(16.0),
+            Color32::GRAY,
+        );
+        return;
+    };
+    let slide = &d.groups[g].slides[s];
+    let to_screen = |p: Pos2| rect.min + p.to_vec2() * scale;
+    let to_canvas = |p: Pos2| Pos2::ZERO + (p - rect.min) / scale;
+
+    // The image: the editor copy, or a preview of the drag in progress.
+    let shown = match st.edit.drag.as_mut() {
+        Some(dr) if dr.now_frame != dr.frame || dr.now_rotation != dr.rotation => {
+            if dr
+                .preview
+                .as_ref()
+                .is_none_or(|(f, r, _)| *f != dr.now_frame || *r != dr.now_rotation)
+            {
+                let mut p = (**d).clone();
+                if let Some(Element::Text(t)) = p.groups[g].slides[s].elements.get_mut(dr.element) {
+                    t.frame = dr.now_frame;
+                    t.rotation = dr.now_rotation;
+                }
+                dr.preview = Some((dr.now_frame, dr.now_rotation, Arc::new(p)));
+            }
+            dr.preview
+                .as_ref()
+                .map_or_else(|| d.clone(), |(_, _, p)| p.clone())
+        }
+        _ => d.clone(),
+    };
+    painter.rect_filled(rect, 0.0, Color32::BLACK);
+    if let Some(c) = &mut st.canvas {
+        let ppp = ui.ctx().pixels_per_point();
+        c.request(
+            &shown,
+            flat_index(d, g, s),
+            (size.x * ppp).round() as u32,
+            (size.y * ppp).round() as u32,
+        );
+        let (tex, err) = c.image();
+        if let Some(t) = tex {
+            painter.image(
+                t.id(),
+                rect,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
+        if let Some(e) = err {
+            let band = Rect::from_min_size(
+                rect.left_bottom() - Vec2::new(0.0, 40.0),
+                Vec2::new(rect.width(), 40.0),
+            );
+            painter.rect_filled(band, 0.0, Color32::from_rgba_unmultiplied(90, 10, 10, 220));
+            painter.text(
+                band.center(),
+                Align2::CENTER_CENTER,
+                e,
+                FontId::proportional(13.0),
+                Color32::WHITE,
+            );
+        }
+    }
+
+    // Element geometry as shown (dragged element at its new place).
+    let dragged = st
+        .edit
+        .drag
+        .as_ref()
+        .map(|dr| (dr.element, dr.now_frame, dr.now_rotation));
+    let geom = |e: usize, t: &doc::TextBox| match dragged {
+        Some((de, f, r)) if de == e => (f, r),
+        _ => (t.frame, t.rotation),
+    };
+    let selected_el = st.edit.element;
+    let boxes: Vec<(usize, &doc::TextBox)> = slide
+        .elements
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match e {
+            Element::Text(t) => Some((i, &**t)),
+            Element::Pro6(_) => None,
+        })
+        .collect();
+    let pointer = resp.hover_pos().map(to_canvas);
+    let topmost_at = |p: Pos2| {
+        boxes
+            .iter()
+            .rev()
+            .find(|(e, t)| {
+                let (f, r) = geom(*e, t);
+                hit(&f, r, p)
+            })
+            .map(|(e, _)| *e)
+    };
+    let hovered = if st.edit.drag.is_none() {
+        pointer.and_then(topmost_at)
+    } else {
+        None
+    };
+
+    // What a press at `p` (screen) would grab on the selected element.
+    let grab_at = |p: Pos2| -> Option<Grab> {
+        let e = selected_el?;
+        let t = boxes.iter().find(|(i, _)| *i == e)?.1;
+        if t.locked {
+            return None;
+        }
+        let (f, r) = (t.frame, t.rotation);
+        let top = to_screen(handle_pos(&f, r, 0, -1));
+        let arm = top + rotate(Vec2::new(0.0, -ROTATE_ARM), r);
+        if p.distance(arm) <= HANDLE + 3.0 {
+            return Some(Grab::Rotate);
+        }
+        for (hx, hy) in HANDLES {
+            if p.distance(to_screen(handle_pos(&f, r, hx, hy))) <= HANDLE + 3.0 {
+                return Some(Grab::Resize(hx, hy));
+            }
+        }
+        hit(&f, r, to_canvas(p)).then_some(Grab::Move)
+    };
+
+    // Outlines and handles.
+    for (e, t) in &boxes {
+        let (f, r) = geom(*e, t);
+        let pts: Vec<Pos2> = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
+            .iter()
+            .map(|&(hx, hy)| to_screen(handle_pos(&f, r, hx, hy)))
+            .collect();
+        let selected = st.edit.element == Some(*e);
+        let stroke = if selected {
+            Stroke::new(1.5, SELECT)
+        } else if hovered == Some(*e) {
+            Stroke::new(1.0, Color32::from_rgb(150, 190, 255))
+        } else {
+            Stroke::new(1.0, Color32::from_white_alpha(45))
+        };
+        painter.add(egui::Shape::closed_line(pts.clone(), stroke));
+        if selected && !t.locked {
+            let top = to_screen(handle_pos(&f, r, 0, -1));
+            let arm = top + rotate(Vec2::new(0.0, -ROTATE_ARM), r);
+            painter.line_segment([top, arm], Stroke::new(1.0, SELECT));
+            painter.circle(arm, HANDLE, Color32::WHITE, Stroke::new(1.0, SELECT));
+            for (hx, hy) in HANDLES {
+                let c = to_screen(handle_pos(&f, r, hx, hy));
+                painter.rect(
+                    Rect::from_center_size(c, Vec2::splat(HANDLE * 2.0)),
+                    1.0,
+                    Color32::WHITE,
+                    Stroke::new(1.0, SELECT),
+                    StrokeKind::Middle,
+                );
+            }
+        }
+        if selected && t.locked {
+            painter.text(
+                pts[0] - Vec2::new(0.0, 4.0),
+                Align2::LEFT_BOTTOM,
+                "locked",
+                FontId::proportional(11.0),
+                Color32::YELLOW,
+            );
+        }
+    }
+    if let Some(dr) = &st.edit.drag
+        && dr.grab == Grab::Rotate
+        && let Some(p) = resp.hover_pos()
+    {
+        painter.text(
+            p + Vec2::new(14.0, -14.0),
+            Align2::LEFT_BOTTOM,
+            format!("{:.0}°", dr.now_rotation),
+            FontId::proportional(13.0),
+            Color32::WHITE,
+        );
+    }
+
+    // Cursor.
+    if let Some(p) = resp.hover_pos() {
+        let icon = match st.edit.drag.as_ref().map(|d| d.grab).or_else(|| grab_at(p)) {
+            Some(Grab::Move) => Some(CursorIcon::Move),
+            Some(Grab::Rotate) => Some(CursorIcon::Grab),
+            Some(Grab::Resize(hx, hy)) => Some(match (hx, hy) {
+                (0, _) => CursorIcon::ResizeVertical,
+                (_, 0) => CursorIcon::ResizeHorizontal,
+                (x, y) if x == y => CursorIcon::ResizeNwSe,
+                _ => CursorIcon::ResizeNeSw,
+            }),
+            None => hovered.map(|_| CursorIcon::PointingHand),
+        };
+        if let Some(i) = icon {
+            ui.ctx().set_cursor_icon(i);
+        }
+    }
+
+    // Press / drag / release.
+    if resp.drag_started()
+        && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+    {
+        let grab = grab_at(origin).map(|g| (selected_el, g)).or_else(|| {
+            let e = topmost_at(to_canvas(origin))?;
+            st.edit.element = Some(e);
+            let t = boxes.iter().find(|(i, _)| *i == e)?.1;
+            (!t.locked).then_some((Some(e), Grab::Move))
+        });
+        if let Some((Some(e), grab)) = grab
+            && let Some((_, t)) = boxes.iter().find(|(i, _)| *i == e)
         {
-            let text = st.edit.text.trim_end_matches('\n').to_owned();
+            st.edit.drag = Some(Drag {
+                grab,
+                element: e,
+                start: to_canvas(origin),
+                frame: t.frame,
+                rotation: t.rotation,
+                now_frame: t.frame,
+                now_rotation: t.rotation,
+                preview: None,
+            });
+        }
+    }
+    if let Some(dr) = st.edit.drag.as_mut()
+        && let Some(p) = ui.input(|i| i.pointer.interact_pos())
+    {
+        drag_update(dr, to_canvas(p));
+    }
+    if resp.drag_stopped()
+        && let Some(dr) = st.edit.drag.take()
+    {
+        if dr.now_frame != dr.frame {
             edit(
                 actions,
                 path,
-                Op::SetText {
+                Op::SetFrame {
                     group: g,
                     slide: s,
-                    text,
+                    element: dr.element,
+                    frame: dr.now_frame,
                 },
             );
         }
-        ui.label(
-            RichText::new("Font, size and colour come from the slide's existing text.")
-                .small()
-                .weak(),
-        );
-    });
+        if dr.now_rotation != dr.rotation {
+            edit(
+                actions,
+                path,
+                Op::SetRotation {
+                    group: g,
+                    slide: s,
+                    element: dr.element,
+                    degrees: dr.now_rotation,
+                },
+            );
+        }
+    }
+    if resp.clicked() {
+        st.edit.element = resp
+            .interact_pointer_pos()
+            .map(to_canvas)
+            .and_then(topmost_at);
+    }
+    if resp.double_clicked()
+        && let Some(e) = resp
+            .interact_pointer_pos()
+            .map(to_canvas)
+            .and_then(topmost_at)
+    {
+        st.edit.element = Some(e);
+        st.edit.tab = Tab::Text;
+        st.edit.focus_text = true;
+    }
+
+    // Keyboard: arrows nudge (1 px, Shift 10 px), Esc deselects. Never while typing.
+    if ui.memory(|m| m.focused().is_none())
+        && let Some(e) = st.edit.element
+        && let Some((_, t)) = boxes.iter().find(|(i, _)| *i == e)
+    {
+        let (dx, dy, esc) = ui.input(|i| {
+            let step = if i.modifiers.shift { 10.0 } else { 1.0 };
+            let k = |key| if i.key_pressed(key) { step } else { 0.0 };
+            (
+                k(egui::Key::ArrowRight) - k(egui::Key::ArrowLeft),
+                k(egui::Key::ArrowDown) - k(egui::Key::ArrowUp),
+                i.key_pressed(egui::Key::Escape),
+            )
+        });
+        if (dx != 0.0 || dy != 0.0) && !t.locked {
+            edit_merging(
+                actions,
+                path,
+                Op::SetFrame {
+                    group: g,
+                    slide: s,
+                    element: e,
+                    frame: doc::Rect {
+                        x: t.frame.x + dx,
+                        y: t.frame.y + dy,
+                        ..t.frame
+                    },
+                },
+                format!("nudge:{}:{}", slide.uuid, t.uuid),
+            );
+        }
+        if esc {
+            st.edit.element = None;
+        }
+    }
+
+    // Rulers, with the selected element's extent marked.
+    let extent = st
+        .edit
+        .element
+        .and_then(|e| boxes.iter().find(|(i, _)| *i == e))
+        .map(|(e, t)| {
+            let (f, r) = geom(*e, t);
+            let pts: Vec<Pos2> = HANDLES
+                .iter()
+                .map(|&(hx, hy)| handle_pos(&f, r, hx, hy))
+                .collect();
+            let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for p in pts {
+                x0 = x0.min(p.x);
+                y0 = y0.min(p.y);
+                x1 = x1.max(p.x);
+                y1 = y1.max(p.y);
+            }
+            (x0, x1, y0, y1)
+        });
+    rulers(ui, full, area, rect, scale, extent);
 }
+
+fn rulers(
+    ui: &egui::Ui,
+    full: Rect,
+    area: Rect,
+    canvas: Rect,
+    scale: f32,
+    extent: Option<(f32, f32, f32, f32)>,
+) {
+    let p = ui.painter_at(full);
+    let bg = Color32::from_gray(36);
+    let top = Rect::from_min_max(
+        Pos2::new(area.left(), full.top()),
+        Pos2::new(full.right(), area.top()),
+    );
+    let left = Rect::from_min_max(
+        Pos2::new(full.left(), area.top()),
+        Pos2::new(area.left(), full.bottom()),
+    );
+    p.rect_filled(top, 0.0, bg);
+    p.rect_filled(left, 0.0, bg);
+    p.rect_filled(Rect::from_min_max(full.min, area.min), 0.0, bg);
+    if let Some((x0, x1, y0, y1)) = extent {
+        let mark = Color32::from_rgba_unmultiplied(90, 160, 255, 70);
+        p.rect_filled(
+            Rect::from_x_y_ranges(
+                canvas.left() + x0 * scale..=canvas.left() + x1 * scale,
+                top.y_range(),
+            ),
+            0.0,
+            mark,
+        );
+        p.rect_filled(
+            Rect::from_x_y_ranges(
+                left.x_range(),
+                canvas.top() + y0 * scale..=canvas.top() + y1 * scale,
+            ),
+            0.0,
+            mark,
+        );
+    }
+    // Major ticks at least ~70 points apart, labelled in canvas pixels.
+    let major = [10.0, 25.0, 50.0, 100.0, 200.0, 250.0, 500.0, 1000.0, 2000.0]
+        .into_iter()
+        .find(|s| s * scale >= 70.0)
+        .unwrap_or(5000.0);
+    let minor = major / 5.0;
+    let tick = Color32::from_gray(120);
+    let font = FontId::proportional(9.0);
+    let range = |from: f32, to: f32, origin: f32| {
+        let a = ((from - origin) / scale / minor).floor() as i64;
+        let b = ((to - origin) / scale / minor).ceil() as i64;
+        a..=b
+    };
+    for i in range(top.left(), top.right(), canvas.left()) {
+        let v = i as f32 * minor;
+        let x = canvas.left() + v * scale;
+        if x < top.left() || x > top.right() {
+            continue;
+        }
+        let is_major = (v / major).fract().abs() < 1e-4;
+        let len = if is_major { RULER - 4.0 } else { 4.0 };
+        p.line_segment(
+            [Pos2::new(x, top.bottom() - len), Pos2::new(x, top.bottom())],
+            Stroke::new(1.0, tick),
+        );
+        if is_major {
+            p.text(
+                Pos2::new(x + 2.0, top.top() + 1.0),
+                Align2::LEFT_TOP,
+                format!("{v:.0}"),
+                font.clone(),
+                tick,
+            );
+        }
+    }
+    for i in range(left.top(), left.bottom(), canvas.top()) {
+        let v = i as f32 * minor;
+        let y = canvas.top() + v * scale;
+        if y < left.top() || y > left.bottom() {
+            continue;
+        }
+        let is_major = (v / major).fract().abs() < 1e-4;
+        let len = if is_major { RULER - 4.0 } else { 4.0 };
+        p.line_segment(
+            [Pos2::new(left.right() - len, y), Pos2::new(left.right(), y)],
+            Stroke::new(1.0, tick),
+        );
+        if is_major {
+            p.text(
+                Pos2::new(left.left() + 1.0, y + 2.0),
+                Align2::LEFT_TOP,
+                format!("{v:.0}"),
+                font.clone(),
+                tick,
+            );
+        }
+    }
+}
+
+// ───────────────────────────── arrangements ─────────────────────────────
 
 fn arrangements(
     ui: &mut egui::Ui,
@@ -668,4 +1976,334 @@ fn arrangements(
                     });
             });
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The editor run headless: a plain egui context, synthetic pointer input.
+    struct Harness {
+        ctx: egui::Context,
+        st: UiState,
+        show: ShowState,
+        path: PathBuf,
+        doc: Arc<doc::Document>,
+        thumbs: Sender<ThumbRequest>,
+        _thumbs_rx: crossbeam_channel::Receiver<ThumbRequest>,
+        time: f64,
+        mods: egui::Modifiers,
+    }
+
+    impl Harness {
+        fn new() -> Harness {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../fixtures/render_1024x768.pro6");
+            let doc = Arc::new(doc::load(&path).unwrap());
+            let mut show = ShowState {
+                selected: Some(path.clone()),
+                ..Default::default()
+            };
+            Arc::make_mut(&mut show.docs).insert(path.clone(), doc.clone());
+            let mut st = UiState::default();
+            st.edit.select(0, 0);
+            let (thumbs, _thumbs_rx) = crossbeam_channel::unbounded();
+            Harness {
+                ctx: egui::Context::default(),
+                st,
+                show,
+                path,
+                doc,
+                thumbs,
+                _thumbs_rx,
+                time: 0.0,
+                mods: Default::default(),
+            }
+        }
+
+        fn frame(&mut self, events: Vec<egui::Event>) -> Vec<Op> {
+            self.time += 0.05;
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 900.0))),
+                time: Some(self.time),
+                events: std::iter::once(egui::Event::ModifiersChanged(self.mods))
+                    .chain(events)
+                    .collect(),
+                ..Default::default()
+            };
+            let mut actions = Vec::new();
+            let (st, show, thumbs, path, d) = (
+                &mut self.st,
+                &self.show,
+                &self.thumbs,
+                &self.path,
+                &self.doc,
+            );
+            let mut out = self.ctx.run_ui(input, |ui| {
+                editor(ui, st, show, thumbs, &mut actions, path, d);
+            });
+            out.textures_delta.clear();
+            actions
+                .into_iter()
+                .filter_map(|a| match a {
+                    UiAction::Core(
+                        Command::Edit { edit, .. } | Command::EditMerging { edit, .. },
+                    ) => Some(edit),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// Screen position of canvas pixel `(x, y)`.
+        fn at(&self, x: f32, y: f32) -> Pos2 {
+            let (rect, scale) = self.st.edit.view.unwrap();
+            rect.min + Vec2::new(x, y) * scale
+        }
+
+        fn scale(&self) -> f32 {
+            self.st.edit.view.unwrap().1
+        }
+
+        /// Press at `from`, move to `to` in steps, release; edits sent.
+        fn drag(&mut self, from: Pos2, to: Pos2) -> Vec<Op> {
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            let mut out = self.frame(vec![egui::Event::PointerMoved(from)]);
+            out.extend(self.frame(vec![button(from, true)]));
+            for i in 1..=5 {
+                let p = from + (to - from) * (i as f32 / 5.0);
+                out.extend(self.frame(vec![egui::Event::PointerMoved(p)]));
+            }
+            out.extend(self.frame(vec![button(to, false)]));
+            out.extend(self.frame(vec![]));
+            out
+        }
+
+        fn click(&mut self, at: Pos2) -> Vec<Op> {
+            let button = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            let mut out = self.frame(vec![egui::Event::PointerMoved(at)]);
+            out.extend(self.frame(vec![button(true)]));
+            out.extend(self.frame(vec![button(false)]));
+            out
+        }
+    }
+
+    #[test]
+    fn dragging_a_slide_in_the_strip_moves_it() {
+        let mut h = Harness::new();
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let tile = |h: &Harness, gs| h.st.edit.tiles.iter().find(|(k, _)| *k == gs).unwrap().1;
+        // Slide 1 dropped just below slide 3: it becomes the third slide.
+        let from = tile(&h, (0, 0)).center();
+        let to = tile(&h, (0, 2)).center_bottom() + Vec2::new(0.0, 1.0);
+        let edits = h.drag(from, to);
+        assert_eq!(
+            edits,
+            vec![Op::MoveSlide {
+                group: 0,
+                slide: 0,
+                to_group: 0,
+                to: 2
+            }]
+        );
+        assert_eq!(h.st.edit.sel, Some((0, 2)), "selection follows the slide");
+        // Dropped where it already is: nothing.
+        let t = tile(&h, (0, 1)).center();
+        assert!(h.drag(t, t + Vec2::new(0.0, 8.0)).is_empty());
+    }
+
+    #[test]
+    fn dragging_a_box_on_the_canvas_sends_one_move() {
+        let mut h = Harness::new();
+        h.frame(vec![]);
+        h.frame(vec![]);
+        // Slide 1's box: x 112, y 84, 800 × 600.
+        let edits = h.drag(
+            h.at(512.0, 384.0),
+            h.at(512.0, 384.0) + Vec2::new(60.0, 30.0),
+        );
+        assert_eq!(h.st.edit.element, Some(0), "the box got selected");
+        let s = h.scale();
+        let want = doc::Rect {
+            x: (112.0 + f64::from(60.0 / s)).round(),
+            y: (84.0 + f64::from(30.0 / s)).round(),
+            width: 800.0,
+            height: 600.0,
+        };
+        match edits.as_slice() {
+            [
+                Op::SetFrame {
+                    group: 0,
+                    slide: 0,
+                    element: 0,
+                    frame,
+                },
+            ] => {
+                assert!(
+                    (frame.x - want.x).abs() <= 1.0 && (frame.y - want.y).abs() <= 1.0,
+                    "{frame:?} vs {want:?}"
+                );
+                assert_eq!((frame.width, frame.height), (800.0, 600.0));
+            }
+            other => panic!("expected one SetFrame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resize_and_rotate_handles_and_nudges() {
+        let mut h = Harness::new();
+        h.frame(vec![]);
+        h.click(h.at(512.0, 384.0));
+        assert_eq!(h.st.edit.element, Some(0));
+        // Bottom-right handle dragged 40 points right.
+        let edits = h.drag(
+            h.at(912.0, 684.0),
+            h.at(912.0, 684.0) + Vec2::new(40.0, 0.0),
+        );
+        match edits.as_slice() {
+            [Op::SetFrame { frame, .. }] => {
+                assert_eq!((frame.x, frame.y), (112.0, 84.0), "top-left stays");
+                assert!((frame.width - (800.0 + f64::from(40.0 / h.scale()))).abs() <= 1.0);
+                assert_eq!(frame.height, 600.0);
+            }
+            other => panic!("expected a resize, got {other:?}"),
+        }
+        // Rotation handle (above the top centre) dragged round to the right.
+        let arm = h.at(512.0, 84.0) - Vec2::new(0.0, ROTATE_ARM);
+        let edits = h.drag(arm, h.at(512.0, 384.0) + Vec2::new(200.0, 0.0));
+        assert!(
+            matches!(edits.as_slice(), [Op::SetRotation { degrees, .. }] if *degrees == 90.0),
+            "{edits:?}"
+        );
+        // Arrow keys nudge 1 px (Shift: 10).
+        let key = |key, shift| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                shift,
+                ..Default::default()
+            },
+        };
+        let edits = h.frame(vec![key(egui::Key::ArrowRight, false)]);
+        assert!(
+            matches!(edits.as_slice(), [Op::SetFrame { frame, .. }] if frame.x == 113.0),
+            "{edits:?}"
+        );
+        h.mods.shift = true;
+        let edits = h.frame(vec![key(egui::Key::ArrowDown, true)]);
+        h.mods.shift = false;
+        assert!(
+            matches!(edits.as_slice(), [Op::SetFrame { frame, .. }] if frame.y == 94.0),
+            "{edits:?}"
+        );
+        // Clicking empty canvas deselects.
+        h.click(h.at(20.0, 20.0));
+        assert_eq!(h.st.edit.element, None);
+    }
+
+    fn drag(grab: Grab, rotation: f64) -> Drag {
+        let f = doc::Rect {
+            x: 100.0,
+            y: 100.0,
+            width: 200.0,
+            height: 100.0,
+        };
+        Drag {
+            grab,
+            element: 0,
+            start: Pos2::new(0.0, 0.0),
+            frame: f,
+            rotation,
+            now_frame: f,
+            now_rotation: rotation,
+            preview: None,
+        }
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() <= 1.0
+    }
+
+    #[test]
+    fn move_follows_the_pointer_in_whole_pixels() {
+        let mut d = drag(Grab::Move, 0.0);
+        drag_update(&mut d, Pos2::new(10.4, -5.6));
+        assert_eq!((d.now_frame.x, d.now_frame.y), (110.0, 94.0));
+        assert_eq!((d.now_frame.width, d.now_frame.height), (200.0, 100.0));
+    }
+
+    #[test]
+    fn resize_keeps_the_opposite_edge() {
+        // Right edge dragged 50 px right: left edge stays at 100.
+        let mut d = drag(Grab::Resize(1, 0), 0.0);
+        drag_update(&mut d, Pos2::new(50.0, 30.0));
+        assert_eq!(d.now_frame.x, 100.0);
+        assert_eq!(d.now_frame.width, 250.0);
+        assert_eq!(d.now_frame.height, 100.0, "edge handle changes one axis");
+        // Top-left corner dragged in: the bottom-right corner stays put.
+        let mut d = drag(Grab::Resize(-1, -1), 0.0);
+        drag_update(&mut d, Pos2::new(20.0, 10.0));
+        assert_eq!((d.now_frame.x, d.now_frame.y), (120.0, 110.0));
+        assert_eq!((d.now_frame.width, d.now_frame.height), (180.0, 90.0));
+        // Never smaller than the minimum.
+        let mut d = drag(Grab::Resize(1, 1), 0.0);
+        drag_update(&mut d, Pos2::new(-1000.0, -1000.0));
+        assert_eq!(
+            (d.now_frame.width, d.now_frame.height),
+            (MIN_SIZE, MIN_SIZE)
+        );
+    }
+
+    #[test]
+    fn resizing_a_rotated_box_keeps_its_opposite_edge_in_place() {
+        // Rotated 90°: the box's own right edge points down on screen.
+        let mut d = drag(Grab::Resize(1, 0), 90.0);
+        let left_before = handle_pos(&d.frame, 90.0, -1, 0);
+        drag_update(&mut d, Pos2::new(0.0, 40.0));
+        assert!(close(d.now_frame.width, 240.0), "{:?}", d.now_frame);
+        let left_after = handle_pos(&d.now_frame, 90.0, -1, 0);
+        assert!(
+            left_before.distance(left_after) <= 1.0,
+            "{left_before:?} {left_after:?}"
+        );
+    }
+
+    #[test]
+    fn rotate_points_the_handle_at_the_pointer() {
+        let mut d = drag(Grab::Rotate, 0.0);
+        let c = centre(&d.frame);
+        drag_update(&mut d, c + Vec2::new(100.0, 0.0)); // pointer to the right
+        assert_eq!(d.now_rotation, 90.0);
+        drag_update(&mut d, c + Vec2::new(0.0, -100.0)); // straight up
+        assert_eq!(d.now_rotation, 0.0);
+        drag_update(&mut d, c + Vec2::new(-100.0, 0.0));
+        assert_eq!(d.now_rotation, 270.0);
+    }
+
+    #[test]
+    fn hit_testing_follows_rotation() {
+        let f = doc::Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 20.0,
+        };
+        // A wide, flat box: a point 50 px above the centre is outside upright,
+        // inside when turned 90°.
+        let p = centre(&f) + Vec2::new(0.0, -50.0);
+        assert!(!hit(&f, 0.0, p));
+        assert!(hit(&f, 90.0, p));
+    }
 }

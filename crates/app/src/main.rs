@@ -2,6 +2,7 @@
 //! winit event loop; the output's GL runs on its own thread, and the show state
 //! lives in the core actor.
 
+mod canvas;
 mod crash;
 mod editor;
 mod error;
@@ -87,7 +88,7 @@ struct Args {
     /// Start the loop (auto-advance) after --open (development / testing).
     #[arg(long)]
     start_loop: bool,
-    /// Start the grid in edit mode, optionally with slide GROUP:SLIDE selected (0-based).
+    /// Start in the editor, optionally with slide GROUP:SLIDE[:ELEMENT] selected (0-based).
     #[arg(long)]
     edit_mode: bool,
     #[arg(long)]
@@ -290,6 +291,7 @@ fn main() -> ExitCode {
     let link: OutputLink = Arc::new(Mutex::new(None));
     let (fonts_tx, fonts_rx) = crossbeam_channel::bounded(1);
     let (web_fonts_tx, web_fonts_rx) = crossbeam_channel::bounded::<render::Fonts>(1);
+    let (canvas_fonts_tx, canvas_fonts_rx) = crossbeam_channel::bounded::<render::Fonts>(1);
     let mut font_dirs = settings.font_dirs.clone();
     font_dirs.extend(args.font_dirs.iter().cloned());
     let raster = match raster::spawn(
@@ -297,7 +299,7 @@ fn main() -> ExitCode {
         font_dirs,
         link.clone(),
         proxy.clone(),
-        vec![fonts_tx, web_fonts_tx],
+        vec![fonts_tx, web_fonts_tx, canvas_fonts_tx],
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -356,10 +358,14 @@ fn main() -> ExitCode {
     if args.edit_mode {
         ui_state_edit.on = true;
     }
-    if let Some((g, s)) = args.edit_slide.as_deref().and_then(|v| v.split_once(':'))
-        && let (Ok(g), Ok(s)) = (g.parse(), s.parse())
-    {
-        ui_state_edit.select(g, s);
+    if let Some(v) = args.edit_slide.as_deref() {
+        let n: Vec<usize> = v.split(':').filter_map(|x| x.parse().ok()).collect();
+        if let [g, s, ref rest @ ..] = n[..] {
+            ui_state_edit.select(g, s);
+            if let [e] = *rest {
+                ui_state_edit.select_element(e);
+            }
+        }
     }
     let mut app = App {
         started,
@@ -373,6 +379,13 @@ fn main() -> ExitCode {
             settings_open: args.open_settings,
             edit: ui_state_edit,
             media_thumbs,
+            canvas: match canvas::CanvasRenderer::spawn(canvas_fonts_rx, proxy.clone()) {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    tracing::error!(error = %e, "editor canvas renderer didn't start");
+                    None
+                }
+            },
             ..UiState::default()
         },
         show: Arc::new(ShowState::default()),
@@ -707,6 +720,21 @@ impl App {
         {
             return false;
         }
+        // In the editor, arrow keys from the operator window nudge elements.
+        if from_operator
+            && self.ui.edit.on
+            && matches!(
+                event.logical_key,
+                winit::keyboard::Key::Named(
+                    winit::keyboard::NamedKey::ArrowLeft
+                        | winit::keyboard::NamedKey::ArrowRight
+                        | winit::keyboard::NamedKey::ArrowUp
+                        | winit::keyboard::NamedKey::ArrowDown
+                )
+            )
+        {
+            return false;
+        }
         let Some(cmd) =
             keys::key_name(&event.logical_key).and_then(|k| self.settings.keys.command_for(&k))
         else {
@@ -1001,6 +1029,9 @@ impl ApplicationHandler<UserEvent> for App {
                 self.ui.receive_thumbs(&op.egui.egui_ctx, &self.thumbs_rx);
                 if let Some(m) = &mut self.ui.media_thumbs {
                     m.receive(&op.egui.egui_ctx);
+                }
+                if let Some(c) = &mut self.ui.canvas {
+                    c.receive(&op.egui.egui_ctx);
                 }
                 self.ui.remote = match &self.remote {
                     Some(r) => ui::RemoteStatus {

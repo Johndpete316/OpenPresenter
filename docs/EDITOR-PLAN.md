@@ -204,20 +204,44 @@ Filled in from real files and testing in PP6. Starting state:
   - The M7 `pro6::ops` are no longer used by the app. They stay, with their tests, for `pp6tool` and as the reference the native edits are checked against.
 
 ### E1 — Editor Shell (Rework of the M7 Layout)
-- [ ] Rework the existing M7 layout into the layout above:
+- [x] Rework the existing M7 layout into the layout above:
   - top bar and contextual toolbar
   - slide strip with groups
   - canvas with rulers and zoom (fit, 50/100/200%)
   - inspector tabs
   - bottom bar
-- [ ] Canvas renders through `render` at document canvas size, scaled to the viewport
-- [ ] Slide strip:
+- [x] Canvas renders through `render` at document canvas size, scaled to the viewport
+- [x] Slide strip:
   - keep the existing M7 slide and group operations
   - add any that are missing: reorder, move between groups, duplicate, delete, disable/enable, new/rename/recolour group
-- [ ] Selection, move, resize and rotate handles; arrow-key nudging
-- [ ] Slide notes and background colour in the bottom bar
-- [ ] Open, save, close; dirty indicator; prompt on close with unsaved changes
+- [x] Selection, move, resize and rotate handles; arrow-key nudging
+- [x] Slide notes and background colour in the bottom bar
+- [x] Open, save, close; dirty indicator; prompt on close with unsaved changes
 - **Accept:** open a fixture, rearrange slides and groups, move a text box, save, reopen — identical.
+- **Status (2026-11-21):** done. The acceptance test is `e1_rearrange_move_save_reopen_identical` in `crates/core/tests/editor_regression.rs`.
+  - **Layout.** The editor fills the window under the app toolbar and has the layout above.
+  - **Top bar:** title with an unsaved dot, Undo/Redo, Save (Ctrl+S), Revert, Close editor. Insert, Theme and Paste Lyrics are added with E2/E3, E7 and E8.
+  - **Contextual bar.** Shows what's selected, Edit text, Straighten, and a locked note. The text controls arrive with E2.
+  - **Inspector tabs:** Text (the box's text, with its font, size and colour shown) and Slide (enabled, group, timer, notes, background). Position and Layers come with E4, Image with E3.
+  - **Canvas:**
+    - Drawn on its own thread by `render`, the output's renderer, rendering only the newest request at the on-screen pixel size.
+    - While dragging, it renders a preview copy, so it stays WYSIWYG.
+    - Zoom: Fit, 50, 100 and 200%, with scroll-panning when zoomed in.
+    - Rulers in canvas pixels mark the selected element's extent.
+  - **Handles:**
+    - Click to select; drag to move; eight resize handles keep the opposite edge in place, also when rotated; a rotate handle.
+    - Double-click edits the text, and Esc deselects.
+    - Locked boxes can't be moved.
+    - A drag is one edit, sent on release.
+  - **Arrow keys** nudge 1 px (Shift 10 px). A run of nudges, or a colour being dragged in a picker, is one undo step: `EditMerging`, two-second window. In the editor, arrow keys from the operator window no longer trigger Next/Prev; clicker keys (PageUp/PageDown etc.) still do.
+  - **Slide strip:**
+    - Arrangements panel on top.
+    - Group headers with colour, double-click rename, `+` and a menu (rename, add slide, move up/down, delete).
+    - Tiles: drag to reorder, including between groups. The right-click menu has duplicate, add after, disable/enable, move to group, new group after, delete.
+    - Badges show the slide label and "not PP6".
+  - **Closing** with unsaved edits asks Save / Don't save / Cancel. That covers both Close editor and the toolbar's Editor button.
+  - **Rotation is now drawn** by `render`, in the output, thumbnails, `pp6tool render` and the phone remote. It is clockwise about the box centre, which is assumed (PLAN.md Unknowns).
+  - **Tests:** the canvas and strip interactions run headless against a plain egui context with synthetic pointer and key input (`crates/app/src/editor.rs` tests). A hands-on check with a mouse is still to do.
 
 ### E2 — Rich Text
 - [ ] In-canvas text editing with caret and selection, built on the `cosmic-text` editor with per-run attributes

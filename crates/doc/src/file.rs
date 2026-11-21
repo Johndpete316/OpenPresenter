@@ -132,7 +132,8 @@ pub fn from_json(bytes: &[u8], path: &Path) -> Result<Document, LoadError> {
         path: path.to_path_buf(),
         message,
     };
-    let mut v: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| json(e.to_string()))?;
+    let mut v: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|e| json(e.to_string()))?;
     let version = v
         .get("format_version")
         .and_then(serde_json::Value::as_u64)
@@ -173,7 +174,10 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
     }
-    let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    let mut name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
     name.push(".tmp");
     let tmp = path.with_file_name(name);
     let result = (|| {
@@ -192,7 +196,10 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// Copy `path` to `<name>.bak` (replacing an older backup) if it exists.
 fn backup(path: &Path) -> Result<(), SaveError> {
     if path.exists() {
-        let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+        let mut name = path
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_default();
         name.push(".bak");
         std::fs::copy(path, path.with_file_name(name)).map_err(|source| SaveError::Backup {
             path: path.to_path_buf(),

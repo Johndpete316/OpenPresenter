@@ -19,6 +19,44 @@ pub enum Edit {
         slide: usize,
         text: String,
     },
+    /// Replace the text of text box `element` (index into the slide's elements),
+    /// like [`Edit::SetText`].
+    SetBoxText {
+        group: usize,
+        slide: usize,
+        element: usize,
+        text: String,
+    },
+    /// Move / resize an element (canvas pixels).
+    SetFrame {
+        group: usize,
+        slide: usize,
+        element: usize,
+        frame: Rect,
+    },
+    /// Rotate an element (degrees clockwise).
+    SetRotation {
+        group: usize,
+        slide: usize,
+        element: usize,
+        degrees: f64,
+    },
+    SetSlideEnabled {
+        group: usize,
+        slide: usize,
+        enabled: bool,
+    },
+    SetSlideNotes {
+        group: usize,
+        slide: usize,
+        notes: String,
+    },
+    /// Slide background colour (`None` = the document's / none).
+    SetSlideBackground {
+        group: usize,
+        slide: usize,
+        color: Option<Rgba>,
+    },
     /// New slide at `at` in `group`, copying the layout of a neighbouring slide.
     AddSlide {
         group: usize,
@@ -129,7 +167,13 @@ impl Edit {
     /// For the Undo / Redo menu.
     pub fn label(&self) -> String {
         match self {
-            Edit::SetText { .. } => "Edit text".into(),
+            Edit::SetText { .. } | Edit::SetBoxText { .. } => "Edit text".into(),
+            Edit::SetFrame { .. } => "Move".into(),
+            Edit::SetRotation { .. } => "Rotate".into(),
+            Edit::SetSlideEnabled { enabled: true, .. } => "Enable slide".into(),
+            Edit::SetSlideEnabled { enabled: false, .. } => "Disable slide".into(),
+            Edit::SetSlideNotes { .. } => "Edit notes".into(),
+            Edit::SetSlideBackground { .. } => "Change background".into(),
             Edit::AddSlide { .. } => "Add slide".into(),
             Edit::DuplicateSlide { .. } => "Duplicate slide".into(),
             Edit::RemoveSlide { .. } => "Delete slide".into(),
@@ -150,9 +194,12 @@ impl Edit {
     /// Features this edit uses (checked against `.pro6` support before applying).
     pub fn features(&self) -> Vec<Feature> {
         match self {
-            Edit::SetText { .. } | Edit::AddSlide { .. } => {
+            Edit::SetText { .. } | Edit::SetBoxText { .. } | Edit::AddSlide { .. } => {
                 vec![Feature::Text, Feature::SlideStructure]
             }
+            Edit::SetFrame { .. } => vec![Feature::ElementFrame],
+            Edit::SetRotation { .. } => vec![Feature::ElementRotation],
+            Edit::SetSlideBackground { .. } => vec![Feature::BackgroundColor],
             Edit::Batch { edits, .. } => {
                 let mut v: Vec<Feature> = edits.iter().flat_map(Edit::features).collect();
                 v.dedup();
@@ -192,6 +239,64 @@ impl Edit {
                 let uuid = s.uuid.clone();
                 let t = first_text_mut(s).ok_or(EditError::NoTextBox { uuid })?;
                 set_text(t, text)
+            }
+            Edit::SetBoxText {
+                group,
+                slide,
+                element,
+                text,
+            } => set_text(text_mut(doc, *group, *slide, *element)?, text),
+            Edit::SetFrame {
+                group,
+                slide,
+                element,
+                frame,
+            } => {
+                if !(frame.width > 0.0 && frame.height > 0.0)
+                    || ![frame.x, frame.y, frame.width, frame.height]
+                        .iter()
+                        .all(|v| v.is_finite())
+                {
+                    return Err(not_found("usable size"));
+                }
+                text_mut(doc, *group, *slide, *element)?.frame = *frame;
+                Ok(())
+            }
+            Edit::SetRotation {
+                group,
+                slide,
+                element,
+                degrees,
+            } => {
+                if !degrees.is_finite() {
+                    return Err(not_found("usable angle"));
+                }
+                text_mut(doc, *group, *slide, *element)?.rotation = *degrees;
+                Ok(())
+            }
+            Edit::SetSlideEnabled {
+                group,
+                slide,
+                enabled,
+            } => {
+                slide_mut(doc, *group, *slide)?.enabled = *enabled;
+                Ok(())
+            }
+            Edit::SetSlideNotes {
+                group,
+                slide,
+                notes,
+            } => {
+                slide_mut(doc, *group, *slide)?.notes.clone_from(notes);
+                Ok(())
+            }
+            Edit::SetSlideBackground {
+                group,
+                slide,
+                color,
+            } => {
+                slide_mut(doc, *group, *slide)?.background = *color;
+                Ok(())
             }
             Edit::AddSlide { group, at, text } => {
                 let g = doc.groups.get(*group).ok_or_else(|| not_found("group"))?;
@@ -342,9 +447,12 @@ impl Edit {
                 .map(|s| s.uuid.clone())
         };
         match self {
-            Edit::SetText { group, slide, .. } | Edit::DuplicateSlide { group, slide } => {
-                at(*group, *slide).into_iter().collect()
-            }
+            Edit::SetText { group, slide, .. }
+            | Edit::SetBoxText { group, slide, .. }
+            | Edit::SetFrame { group, slide, .. }
+            | Edit::SetRotation { group, slide, .. }
+            | Edit::SetSlideBackground { group, slide, .. }
+            | Edit::DuplicateSlide { group, slide } => at(*group, *slide).into_iter().collect(),
             Edit::Batch { edits, .. } => edits.iter().flat_map(|e| e.slides_touched(doc)).collect(),
             _ => Vec::new(),
         }
@@ -352,9 +460,7 @@ impl Edit {
 }
 
 fn group_mut(doc: &mut Document, group: usize) -> Result<&mut Group, EditError> {
-    doc.groups
-        .get_mut(group)
-        .ok_or_else(|| not_found("group"))
+    doc.groups.get_mut(group).ok_or_else(|| not_found("group"))
 }
 
 fn slide_mut(doc: &mut Document, group: usize, slide: usize) -> Result<&mut Slide, EditError> {
@@ -364,6 +470,18 @@ fn slide_mut(doc: &mut Document, group: usize, slide: usize) -> Result<&mut Slid
         .ok_or_else(|| not_found("slide"))
 }
 
+fn text_mut(
+    doc: &mut Document,
+    group: usize,
+    slide: usize,
+    element: usize,
+) -> Result<&mut TextBox, EditError> {
+    match slide_mut(doc, group, slide)?.elements.get_mut(element) {
+        Some(Element::Text(t)) => Ok(t),
+        _ => Err(not_found("text box")),
+    }
+}
+
 fn first_text_mut(s: &mut Slide) -> Option<&mut TextBox> {
     s.elements.iter_mut().find_map(|e| match e {
         Element::Text(t) => Some(&mut **t),
@@ -371,7 +489,10 @@ fn first_text_mut(s: &mut Slide) -> Option<&mut TextBox> {
     })
 }
 
-fn arrangement_mut<'a>(doc: &'a mut Document, uuid: &str) -> Result<&'a mut Arrangement, EditError> {
+fn arrangement_mut<'a>(
+    doc: &'a mut Document,
+    uuid: &str,
+) -> Result<&'a mut Arrangement, EditError> {
     doc.arrangements
         .iter_mut()
         .find(|a| a.uuid.eq_ignore_ascii_case(uuid))
@@ -450,7 +571,11 @@ pub enum Check {
 
 /// Check `features` (used on `slides`) against `doc`'s mode.
 pub fn check_features(doc: &Document, features: &[Feature], slides: Vec<String>) -> Check {
-    let native: Vec<Feature> = features.iter().copied().filter(|f| needs_native(*f)).collect();
+    let native: Vec<Feature> = features
+        .iter()
+        .copied()
+        .filter(|f| needs_native(*f))
+        .collect();
     if doc.mode == Mode::Pro6 && !native.is_empty() {
         Check::NeedsNative {
             features: native,

@@ -68,11 +68,7 @@ impl Keys {
         };
         let n = self.seen.entry(base.clone()).or_default();
         *n += 1;
-        if *n == 1 {
-            base
-        } else {
-            format!("{base}#{n}")
-        }
+        if *n == 1 { base } else { format!("{base}#{n}") }
     }
 }
 
@@ -109,70 +105,69 @@ pub(crate) fn convert(p: &pro6::Document) -> Document {
         },
     };
     let mut keys = Keys::default();
-    let groups = p
-        .groups()
-        .iter()
-        .enumerate()
-        .map(|(gi, g)| {
-            let gkey = keys.key(&g.uuid, || format!("group#{gi}"));
-            let slides = g
-                .slides()
-                .iter()
-                .enumerate()
-                .map(|(si, s)| {
-                    let skey = keys.key(&s.uuid, || format!("{gkey}/slide#{si}"));
-                    let elements = s
-                        .elements()
+    let groups =
+        p.groups()
+            .iter()
+            .enumerate()
+            .map(|(gi, g)| {
+                let gkey = keys.key(&g.uuid, || format!("group#{gi}"));
+                let slides =
+                    g.slides()
                         .iter()
                         .enumerate()
-                        .map(|(ei, e)| match e {
-                            DisplayElement::Text(t) => {
-                                let k = keys.key(&t.uuid, || format!("{skey}/el#{ei}"));
-                                Element::Text(Box::new(text_box(t, path, k)))
-                            }
-                            DisplayElement::Other(raw) => {
-                                let uuid = raw_uuid(raw);
-                                let k = keys.key(&uuid, || format!("{skey}/el#{ei}"));
-                                Element::Pro6(Pro6Element {
-                                    uuid,
-                                    kind: raw.name.clone(),
-                                    src: Some(k),
+                        .map(|(si, s)| {
+                            let skey = keys.key(&s.uuid, || format!("{gkey}/slide#{si}"));
+                            let elements = s
+                                .elements()
+                                .iter()
+                                .enumerate()
+                                .map(|(ei, e)| match e {
+                                    DisplayElement::Text(t) => {
+                                        let k = keys.key(&t.uuid, || format!("{skey}/el#{ei}"));
+                                        Element::Text(Box::new(text_box(t, path, k)))
+                                    }
+                                    DisplayElement::Other(raw) => {
+                                        let uuid = raw_uuid(raw);
+                                        let k = keys.key(&uuid, || format!("{skey}/el#{ei}"));
+                                        Element::Pro6(Pro6Element {
+                                            uuid,
+                                            kind: raw.name.clone(),
+                                            src: Some(k),
+                                        })
+                                    }
                                 })
+                                .collect();
+                            Slide {
+                                uuid: s.uuid.clone(),
+                                enabled: s.enabled,
+                                label: s.label.clone(),
+                                notes: s.notes.clone(),
+                                hot_key: s.hot_key.clone(),
+                                background: s
+                                    .background_color
+                                    .filter(|_| draws_background(&s.extra.element))
+                                    .map(rgba),
+                                elements,
+                                timer: timings.as_ref().and_then(|t| t.timers.get(&s.uuid)).map(
+                                    |t| SlideTimer {
+                                        duration: t.duration,
+                                        loop_to_beginning: t.loop_to_beginning,
+                                    },
+                                ),
+                                pro6_incompatible: false,
+                                src: Some(skey),
                             }
                         })
                         .collect();
-                    Slide {
-                        uuid: s.uuid.clone(),
-                        enabled: s.enabled,
-                        label: s.label.clone(),
-                        notes: s.notes.clone(),
-                        hot_key: s.hot_key.clone(),
-                        background: s
-                            .background_color
-                            .filter(|_| draws_background(&s.extra.element))
-                            .map(rgba),
-                        elements,
-                        timer: timings
-                            .as_ref()
-                            .and_then(|t| t.timers.get(&s.uuid))
-                            .map(|t| SlideTimer {
-                                duration: t.duration,
-                                loop_to_beginning: t.loop_to_beginning,
-                            }),
-                        pro6_incompatible: false,
-                        src: Some(skey),
-                    }
-                })
-                .collect();
-            Group {
-                uuid: g.uuid.clone(),
-                name: g.name.clone(),
-                color: g.color.map(rgba),
-                slides,
-                src: Some(gkey),
-            }
-        })
-        .collect();
+                Group {
+                    uuid: g.uuid.clone(),
+                    name: g.name.clone(),
+                    color: g.color.map(rgba),
+                    slides,
+                    src: Some(gkey),
+                }
+            })
+            .collect();
     let arrangements = p
         .arrangements()
         .into_iter()
@@ -349,11 +344,15 @@ fn text_box(t: &pro6::TextElement, path: &Path, key: String) -> TextBox {
                     color: s.color.as_ref().map(|c| rgba(c.value)),
                 })
             }),
-        shadow: t.shadow.as_ref().filter(|_| t.drawing_shadow).map(|s| Shadow {
-            blur: s.value.blur,
-            color: s.value.color.map(rgba),
-            offset: s.value.offset,
-        }),
+        shadow: t
+            .shadow
+            .as_ref()
+            .filter(|_| t.drawing_shadow)
+            .map(|s| Shadow {
+                blur: s.value.blur,
+                color: s.value.color.map(rgba),
+                offset: s.value.offset,
+            }),
         paragraphs,
         problem,
         src: Some(key),
@@ -432,7 +431,9 @@ pub fn export_pro6(
     for g in &doc.groups {
         for (i, s) in g.slides.iter().enumerate() {
             if s.pro6_incompatible {
-                report.left_out.push(format!("{} / slide {}", g.name, i + 1));
+                report
+                    .left_out
+                    .push(format!("{} / slide {}", g.name, i + 1));
             }
         }
     }
@@ -509,7 +510,11 @@ pub fn to_pro6(doc: &Document) -> Result<pro6::Document, ExportError> {
         height: doc.canvas.height,
     };
     if doc.background != base.background {
-        set_background(&mut out.background_color, &mut out.extra.element, doc.background);
+        set_background(
+            &mut out.background_color,
+            &mut out.extra.element,
+            doc.background,
+        );
     }
 
     let mut groups = Vec::with_capacity(doc.groups.len());
@@ -552,7 +557,8 @@ pub fn to_pro6(doc: &Document) -> Result<pro6::Document, ExportError> {
     }
 
     export_arrangements(doc, &base, &mut out)?;
-    out.selected_arrangement_id.clone_from(&doc.selected_arrangement);
+    out.selected_arrangement_id
+        .clone_from(&doc.selected_arrangement);
     Ok(out)
 }
 
@@ -574,7 +580,11 @@ fn export_slide(s: &Slide, ix: &Index<'_>, path: &Path) -> Result<pro6::Slide, E
     ps.notes.clone_from(&s.notes);
     ps.hot_key.clone_from(&s.hot_key);
     if s.background != base.background {
-        set_background(&mut ps.background_color, &mut ps.extra.element, s.background);
+        set_background(
+            &mut ps.background_color,
+            &mut ps.extra.element,
+            s.background,
+        );
     }
     let mut items = Vec::with_capacity(s.elements.len());
     for e in &s.elements {
@@ -593,11 +603,7 @@ fn export_slide(s: &Slide, ix: &Index<'_>, path: &Path) -> Result<pro6::Slide, E
     Ok(ps)
 }
 
-fn export_element(
-    e: &Element,
-    ix: &Index<'_>,
-    path: &Path,
-) -> Result<DisplayElement, ExportError> {
+fn export_element(e: &Element, ix: &Index<'_>, path: &Path) -> Result<DisplayElement, ExportError> {
     let src = match e {
         Element::Text(t) => t.src.as_deref(),
         Element::Pro6(o) => o.src.as_deref(),

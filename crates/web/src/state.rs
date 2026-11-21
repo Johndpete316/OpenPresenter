@@ -13,8 +13,8 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
-use pp6core::ShowState;
 use doc::Document;
+use pp6core::ShowState;
 use serde::{Deserialize, Serialize};
 
 /// Live / next state (JSON).

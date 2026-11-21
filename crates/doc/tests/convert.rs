@@ -154,6 +154,54 @@ fn every_edit_survives_pro6_export() {
             uuid: arr.clone(),
             name: "Shorter".into(),
         },
+        Edit::SetFrame {
+            group: 1,
+            slide: 0,
+            element: 0,
+            frame: doc::Rect {
+                x: 10.0,
+                y: 20.5,
+                width: 600.0,
+                height: 300.0,
+            },
+        },
+        Edit::SetRotation {
+            group: 1,
+            slide: 0,
+            element: 0,
+            degrees: 12.5,
+        },
+        Edit::SetBoxText {
+            group: 1,
+            slide: 0,
+            element: 0,
+            text: "Box text".into(),
+        },
+        Edit::SetSlideEnabled {
+            group: 1,
+            slide: 0,
+            enabled: false,
+        },
+        Edit::SetSlideNotes {
+            group: 1,
+            slide: 0,
+            notes: "Watch the key change".into(),
+        },
+        Edit::SetSlideBackground {
+            group: 1,
+            slide: 0,
+            color: Some(doc::Rgba {
+                r: 0.0,
+                g: 0.2,
+                b: 0.4,
+                a: 1.0,
+            }),
+        },
+        Edit::SetSlideBackground {
+            group: 3,
+            slide: 0,
+            color: None,
+        },
     ];
     for e in &edits {
         e.apply(&mut d).unwrap();
@@ -192,7 +240,10 @@ fn refused_edits_change_nothing() {
     let d0 = doc::load(&fixture("song_1024x768.pro6")).unwrap();
     let mut d = d0.clone();
     for e in [
-        Edit::RemoveSlide { group: 0, slide: 99 },
+        Edit::RemoveSlide {
+            group: 0,
+            slide: 99,
+        },
         Edit::MoveGroup { from: 0, to: 9 },
         Edit::SetArrangementGroups {
             uuid: "nope".into(),
@@ -205,7 +256,10 @@ fn refused_edits_change_nothing() {
                     group: 0,
                     name: "changed".into(),
                 },
-                Edit::RemoveSlide { group: 0, slide: 99 },
+                Edit::RemoveSlide {
+                    group: 0,
+                    slide: 99,
+                },
             ],
         },
     ] {
@@ -268,7 +322,11 @@ fn native_mode_saves_opres_next_to_the_untouched_original() {
     let saved = doc::save(&d).unwrap();
     let opres = dir.join("song.opres");
     assert_eq!(saved.path, opres);
-    assert_eq!(std::fs::read(&file).unwrap(), original, "original untouched");
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        original,
+        "original untouched"
+    );
     assert!(!dir.join("song.pro6.bak").exists());
 
     // Opening the .pro6 now opens the .opres.
@@ -294,7 +352,10 @@ fn exporting_native_documents_skips_or_simplifies_incompatible_slides() {
     let n = d.slides().count();
 
     let (out, report) = doc::export_pro6(&d, ExportChoice::SkipIncompatible).unwrap();
-    assert_eq!(report.left_out, vec![format!("{} / slide 2", d.groups[0].name)]);
+    assert_eq!(
+        report.left_out,
+        vec![format!("{} / slide 2", d.groups[0].name)]
+    );
     assert_eq!(out.slides().count(), n - 1);
     assert!(out.slides().all(|s| s.uuid != uuid));
 
@@ -309,8 +370,8 @@ fn opres_versions() {
     let mut v: serde_json::Value = serde_json::from_slice(&doc::file::to_json(&d)).unwrap();
     assert_eq!(v["format_version"], doc::FORMAT_VERSION);
     v["format_version"] = (doc::FORMAT_VERSION + 1).into();
-    let err = doc::file::from_json(&serde_json::to_vec(&v).unwrap(), Path::new("a.opres"))
-        .unwrap_err();
+    let err =
+        doc::file::from_json(&serde_json::to_vec(&v).unwrap(), Path::new("a.opres")).unwrap_err();
     assert!(matches!(err, doc::LoadError::Newer { .. }), "{err}");
     assert!(err.user_message().contains("newer version"));
     let err = doc::file::from_json(b"{}", Path::new("a.opres")).unwrap_err();
@@ -324,14 +385,14 @@ fn placeholder_boxes_are_empty_text_in_their_style() {
     let src = std::fs::read_to_string(fixture("song_1024x768.pro6")).unwrap();
     let p = pro6::parse_str(&src, Path::new("s.pro6")).unwrap();
     let mut el = p.text_elements().next().unwrap().clone();
-    el.set_text(pro6::model::PLACEHOLDER_TEXT, pro6::WinPayloads::Keep, Path::new("s.pro6"))
-        .unwrap();
+    el.set_text(
+        pro6::model::PLACEHOLDER_TEXT,
+        pro6::WinPayloads::Keep,
+        Path::new("s.pro6"),
+    )
+    .unwrap();
     let mut p2 = p.clone();
-    if let Some(pro6::DisplayElement::Text(t)) = p2
-        .groups
-        .as_mut()
-        .unwrap()
-        .items[0]
+    if let Some(pro6::DisplayElement::Text(t)) = p2.groups.as_mut().unwrap().items[0]
         .slides
         .as_mut()
         .unwrap()
@@ -355,7 +416,10 @@ fn placeholder_boxes_are_empty_text_in_their_style() {
 }
 
 /// Group names, slide texts and enabled flags, plus arrangements by group name.
-type Shape = (Vec<(String, Vec<(String, bool)>)>, Vec<(String, Vec<String>)>);
+type Shape = (
+    Vec<(String, Vec<(String, bool)>)>,
+    Vec<(String, Vec<String>)>,
+);
 
 fn shape(d: &Document) -> Shape {
     let groups = d
@@ -450,17 +514,12 @@ fn native_edits_match_the_m7_pro6_operations() {
                 groups: vec![0, 1, 0],
             },
         ),
-        (
-            Op::RemoveGroup { group: 1 },
-            Edit::RemoveGroup { group: 1 },
-        ),
+        (Op::RemoveGroup { group: 1 }, Edit::RemoveGroup { group: 1 }),
     ];
     for (op, edit) in pairs {
         op.apply(&mut p).unwrap();
         edit.apply(&mut d).unwrap();
-        let m7 = doc::from_pro6(
-            pro6::parse_str(&pro6::write_string(&p), &file).unwrap(),
-        );
+        let m7 = doc::from_pro6(pro6::parse_str(&pro6::write_string(&p), &file).unwrap());
         assert_eq!(shape(&through_pro6(&d)), shape(&m7), "after {edit:?}");
     }
 }

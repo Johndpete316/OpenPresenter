@@ -223,6 +223,7 @@ Track findings here as real files arrive. "M0:" notes say how the parser current
 - [x] Actual canvas sizes in the library. **Real files: all 1024×768** (3 of 3 so far).
 - [ ] RTF `\fs` → canvas pixel conversion matches PP6 (side-by-side screenshot diff)
 - [x] Arrangement structure. **Verified:** `<RVSongArrangement name uuid color><array rvXMLIvarName="groupIDs"><NSString>group-uuid</NSString>…`, referencing groups by UUID.
+- [ ] Element `rotation` direction and pivot. Drawn clockwise about the box centre since the editor redesign (E1); compare a rotated box in PP6.
 - [ ] Whether PP6 on Windows uses stale `WinFlowData`/`WinFontData` over `RTFData` after edits
 - [x] `RVRect3D` field order. **Verified:** `{x y z w h}` (`{20 20 0 984 728}` = 20 px margin on 1024×768).
 - [ ] Shadow string field meanings. M0: assumed `blur|r g b a|{x, y}`; raw fields always kept; mismatch → warning.

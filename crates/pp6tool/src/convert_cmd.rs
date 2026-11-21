@@ -14,7 +14,10 @@ pub struct Options {
 pub fn run(opts: &Options) -> anyhow::Result<String> {
     let to_native = doc::is_pro6(&opts.file);
     if !to_native && !doc::is_native(&opts.file) {
-        bail!("{} is neither a .pro6 nor a .opres file", opts.file.display());
+        bail!(
+            "{} is neither a .pro6 nor a .opres file",
+            opts.file.display()
+        );
     }
     let out = opts.out.clone().unwrap_or_else(|| {
         opts.file
@@ -28,7 +31,8 @@ pub fn run(opts: &Options) -> anyhow::Result<String> {
     if to_native {
         let json = doc::file::to_json(&d);
         // Check before writing: the .opres must export back to the same .pro6.
-        let back = doc::file::from_json(&json, &out).map_err(|e| anyhow::anyhow!(e.user_message()))?;
+        let back =
+            doc::file::from_json(&json, &out).map_err(|e| anyhow::anyhow!(e.user_message()))?;
         let original = pro6::write_string(d.pro6.as_deref().context("no source")?);
         let exported = pro6::write_string(
             &doc::to_pro6(&back).map_err(|e| anyhow::anyhow!(e.user_message()))?,
@@ -66,5 +70,6 @@ pub fn run(opts: &Options) -> anyhow::Result<String> {
 }
 
 fn write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    doc::file::write_atomic(path, bytes).with_context(|| format!("couldn't write {}", path.display()))
+    doc::file::write_atomic(path, bytes)
+        .with_context(|| format!("couldn't write {}", path.display()))
 }

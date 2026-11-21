@@ -54,7 +54,12 @@ fn summary(doc: &doc::Document) -> Summary {
                     (s.uuid.clone(), t, s.enabled)
                 })
                 .collect();
-            (g.uuid.clone(), g.name.clone(), g.color.as_ref().map(c), slides)
+            (
+                g.uuid.clone(),
+                g.name.clone(),
+                g.color.as_ref().map(c),
+                slides,
+            )
         })
         .collect();
     let arrangements = doc
@@ -137,7 +142,11 @@ fn open_edit_reorder_arrange_save_reopen() {
     assert_eq!(back.groups()[1].slides()[1].uuid, first_slide);
     assert_eq!(text(&back, 1, 1), "Edited line one\nEdited line two");
     assert_eq!(back.groups()[2].name, "Bridge");
-    let a = back.arrangements().into_iter().find(|a| a.uuid == arr).unwrap();
+    let a = back
+        .arrangements()
+        .into_iter()
+        .find(|a| a.uuid == arr)
+        .unwrap();
     assert_eq!(a.name, "Sunday");
     assert_eq!(a.groups, vec![1, 0, 1, 2]);
 
@@ -152,5 +161,105 @@ fn open_edit_reorder_arrange_save_reopen() {
     // Saving again without changes is stable.
     doc::save(&back).unwrap();
     assert_eq!(summary(&doc::load(&file).unwrap()), edited);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// E1 acceptance: open a fixture, rearrange slides and groups, move a text box,
+/// save, reopen: identical. Through the core, as the editor does it.
+#[test]
+fn e1_rearrange_move_save_reopen_identical() {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use pp6core::{Command, CoreConfig, ShowState};
+
+    let dir = std::env::temp_dir().join(format!("pp6-e1-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("song.pro6");
+    std::fs::copy(fixture("song_1024x768.pro6"), &file).unwrap();
+    let (core, _join) = pp6core::spawn(CoreConfig::default()).unwrap();
+    let rx = core.subscribe(None);
+    let wait = |what: &str, pred: &dyn Fn(&ShowState) -> bool| -> Arc<ShowState> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let s = rx
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
+            if pred(&s) {
+                return s;
+            }
+        }
+    };
+    core.send(Command::Open(file.clone()));
+    wait("open", &|s| s.docs.contains_key(&file));
+    let edits = [
+        Op::MoveSlide {
+            group: 0,
+            slide: 1,
+            to_group: 1,
+            to: 0,
+        },
+        Op::MoveGroup { from: 2, to: 0 },
+        Op::SetFrame {
+            group: 1,
+            slide: 0,
+            element: 0,
+            frame: doc::Rect {
+                x: 40.0,
+                y: 300.0,
+                width: 900.0,
+                height: 220.0,
+            },
+        },
+        Op::SetRotation {
+            group: 1,
+            slide: 0,
+            element: 0,
+            degrees: 5.0,
+        },
+        Op::SetSlideNotes {
+            group: 0,
+            slide: 0,
+            notes: "Slow down here".into(),
+        },
+    ];
+    let n = edits.len();
+    for e in edits {
+        core.send(Command::Edit {
+            presentation: file.clone(),
+            edit: e,
+            accept_native: false,
+        });
+    }
+    let s = wait("edited", &|s| {
+        s.editing
+            .get(&file)
+            .is_some_and(|e| e.doc.groups[0].slides[0].notes == "Slow down here")
+    });
+    let edited = summary(&s.editing[&file].doc);
+    let frame = |d: &doc::Document| {
+        let t = d.groups[1].slides[0].text_boxes().next().unwrap();
+        (t.frame, t.rotation)
+    };
+    let edited_frame = frame(&s.editing[&file].doc);
+    core.send(Command::Save(file.clone()));
+    let s = wait("saved", &|s| !s.unsaved.contains(&file));
+    let back = doc::load(&file).unwrap();
+    assert_eq!(summary(&back), edited, "groups, slides, text, arrangements");
+    assert_eq!(frame(&back), edited_frame, "the moved box");
+    assert_eq!(back.groups[0].slides[0].notes, "Slow down here");
+    // Undo still reaches back through every step after saving.
+    for _ in 0..n {
+        core.send(Command::Undo(file.clone()));
+    }
+    let s2 = wait("undone", &|s| {
+        s.editing.get(&file).is_some_and(|e| e.undo.is_none())
+    });
+    assert_eq!(
+        summary(&s2.editing[&file].doc),
+        summary(&doc::load(&dir.join("song.pro6.bak")).unwrap())
+    );
+    drop(s);
     std::fs::remove_dir_all(&dir).unwrap();
 }

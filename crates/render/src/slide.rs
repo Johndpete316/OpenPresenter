@@ -79,13 +79,6 @@ fn render_text(
     if el.outline.is_some() {
         warn(frame, "text outline (stroke) isn't drawn yet".into());
     }
-    // 360° (seen in real files) is no rotation.
-    if el.rotation.rem_euclid(360.0) != 0.0 {
-        warn(
-            frame,
-            format!("rotation {}° isn't applied yet", el.rotation),
-        );
-    }
 
     let p = frame.placement;
     let r = el.frame;
@@ -93,24 +86,28 @@ fn render_text(
     let box_w = (r.width as f32 * p.scale).max(1.0);
     let box_h = r.height as f32 * p.scale;
 
-    if let Some(fill) = el.fill {
-        if el.corner_radius > 0.0 {
-            warn(
-                frame,
-                "rounded corners on the element fill aren't drawn yet".into(),
-            );
-        }
-        let c = to_rgba8(fill);
-        let a = (f64::from(c[3]) * el.opacity).round() as u8;
-        fill_rect(frame, x0, y0, box_w, box_h, [c[0], c[1], c[2], a]);
+    let fill = el.fill.map(|f| {
+        let c = to_rgba8(f);
+        [
+            c[0],
+            c[1],
+            c[2],
+            (f64::from(c[3]) * el.opacity).round() as u8,
+        ]
+    });
+    if fill.is_some() && el.corner_radius > 0.0 {
+        warn(
+            frame,
+            "rounded corners on the element fill aren't drawn yet".into(),
+        );
     }
 
     let fail = |e: RenderError| Err(e.logged());
-    match &el.problem {
-        None => {}
+    let layout = match &el.problem {
+        None => layout_text(fonts, doc, slide, el, frame, box_w, box_h)?,
         Some(TextProblem::NoStyledText) => {
             warn(frame, "element has no RTFData; its text isn't drawn".into());
-            return Ok(());
+            None
         }
         Some(TextProblem::Unreadable { message }) => {
             return fail(RenderError::BadText {
@@ -128,11 +125,101 @@ fn render_text(
                 element_uuid: el.uuid.clone(),
             });
         }
-    }
-    // Empty text (including PP6's hidden "Double-click to edit" placeholder) draws nothing.
-    if el.runs().all(|r| r.text.is_empty()) {
+    };
+    let text_h = layout.as_ref().map_or(0.0, |(_, h)| *h);
+    let dy = match el.valign {
+        VAlign::Top => 0.0,
+        VAlign::Bottom => box_h - text_h,
+        VAlign::Middle => (box_h - text_h) / 2.0,
+    };
+
+    // 360° (seen in real files) is no rotation. Degrees clockwise (assumed; unverified
+    // against PP6), about the box centre.
+    let rotation = el.rotation.rem_euclid(360.0);
+    if rotation == 0.0 {
+        let c = p.canvas;
+        let mut layer = Layer {
+            width: frame.width as usize,
+            clip: (
+                c.x as i32,
+                c.y as i32,
+                (c.x + c.width) as i32,
+                (c.y + c.height) as i32,
+            ),
+            buf: &mut frame.text,
+        };
+        if let Some(color) = fill {
+            layer.fill(x0, y0, box_w, box_h, color);
+        }
+        if let Some((mut buffer, _)) = layout {
+            layer.draw(
+                fonts,
+                &mut buffer,
+                x0.round() as i32,
+                (y0 + dy).round() as i32,
+            );
+        }
         return Ok(());
     }
+
+    // Rotated: draw the box upright into its own layer, then rotate it onto the frame.
+    const MARGIN: f32 = 4.0;
+    let top = dy.min(0.0).floor() - MARGIN;
+    let bottom = box_h.max(dy + text_h).ceil() + MARGIN;
+    let left = -MARGIN;
+    let right = box_w.ceil() + MARGIN;
+    let (tw, th) = ((right - left) as usize, (bottom - top) as usize);
+    let mut tmp = vec![0u8; tw * th * 4];
+    {
+        let mut layer = Layer {
+            width: tw,
+            clip: (0, 0, tw as i32, th as i32),
+            buf: &mut tmp,
+        };
+        if let Some(color) = fill {
+            layer.fill(-left, -top, box_w, box_h, color);
+        }
+        if let Some((mut buffer, _)) = layout {
+            layer.draw(
+                fonts,
+                &mut buffer,
+                (-left).round() as i32,
+                (dy - top).round() as i32,
+            );
+        }
+    }
+    composite_rotated(
+        frame,
+        &tmp,
+        (tw, th),
+        (box_w / 2.0 - left, box_h / 2.0 - top),
+        (x0 + box_w / 2.0, y0 + box_h / 2.0),
+        rotation as f32,
+    );
+    Ok(())
+}
+
+/// Lay out a text box's runs at output scale. `None` when there's no text to draw.
+fn layout_text(
+    fonts: &mut Fonts,
+    doc: &Document,
+    slide: &Slide,
+    el: &TextBox,
+    frame: &mut SlideFrame,
+    box_w: f32,
+    box_h: f32,
+) -> Result<Option<(Buffer, f32)>, RenderError> {
+    let warn = |frame: &mut SlideFrame, message: String| {
+        frame.warnings.push(RenderWarning {
+            element_uuid: el.uuid.clone(),
+            message,
+        });
+    };
+    // Empty text (including PP6's hidden "Double-click to edit" placeholder) draws nothing.
+    if el.runs().all(|r| r.text.is_empty()) {
+        return Ok(None);
+    }
+    let p = frame.placement;
 
     // Resolve every run's font first: a missing font is an error, never a substitute.
     let missing = |font: String| RenderError::MissingFont {
@@ -198,7 +285,7 @@ fn render_text(
         warn(frame, "underline isn't drawn yet".into());
     }
     let Some(first) = styles.first() else {
-        return Ok(()); // no text
+        return Ok(None); // no text
     };
 
     let attrs: Vec<Attrs<'_>> = styles
@@ -256,44 +343,140 @@ fn render_text(
             format!(
                 "text is taller than its box ({:.0} vs {:.0} canvas px)",
                 text_h / p.scale,
-                r.height
+                el.frame.height
             ),
         );
     }
 
-    let dy = match el.valign {
-        VAlign::Top => 0.0,
-        VAlign::Bottom => box_h - text_h,
-        VAlign::Middle => (box_h - text_h) / 2.0,
-    };
-    let (ox, oy) = (x0.round() as i32, (y0 + dy).round() as i32);
-    let c = p.canvas;
-    let (cx0, cy0, cx1, cy1) = (
-        c.x as i32,
-        c.y as i32,
-        (c.x + c.width) as i32,
-        (c.y + c.height) as i32,
-    );
-    let width = frame.width as usize;
-    let text = &mut frame.text;
-    buffer.draw(
-        &mut fonts.system,
-        &mut fonts.swash,
-        Color::rgba(0, 0, 0, 255),
-        |x, y, w, h, color| {
-            let a = color.a();
-            if a == 0 {
-                return;
+    Ok(Some((buffer, text_h)))
+}
+
+/// A premultiplied RGBA pixel buffer with a clip rectangle `(x0, y0, x1, y1)`.
+struct Layer<'a> {
+    buf: &'a mut [u8],
+    width: usize,
+    clip: (i32, i32, i32, i32),
+}
+
+impl Layer<'_> {
+    fn fill(&mut self, x: f32, y: f32, w: f32, h: f32, color: [u8; 4]) {
+        let (cx0, cy0, cx1, cy1) = self.clip;
+        let xa = (x.round() as i32).max(cx0);
+        let ya = (y.round() as i32).max(cy0);
+        let xb = ((x + w).round() as i32).min(cx1);
+        let yb = ((y + h).round() as i32).min(cy1);
+        for yy in ya..yb {
+            for xx in xa..xb {
+                let i = (yy as usize * self.width + xx as usize) * 4;
+                blend(&mut self.buf[i..i + 4], color);
             }
-            for yy in (oy + y).max(cy0)..(oy + y + h as i32).min(cy1) {
-                for xx in (ox + x).max(cx0)..(ox + x + w as i32).min(cx1) {
-                    let i = (yy as usize * width + xx as usize) * 4;
-                    blend(&mut text[i..i + 4], [color.r(), color.g(), color.b(), a]);
+        }
+    }
+
+    /// Draw laid-out text with its top-left at `(ox, oy)`.
+    fn draw(&mut self, fonts: &mut Fonts, buffer: &mut Buffer, ox: i32, oy: i32) {
+        let (cx0, cy0, cx1, cy1) = self.clip;
+        let width = self.width;
+        let buf = &mut *self.buf;
+        buffer.draw(
+            &mut fonts.system,
+            &mut fonts.swash,
+            Color::rgba(0, 0, 0, 255),
+            |x, y, w, h, color| {
+                let a = color.a();
+                if a == 0 {
+                    return;
                 }
+                for yy in (oy + y).max(cy0)..(oy + y + h as i32).min(cy1) {
+                    for xx in (ox + x).max(cx0)..(ox + x + w as i32).min(cx1) {
+                        let i = (yy as usize * width + xx as usize) * 4;
+                        blend(&mut buf[i..i + 4], [color.r(), color.g(), color.b(), a]);
+                    }
+                }
+            },
+        );
+    }
+}
+
+/// Composite a premultiplied layer onto the frame, rotated `degrees` clockwise so
+/// that the layer point `pivot_src` lands on frame point `pivot_dst`. Bilinear
+/// sampling, clipped to the canvas.
+fn composite_rotated(
+    frame: &mut SlideFrame,
+    src: &[u8],
+    (sw, sh): (usize, usize),
+    pivot_src: (f32, f32),
+    pivot_dst: (f32, f32),
+    degrees: f32,
+) {
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    // Frame-space bounds of the rotated layer.
+    let corners = [
+        (0.0, 0.0),
+        (sw as f32, 0.0),
+        (0.0, sh as f32),
+        (sw as f32, sh as f32),
+    ];
+    let (mut bx0, mut by0, mut bx1, mut by1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for (x, y) in corners {
+        let (dx, dy) = (x - pivot_src.0, y - pivot_src.1);
+        let fx = pivot_dst.0 + dx * cos - dy * sin;
+        let fy = pivot_dst.1 + dx * sin + dy * cos;
+        bx0 = bx0.min(fx);
+        by0 = by0.min(fy);
+        bx1 = bx1.max(fx);
+        by1 = by1.max(fy);
+    }
+    let c = frame.placement.canvas;
+    let xa = (bx0.floor() as i64).max(i64::from(c.x));
+    let ya = (by0.floor() as i64).max(i64::from(c.y));
+    let xb = (bx1.ceil() as i64).min(i64::from(c.x + c.width));
+    let yb = (by1.ceil() as i64).min(i64::from(c.y + c.height));
+    let at = |x: i64, y: i64| -> [f32; 4] {
+        if x < 0 || y < 0 || x >= sw as i64 || y >= sh as i64 {
+            return [0.0; 4];
+        }
+        let i = (y as usize * sw + x as usize) * 4;
+        [
+            f32::from(src[i]),
+            f32::from(src[i + 1]),
+            f32::from(src[i + 2]),
+            f32::from(src[i + 3]),
+        ]
+    };
+    let width = frame.width as usize;
+    for yy in ya..yb {
+        for xx in xa..xb {
+            // Inverse-rotate the pixel centre into layer space.
+            let (dx, dy) = (xx as f32 + 0.5 - pivot_dst.0, yy as f32 + 0.5 - pivot_dst.1);
+            let lx = pivot_src.0 + dx * cos + dy * sin - 0.5;
+            let ly = pivot_src.1 - dx * sin + dy * cos - 0.5;
+            let (fx, fy) = (lx.floor(), ly.floor());
+            let (tx, ty) = (lx - fx, ly - fy);
+            let (ix, iy) = (fx as i64, fy as i64);
+            let (p00, p10, p01, p11) = (
+                at(ix, iy),
+                at(ix + 1, iy),
+                at(ix, iy + 1),
+                at(ix + 1, iy + 1),
+            );
+            let mut px = [0u8; 4];
+            for k in 0..4 {
+                let top = p00[k] + (p10[k] - p00[k]) * tx;
+                let bot = p01[k] + (p11[k] - p01[k]) * tx;
+                px[k] = (top + (bot - top) * ty).round().clamp(0.0, 255.0) as u8;
             }
-        },
-    );
-    Ok(())
+            if px[3] == 0 {
+                continue;
+            }
+            let i = (yy as usize * width + xx as usize) * 4;
+            let inv = 255 - px[3];
+            let d = &mut frame.text[i..i + 4];
+            for k in 0..4 {
+                d[k] = px[k].saturating_add(mul(d[k], inv));
+            }
+        }
+    }
 }
 
 /// Drop spaces/tabs at the end of each line (layout only). PP6 (WPF) ignores them
@@ -337,20 +520,6 @@ fn blend(dst: &mut [u8], [r, g, b, a]: [u8; 4]) {
     dst[1] = mul(g, a).saturating_add(mul(dst[1], inv));
     dst[2] = mul(b, a).saturating_add(mul(dst[2], inv));
     dst[3] = a.saturating_add(mul(dst[3], inv));
-}
-
-fn fill_rect(frame: &mut SlideFrame, x: f32, y: f32, w: f32, h: f32, color: [u8; 4]) {
-    let c = frame.placement.canvas;
-    let x0 = (x.round() as i64).max(i64::from(c.x));
-    let y0 = (y.round() as i64).max(i64::from(c.y));
-    let x1 = ((x + w).round() as i64).min(i64::from(c.x + c.width));
-    let y1 = ((y + h).round() as i64).min(i64::from(c.y + c.height));
-    for yy in y0..y1 {
-        for xx in x0..x1 {
-            let i = (yy as usize * frame.width as usize + xx as usize) * 4;
-            blend(&mut frame.text[i..i + 4], color);
-        }
-    }
 }
 
 #[cfg(test)]

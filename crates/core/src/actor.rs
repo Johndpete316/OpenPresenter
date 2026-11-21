@@ -111,9 +111,7 @@ fn io_worker(rx: &Receiver<IoJob>, back: &Sender<Msg>) {
     while let Ok(job) = rx.recv() {
         let msg = match job {
             IoJob::Load(path) => {
-                let r = doc::open(&path)
-                    .map(Arc::new)
-                    .map_err(|e| e.user_message());
+                let r = doc::open(&path).map(Arc::new).map_err(|e| e.user_message());
                 Msg::Loaded(path, r)
             }
             IoJob::LoadPlaylist(path) => {
@@ -576,7 +574,12 @@ impl Core {
                 presentation,
                 edit,
                 accept_native,
-            } => self.edit(presentation, &edit, accept_native),
+            } => self.edit(presentation, &edit, accept_native, None),
+            Command::EditMerging {
+                presentation,
+                edit,
+                key,
+            } => self.edit(presentation, &edit, false, Some(&key)),
             Command::Undo(path) => self.undo_redo(&path, true),
             Command::Redo(path) => self.undo_redo(&path, false),
             Command::Save(path) => match self.s.edited_doc(&path) {
@@ -601,7 +604,7 @@ impl Core {
         }
     }
 
-    fn edit(&mut self, path: PathBuf, edit: &doc::Edit, accept_native: bool) {
+    fn edit(&mut self, path: PathBuf, edit: &doc::Edit, accept_native: bool, merge: Option<&str>) {
         let Some(current) = self.s.edited_doc(&path).cloned() else {
             self.notice(
                 NoticeLevel::Warning,
@@ -631,10 +634,11 @@ impl Core {
         if let doc::Check::NeedsNative { slides, .. } = &check {
             doc::mark_native(&mut d, slides);
         }
-        self.histories
-            .entry(path.clone())
-            .or_default()
-            .record(edit.label(), current);
+        let h = self.histories.entry(path.clone()).or_default();
+        match merge {
+            Some(key) => h.record_merging(edit.label(), current, key, Instant::now()),
+            None => h.record(edit.label(), current),
+        }
         self.set_editing(&path, Arc::new(d));
     }
 
@@ -643,7 +647,11 @@ impl Core {
             return;
         };
         let h = self.histories.entry(path.clone()).or_default();
-        let to = if undo { h.undo(current) } else { h.redo(current) };
+        let to = if undo {
+            h.undo(current)
+        } else {
+            h.redo(current)
+        };
         if let Some(d) = to {
             self.set_editing(path, d);
         }

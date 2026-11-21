@@ -70,6 +70,13 @@ pub enum Command {
         edit: doc::Edit,
         accept_native: bool,
     },
+    /// Like `Edit`, but consecutive edits with the same `key` (within two seconds) are
+    /// one undo step: arrow-key nudges, a colour being dragged in a picker.
+    EditMerging {
+        presentation: PathBuf,
+        edit: doc::Edit,
+        key: String,
+    },
     /// Undo the last edit of a presentation's editor copy.
     Undo(PathBuf),
     Redo(PathBuf),

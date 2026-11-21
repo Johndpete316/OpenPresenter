@@ -532,7 +532,10 @@ fn edits_work_on_a_copy_until_saved_with_undo_and_revert() {
     let e = &s.editing[&file];
     assert_eq!(e.doc.groups[0].slides.len(), 3);
     assert_eq!(text_of(&e.doc, 2), "Changed");
-    assert!(Arc::ptr_eq(&s.docs[&file], &saved0), "saved document untouched");
+    assert!(
+        Arc::ptr_eq(&s.docs[&file], &saved0),
+        "saved document untouched"
+    );
     let live = s.live.as_ref().unwrap();
     assert!(Arc::ptr_eq(&live.doc, &saved0), "output untouched");
     assert_eq!(live.position, Some(1));
@@ -600,7 +603,9 @@ fn edits_work_on_a_copy_until_saved_with_undo_and_revert() {
     // Revert throws the editor copy away.
     core.send(edit(Edit::RemoveGroup { group: 2 }));
     wait(&rx, "edited again", |s| {
-        s.editing.get(&file).is_some_and(|e| e.doc.groups.len() == 2)
+        s.editing
+            .get(&file)
+            .is_some_and(|e| e.doc.groups.len() == 2)
     });
     core.send(Command::Revert(file.clone()));
     let s = wait(&rx, "reverted", |s| {
