@@ -27,8 +27,10 @@ pub fn run(opts: &Options) -> anyhow::Result<String> {
         bail!("{} already exists; choose another --out", out.display());
     }
     // Exactly the given file, not a .opres saved next to it.
-    let d = doc::load(&opts.file).map_err(|e| anyhow::anyhow!(e.user_message()))?;
+    let mut d = doc::load(&opts.file).map_err(|e| anyhow::anyhow!(e.user_message()))?;
     if to_native {
+        // A .opres is a native document: saving it writes the .opres.
+        d.mode = doc::Mode::Native;
         let json = doc::file::to_json(&d);
         // Check before writing: the .opres must export back to the same .pro6.
         let back =

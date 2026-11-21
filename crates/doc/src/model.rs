@@ -51,6 +51,9 @@ pub struct Document {
     /// (meaning unverified). Read from `.pro6`; reported, not played.
     #[serde(default)]
     pub cue_report: CueReport,
+    /// Set when this document is a theme being edited (saved as its `.optheme`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<crate::theme::ThemeLink>,
     /// The `.pro6` this came from, kept so a `.pro6` save leaves untouched parts
     /// byte-identical (and keeps everything the native model doesn't describe).
     #[serde(default, rename = "pro6_source", with = "crate::file::pro6_source")]
@@ -95,6 +98,10 @@ pub struct Slide {
     /// Uses something a `.pro6` file can't hold (the user accepted that).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pro6_incompatible: bool,
+    /// Theme this slide follows (native documents only): editing the theme can
+    /// restyle it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<crate::theme::ThemeLink>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub src: Option<String>,
 }

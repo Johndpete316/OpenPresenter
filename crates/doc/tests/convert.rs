@@ -639,3 +639,16 @@ fn effects_and_spacing_need_native_mode() {
     assert!(t.outline.is_none());
     assert_eq!(t.paragraphs[0].line_spacing, 1.0);
 }
+
+#[test]
+fn an_opres_in_pro6_mode_still_saves_as_opres() {
+    let dir = temp_dir("opres-pro6-mode");
+    let mut d = doc::load(&fixture("song_1024x768.pro6")).unwrap();
+    d.path = dir.join("song.opres");
+    assert_eq!(d.mode, Mode::Pro6);
+    assert_eq!(doc::save_path(&d), d.path);
+    let saved = doc::save(&d).unwrap();
+    let back = doc::load(&saved.path).unwrap();
+    assert_eq!(back.groups, d.groups, "written as JSON and read back");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

@@ -280,6 +280,13 @@ pub fn draw(
     }
     toolbar(ui, st, show, settings, &mut actions);
     st.edit.fit_min_size = settings.editor.fit_min_size;
+    st.edit.themes_dir = settings
+        .library_dirs
+        .first()
+        .map(|d| d.join(crate::editor::THEMES_DIR));
+    if st.edit.library_dirs != settings.library_dirs {
+        st.edit.library_dirs.clone_from(&settings.library_dirs);
+    }
     // The editor takes the whole window under the toolbar. It shows its own copy
     // (unsaved edits), not the saved document.
     if st.edit.on

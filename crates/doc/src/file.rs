@@ -109,9 +109,18 @@ pub fn open(path: &Path) -> Result<Document, LoadError> {
     load(&preferred(path))
 }
 
-/// Load exactly `path` (`.opres` by extension, otherwise `.pro6`).
+/// Load exactly `path` (`.opres` by extension, a theme as its one-slide document,
+/// otherwise `.pro6`).
 pub fn load(path: &Path) -> Result<Document, LoadError> {
     let _span = tracing::info_span!("load", file = %path.display()).entered();
+    if crate::theme::is_theme(path) {
+        return crate::Theme::load(path)
+            .map(|t| t.to_document())
+            .map_err(|e| LoadError::Json {
+                path: path.to_path_buf(),
+                message: e.to_string(),
+            });
+    }
     if is_native(path) {
         let bytes = std::fs::read(path).map_err(|source| LoadError::Io {
             path: path.to_path_buf(),
@@ -211,9 +220,13 @@ fn backup(path: &Path) -> Result<(), SaveError> {
 
 /// Where a document is saved under the save rules.
 pub fn save_path(doc: &Document) -> PathBuf {
+    if doc.theme.is_some() && crate::theme::is_theme(&doc.path) {
+        return doc.path.clone();
+    }
     match doc.mode {
+        // A `.opres` is always saved as one (never `.pro6` XML into it).
+        _ if is_native(&doc.path) => doc.path.clone(),
         Mode::Pro6 => doc.path.clone(),
-        Mode::Native if is_native(&doc.path) => doc.path.clone(),
         Mode::Native => doc.path.with_extension(NATIVE_EXT),
     }
 }
@@ -223,8 +236,20 @@ pub fn save_path(doc: &Document) -> PathBuf {
 pub fn save(doc: &Document) -> Result<Document, SaveError> {
     let target = save_path(doc);
     let _span = tracing::info_span!("save", file = %target.display(), mode = ?doc.mode).entered();
+    if doc.theme.is_some() && crate::theme::is_theme(&target) {
+        let theme = crate::Theme::from_document(doc).map_err(|e| SaveError::Io {
+            path: target.clone(),
+            source: std::io::Error::other(e.user_message()),
+        })?;
+        theme.save(&target).map_err(|e| SaveError::Io {
+            path: target.clone(),
+            source: std::io::Error::other(e.user_message()),
+        })?;
+        tracing::info!("saved theme");
+        return Ok(doc.clone());
+    }
     match doc.mode {
-        Mode::Pro6 => {
+        Mode::Pro6 if !is_native(&target) => {
             let mut out = to_pro6(doc)?;
             out.path.clone_from(&target);
             backup(&target)?;
@@ -232,7 +257,7 @@ pub fn save(doc: &Document) -> Result<Document, SaveError> {
             tracing::info!("saved .pro6");
             Ok(from_pro6(out))
         }
-        Mode::Native => {
+        Mode::Pro6 | Mode::Native => {
             let mut saved = doc.clone();
             saved.path.clone_from(&target);
             if is_native(&doc.path) {

@@ -129,6 +129,16 @@ pub enum Edit {
         element: usize,
         name: String,
     },
+    /// Apply a theme (already pointed at this document's folder, see
+    /// [`crate::Theme::for_document`]) to `slides`, or to every slide when `all`
+    /// (which also rescales the canvas to the theme's). `link`: remember the theme
+    /// on each slide (native documents).
+    ApplyTheme {
+        slides: Vec<(usize, usize)>,
+        theme: Box<crate::Theme>,
+        all: bool,
+        link: bool,
+    },
     /// Slide background image (`None` = none).
     SetBackgroundImage {
         group: usize,
@@ -283,6 +293,7 @@ impl Edit {
             Edit::SetHidden { hidden: true, .. } => "Hide".into(),
             Edit::SetHidden { hidden: false, .. } => "Show".into(),
             Edit::RenameElement { .. } => "Rename".into(),
+            Edit::ApplyTheme { theme, .. } => format!("Apply theme {}", theme.name),
             Edit::SetBackgroundImage { image: Some(_), .. } => "Set background image".into(),
             Edit::SetBackgroundImage { image: None, .. } => "Remove background image".into(),
             Edit::SetSlideEnabled { enabled: true, .. } => "Enable slide".into(),
@@ -369,6 +380,7 @@ impl Edit {
             | Edit::RenameElement { .. }
             | Edit::SetHidden { hidden: false, .. } => vec![Feature::SlideStructure],
             Edit::SetLocked { .. } => vec![Feature::LayerLock],
+            Edit::ApplyTheme { theme, .. } => theme.features(),
             Edit::SetHidden { hidden: true, .. } => vec![Feature::LayerHide],
             Edit::SetBackgroundImage { image: Some(b), .. } => {
                 let mut v = vec![Feature::ImageBackground];
@@ -584,6 +596,18 @@ impl Edit {
                     return Err(not_found("element"));
                 }
                 s.elements.remove(*element);
+                Ok(())
+            }
+            Edit::ApplyTheme {
+                slides,
+                theme,
+                all,
+                link,
+            } => {
+                for &(g, s) in slides {
+                    slide_mut(doc, g, s)?;
+                }
+                theme.apply(doc, slides, *all, *link);
                 Ok(())
             }
             Edit::MoveElement {
@@ -845,6 +869,12 @@ impl Edit {
             | Edit::SetSlideBackground { group, slide, .. }
             | Edit::DuplicateSlide { group, slide } => at(*group, *slide).into_iter().collect(),
             Edit::Batch { edits, .. } => edits.iter().flat_map(|e| e.slides_touched(doc)).collect(),
+            Edit::ApplyTheme {
+                slides, all: true, ..
+            } if slides.is_empty() => doc.slides().map(|s| s.uuid.clone()).collect(),
+            Edit::ApplyTheme { slides, .. } => {
+                slides.iter().filter_map(|&(g, s)| at(g, s)).collect()
+            }
             _ => Vec::new(),
         }
     }

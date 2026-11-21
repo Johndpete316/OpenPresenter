@@ -13,7 +13,7 @@ use std::io::Write as _;
 use std::path::Path;
 
 pub use actor::{CoreConfig, CoreHandle, spawn};
-pub use command::Command;
+pub use command::{Command, ThemeTargets};
 pub use order::{SlideRef, find_nearest, next_enabled, prev_enabled, slide_order};
 pub use playlist::{
     ItemRef, Playlist, PlaylistError, PlaylistFile, PlaylistItem, load_dir as load_playlists,

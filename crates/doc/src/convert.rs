@@ -169,6 +169,7 @@ pub(crate) fn convert(p: &pro6::Document) -> Document {
                                     },
                                 ),
                                 pro6_incompatible: false,
+                                theme: None,
                                 src: Some(skey),
                             }
                         })
@@ -208,6 +209,7 @@ pub(crate) fn convert(p: &pro6::Document) -> Document {
         groups,
         arrangements,
         cue_report,
+        theme: None,
         pro6: None,
     }
 }

@@ -32,6 +32,8 @@ mod fit;
 mod image;
 mod snap;
 mod text;
+mod themes;
+pub use themes::THEMES_DIR;
 
 const RULER: f32 = 18.0;
 const HANDLE: f32 = 4.5;
@@ -115,6 +117,13 @@ pub struct EditState {
     tab_pressed: Option<bool>,
     /// Fit Text's minimum size (from the settings).
     pub fit_min_size: f64,
+    /// Themes folder (in the first library folder) and the library folders, from
+    /// the settings.
+    pub themes_dir: Option<PathBuf>,
+    pub library_dirs: Vec<PathBuf>,
+    themes: themes::Themes,
+    /// Turn the editor back on after theme editing ends (Done).
+    reopen_after_theme: bool,
     /// Copied style (Copy Style), for pasting.
     style_clip: Option<doc::Style>,
     /// Layer being dragged in the Layers tab.
@@ -353,6 +362,9 @@ fn close_prompt(
     match close {
         Some(Some(true)) => {
             actions.push(UiAction::Core(Command::Save(path.to_path_buf())));
+            if let Some(d) = show.edited_doc(path) {
+                themes::after_save(st, ctx, d);
+            }
             st.edit.on = false;
             st.edit.close_requested = false;
         }
@@ -442,6 +454,7 @@ pub fn editor(
     }
     text::check_session(st, actions, path, d);
     image::poll(ui, st, actions, path, d);
+    themes::poll(st);
     // Ctrl+Alt+C / Ctrl+Alt+V: copy / paste style (not while typing).
     if let Some((g, s)) = st.edit.sel
         && st.edit.session.is_none()
@@ -489,12 +502,21 @@ pub fn editor(
         .frame(egui::Frame::new().fill(Color32::from_gray(24)))
         .show(ui, |ui| canvas(ui, st, actions, path, d));
     text::native_prompt(ui.ctx(), st, actions, path);
+    themes::window(ui.ctx(), st, show, actions, path, d);
     let mut pending = false;
     if st.edit.close_requested {
         pending = st.edit.session.as_ref().is_some_and(|s| s.dirty());
         text::commit(st, actions, path, d);
     }
     close_prompt(ui.ctx(), st, show, path, actions, pending);
+    // Theme editing ended: back to the presentation it started from.
+    if !st.edit.on
+        && let Some(back) = st.edit.themes.return_to.take()
+    {
+        actions.push(UiAction::Core(Command::Open(back)));
+        st.edit.sel = None;
+        st.edit.on = std::mem::take(&mut st.edit.reopen_after_theme);
+    }
 }
 
 // ───────────────────────────── bars ─────────────────────────────
@@ -513,11 +535,11 @@ fn top_bar(
         .frame(egui::Frame::new().fill(crate::theme::color::HEADER).inner_margin(6.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.heading(format!(
-                    "{}{}",
-                    crate::ui::title(path),
-                    if unsaved { " •" } else { "" }
-                ))
+                let name = match &d.theme {
+                    Some(t) => format!("Theme: {}", t.name),
+                    None => crate::ui::title(path),
+                };
+                ui.heading(format!("{name}{}", if unsaved { " •" } else { "" }))
                 .on_hover_text(if unsaved { "Unsaved changes" } else { "Saved" });
                 ui.separator();
                 let editing = show.editing.get(path);
@@ -607,6 +629,7 @@ fn top_bar(
                 {
                     text::commit(st, actions, path, d);
                     actions.push(UiAction::Core(Command::Save(path.to_path_buf())));
+                    themes::after_save(st, ui.ctx(), d);
                 }
                 if ui
                     .add_enabled(unsaved, egui::Button::new("Revert"))
@@ -618,7 +641,15 @@ fn top_bar(
                     st.edit.text_for = None;
                     st.edit.notes_for = None;
                 }
-                if d.mode == doc::Mode::Native {
+                ui.separator();
+                if ui
+                    .add_enabled(d.theme.is_none(), egui::Button::new("Theme…"))
+                    .on_hover_text("Make, apply and edit themes")
+                    .clicked()
+                {
+                    themes::open(st, ui.ctx());
+                }
+                if d.mode == doc::Mode::Native && d.theme.is_none() {
                     ui.label(
                         RichText::new(format!(
                             "saves as {}.{} (OpenPresent only)",
@@ -631,7 +662,16 @@ fn top_bar(
                     .on_hover_text("This presentation uses something a ProPresenter 6 file can't hold. The original .pro6 is left as it was.");
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Close editor").clicked() {
+                    if d.theme.is_some() {
+                        if ui
+                            .button("Done")
+                            .on_hover_text("Stop editing the theme and go back to the presentation")
+                            .clicked()
+                        {
+                            st.edit.close_requested = true;
+                            st.edit.reopen_after_theme = true;
+                        }
+                    } else if ui.button("Close editor").clicked() {
                         st.edit.close_requested = true;
                     }
                 });

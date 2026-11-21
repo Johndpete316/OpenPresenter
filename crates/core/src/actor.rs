@@ -170,6 +170,14 @@ struct Core {
     loop_suppressed: Option<PathBuf>,
     /// Undo history of each editor copy.
     histories: std::collections::HashMap<PathBuf, doc::History>,
+    /// Themes to apply once these presentations have loaded.
+    pending_theme: std::collections::HashMap<PathBuf, Vec<PendingTheme>>,
+}
+
+struct PendingTheme {
+    theme: Arc<doc::Theme>,
+    targets: crate::ThemeTargets,
+    save: bool,
 }
 
 impl Core {
@@ -189,6 +197,7 @@ impl Core {
             pending_loop: None,
             loop_suppressed: None,
             histories: std::collections::HashMap::new(),
+            pending_theme: std::collections::HashMap::new(),
         };
         if let Some(dir) = &config.playlists_dir {
             let (playlists, errors) = crate::playlist::load_dir(dir);
@@ -328,6 +337,9 @@ impl Core {
                     self.pending_loop = None;
                     self.start_loop(Instant::now());
                 }
+                for p in self.pending_theme.remove(&path).unwrap_or_default() {
+                    self.apply_theme(&path, p);
+                }
                 if self.pending_goto.as_ref().is_some_and(|p| p.path == path)
                     && let Some(p) = self.pending_goto.take()
                 {
@@ -354,6 +366,7 @@ impl Core {
                 }
             }
             Err(e) => {
+                self.pending_theme.remove(&path);
                 Arc::make_mut(&mut self.s.load_errors).insert(path.clone(), e.clone());
                 if self.pending_goto.as_ref().is_some_and(|p| p.path == path) {
                     self.pending_goto = None;
@@ -594,6 +607,26 @@ impl Core {
                     ),
                 ),
             },
+            Command::ApplyTheme {
+                presentations,
+                theme,
+                targets,
+                save,
+            } => {
+                for path in presentations {
+                    let p = PendingTheme {
+                        theme: theme.clone(),
+                        targets,
+                        save,
+                    };
+                    if self.s.edited_doc(&path).is_some() {
+                        self.apply_theme(&path, p);
+                    } else {
+                        self.pending_theme.entry(path.clone()).or_default().push(p);
+                        self.request_load(&path);
+                    }
+                }
+            }
             Command::StartLoop => self.start_loop(at),
             Command::StopLoop => self.stop_loop_by_operator("Loop stopped."),
             Command::Revert(path) => {
@@ -601,6 +634,54 @@ impl Core {
                 Arc::make_mut(&mut self.s.unsaved).remove(&path);
                 self.histories.remove(&path);
             }
+        }
+    }
+
+    /// Apply a theme to a loaded presentation (see [`Command::ApplyTheme`]).
+    fn apply_theme(&mut self, path: &PathBuf, p: PendingTheme) {
+        let Some(d) = self.s.edited_doc(path).cloned() else {
+            return;
+        };
+        let slides: Vec<(usize, usize)> = match p.targets {
+            crate::ThemeTargets::All => Vec::new(),
+            crate::ThemeTargets::Linked => d
+                .groups
+                .iter()
+                .enumerate()
+                .flat_map(|(g, gr)| {
+                    gr.slides
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| s.theme.as_ref().is_some_and(|l| l.uuid == p.theme.uuid))
+                        .map(move |(s, _)| (g, s))
+                })
+                .collect(),
+        };
+        if p.targets == crate::ThemeTargets::Linked && slides.is_empty() {
+            return;
+        }
+        let becomes_native = p.theme.features().into_iter().any(doc::needs_native);
+        // Saving would also save someone's other unsaved edits: leave it to them.
+        let had_unsaved = self.s.unsaved.contains(path);
+        let edit = doc::Edit::ApplyTheme {
+            slides,
+            theme: Box::new(p.theme.for_document(&d.path)),
+            all: p.targets == crate::ThemeTargets::All,
+            link: d.mode == doc::Mode::Native || becomes_native,
+        };
+        self.edit(path.clone(), &edit, true, None);
+        if p.save && had_unsaved {
+            self.notice(
+                NoticeLevel::Info,
+                format!(
+                    "'{}' was restyled to match the theme but not saved, because it has other unsaved changes.",
+                    path.display()
+                ),
+            );
+        } else if p.save
+            && let Some(d) = self.s.edited_doc(path)
+        {
+            let _ = self.io.send(IoJob::SaveDocument(path.clone(), d.clone()));
         }
     }
 

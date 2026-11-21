@@ -15,6 +15,7 @@ pub mod history;
 pub mod model;
 pub mod rich;
 pub mod style;
+pub mod theme;
 
 pub use compat::{Feature, Mode, Support, needs_native, pro6_support};
 pub use convert::{ExportChoice, ExportError, ExportReport, export_pro6, from_pro6, to_pro6};
@@ -23,6 +24,7 @@ pub use file::{LoadError, SaveError, is_native, is_pro6, load, open, preferred, 
 pub use history::History;
 pub use model::*;
 pub use style::{Scope, Style};
+pub use theme::{Theme, ThemeLink};
 
 /// Native presentation file extension.
 pub const NATIVE_EXT: &str = "opres";

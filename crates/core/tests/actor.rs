@@ -895,3 +895,166 @@ fn clear_during_a_loop_keeps_everything_off_until_the_operator_shows_a_slide() {
     assert!(s.background_visible && s.text_visible);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// E7 acceptance: a theme applied to 10 presentations in one action; each matches
+/// the theme; one undo per presentation reverts it.
+#[test]
+fn theme_applies_to_ten_presentations_with_one_undo_each() {
+    let dir = std::env::temp_dir().join(format!("pp6core-theme-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let sources = [
+        "song_1024x768.pro6",
+        "render_1024x768.pro6",
+        "two_fonts_1920x1080.pro6",
+        "announcements_synthetic.pro6",
+        "unknowns.pro6",
+    ];
+    let mut files = Vec::new();
+    for copy in 0..2 {
+        for s in sources {
+            let f = dir.join(format!("{copy}-{s}"));
+            std::fs::copy(fixture(s), &f).unwrap();
+            files.push(f);
+        }
+    }
+    // A theme made from the song's first slide, restyled.
+    let song = doc::load(&files[0]).unwrap();
+    let mut theme = doc::Theme::from_slide("Blue", &song, (0, 0)).unwrap();
+    theme.background = Some(doc::Rgba {
+        r: 0.0,
+        g: 0.1,
+        b: 0.4,
+        a: 1.0,
+    });
+    theme.text.run.color = Some([255, 230, 120]);
+    theme.text.run.bold = true;
+    theme.text.align = doc::Align::Left;
+    theme.text_frame = doc::Rect {
+        x: 40.0,
+        y: 500.0,
+        width: 944.0,
+        height: 220.0,
+    };
+    let theme = theme
+        .save(&dir.join("Themes").join("Blue.optheme"))
+        .unwrap();
+    let before: Vec<doc::Document> = files.iter().map(|f| doc::load(f).unwrap()).collect();
+
+    let (core, rx) = start(CoreConfig::default());
+    core.send(Command::ApplyTheme {
+        presentations: files.clone(),
+        theme: Arc::new(theme.clone()),
+        targets: pp6core::ThemeTargets::All,
+        save: false,
+    });
+    let s = wait(&rx, "themed", |s| {
+        files.iter().all(|f| s.editing.contains_key(f))
+    });
+    for (f, b) in files.iter().zip(&before) {
+        let e = &s.editing[f];
+        assert_eq!(
+            e.undo.as_deref(),
+            Some("Apply theme Blue"),
+            "{}",
+            f.display()
+        );
+        let d = &e.doc;
+        assert_eq!(d.canvas, theme.canvas, "rescaled to the theme's canvas");
+        assert_eq!(d.mode, doc::Mode::Pro6, "nothing native-only in this theme");
+        for slide in d.slides() {
+            assert_eq!(slide.background, theme.background);
+            if let Some(t) = slide.text_boxes().find(|t| t.problem.is_none()) {
+                assert_eq!(t.frame, theme.text_frame, "{}", f.display());
+                for r in t.runs() {
+                    assert_eq!(r.color, Some([255, 230, 120]));
+                    assert!(r.bold);
+                    assert_eq!(r.font, theme.text.run.font);
+                }
+                assert!(t.paragraphs.iter().all(|p| p.align == doc::Align::Left));
+            }
+        }
+        let _ = b;
+    }
+    // One undo per presentation restores each.
+    for f in &files {
+        core.send(Command::Undo(f.clone()));
+    }
+    let s = wait(&rx, "undone", |s| {
+        files
+            .iter()
+            .all(|f| s.editing.get(f).is_none_or(|e| e.undo.is_none()))
+    });
+    for (f, b) in files.iter().zip(&before) {
+        let d = s.edited_doc(f).unwrap();
+        assert_eq!(d.groups, b.groups, "{}", f.display());
+        assert_eq!(d.canvas, b.canvas);
+    }
+    drop(core);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn editing_a_theme_restyles_linked_slides_in_native_presentations() {
+    let dir = std::env::temp_dir().join(format!("pp6core-themelink-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("song.pro6");
+    std::fs::copy(fixture("song_1024x768.pro6"), &file).unwrap();
+    let mut d = doc::load(&file).unwrap();
+    let mut theme = doc::Theme::from_slide("Linked", &d, (0, 0)).unwrap();
+    theme.text.outline = Some(doc::Outline {
+        width: 2.0,
+        color: doc::Rgba {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        },
+    });
+    let theme = theme.save(&dir.join("Linked.optheme")).unwrap();
+    // A native presentation with only its first slide linked.
+    doc::Edit::ApplyTheme {
+        slides: vec![(0, 0)],
+        theme: Box::new(theme.for_document(&file)),
+        all: false,
+        link: true,
+    }
+    .apply(&mut d)
+    .unwrap();
+    let first = d.groups[0].slides[0].uuid.clone();
+    doc::mark_native(&mut d, &[first]);
+    let saved = doc::save(&d).unwrap();
+    // The theme is edited: a gold text colour.
+    let mut edited = theme.clone();
+    edited.text.run.color = Some([212, 175, 55]);
+    let (core, rx) = start(CoreConfig::default());
+    core.send(Command::ApplyTheme {
+        presentations: vec![saved.path.clone()],
+        theme: Arc::new(edited),
+        targets: pp6core::ThemeTargets::Linked,
+        save: true,
+    });
+    wait(&rx, "saved", |s| {
+        s.editing.contains_key(&saved.path) && !s.unsaved.contains(&saved.path)
+    });
+    let back = doc::load(&saved.path).unwrap();
+    let colours = |s: &doc::Slide| {
+        s.text_boxes()
+            .flat_map(|t| t.runs().map(|r| r.color))
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        colours(&back.groups[0].slides[0])
+            .iter()
+            .all(|c| *c == Some([212, 175, 55]))
+    );
+    assert!(
+        colours(&back.groups[0].slides[1])
+            .iter()
+            .all(|c| *c != Some([212, 175, 55])),
+        "unlinked slides stay"
+    );
+    drop(core);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

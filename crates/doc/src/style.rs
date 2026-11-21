@@ -6,11 +6,13 @@
 //! [`Edit::Batch`] for any number of targets, so it's one undo step whatever the
 //! scope.
 
+use serde::{Deserialize, Serialize};
+
 use crate::edit::Edit;
 use crate::model::*;
 
 /// The look of a text run, without its text.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunStyle {
     pub font: String,
     pub size: f64,
@@ -34,7 +36,7 @@ impl RunStyle {
         }
     }
 
-    fn apply(&self, r: &mut Run) {
+    pub(crate) fn apply(&self, r: &mut Run) {
         r.font.clone_from(&self.font);
         r.size = self.size;
         r.color = self.color;
@@ -45,7 +47,7 @@ impl RunStyle {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextStyle {
     pub run: RunStyle,
     pub align: Align,

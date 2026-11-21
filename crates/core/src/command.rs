@@ -2,6 +2,15 @@
 
 use std::path::PathBuf;
 
+/// Which slides [`Command::ApplyTheme`] restyles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeTargets {
+    /// Every slide (and the canvas size).
+    All,
+    /// Only slides linked to the theme.
+    Linked,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     /// Next enabled slide of the live presentation (disabled slides are skipped).
@@ -86,6 +95,17 @@ pub enum Command {
     Save(PathBuf),
     /// Throw away the editor copy and its undo history.
     Revert(PathBuf),
+    /// Apply a theme to presentations (loading them first if needed): one edit on
+    /// each one's editor copy, so one undo step per presentation. `save` saves each
+    /// afterwards (restyling slides linked to an edited theme). A `.pro6`
+    /// presentation becomes native if the theme uses something `.pro6` can't hold
+    /// (the operator confirmed that when choosing to apply it).
+    ApplyTheme {
+        presentations: Vec<PathBuf>,
+        theme: std::sync::Arc<doc::Theme>,
+        targets: ThemeTargets,
+        save: bool,
+    },
     /// Auto-advance the live (or selected) presentation using its stored slide timing.
     StartLoop,
     StopLoop,

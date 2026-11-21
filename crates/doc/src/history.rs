@@ -119,6 +119,7 @@ mod tests {
             groups: Vec::new(),
             arrangements: Vec::new(),
             cue_report: Default::default(),
+            theme: None,
             pro6: None,
         })
     }

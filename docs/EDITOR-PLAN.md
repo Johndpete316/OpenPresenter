@@ -353,17 +353,25 @@ Filled in from real files and testing in PP6. Starting state:
   - **Minimum size:** Settings → General → Editor → "Fit Text minimum size" (default 24 px). It applies to the size most of the box's text uses, so smaller words in the same box can go below it. If the text still doesn't fit there, the box is shrunk to the minimum and a message says to shorten the text or enlarge the box. Boxes that can't be measured (font not installed, damaged text) are left alone and counted in a message.
 
 ### E7 — Themes
-- [ ] A theme is a named set of:
+- [x] A theme is a named set of:
   - canvas size
   - background (colour, or image plus adjustments)
   - text box position and size
   - full text style, outline, shadow, alignment
-- [ ] Create a theme from the current slide; edit a theme in the editor (theme editing mode on a sample slide)
-- [ ] Apply a theme to: a slide, a group, a presentation, or **many presentations** from the library (multi-select)
-- [ ] `Native` docs keep a live link: editing the theme restyles linked slides, after a confirmation listing how many slides and presentations change
-- [ ] `Pro6` docs: the theme applies as a copy of its styles (no link, no warning)
-- [ ] Applying a theme with a different canvas size reuses the rescale logic from `PLAN.md` M4
+- [x] Create a theme from the current slide; edit a theme in the editor (theme editing mode on a sample slide)
+- [x] Apply a theme to: a slide, a group, a presentation, or **many presentations** from the library (multi-select)
+- [x] `Native` docs keep a live link: editing the theme restyles linked slides, after a confirmation listing how many slides and presentations change
+- [x] `Pro6` docs: the theme applies as a copy of its styles (no link, no warning)
+- [x] Applying a theme with a different canvas size reuses the rescale logic from `PLAN.md` M4
 - **Accept:** apply a theme to 10 fixtures in one action; the output matches the theme; one undo per presentation.
+- **Status (2026-11-21):** done. Acceptance test: `theme_applies_to_ten_presentations_with_one_undo_each` in `crates/core/tests/actor.rs` (the five fixtures twice, one `ApplyTheme` command; each matches the theme and has one undo step that restores it). `editing_a_theme_restyles_linked_slides_in_native_presentations` covers the live link.
+  - **Model** (`doc::theme`): name, canvas size, background colour, background image (with adjustments), the main text box's place, and a full text style (the E5 `TextStyle`: font, size, colour, B/I/U, letter and line spacing, alignment, vertical alignment, outline, shadow). Files: `<first library folder>/Themes/<name>.optheme` (JSON). A background image path is stored relative to the theme file, and re-pointed relative to each presentation it's applied to.
+  - **Applying:** every text box on a slide gets the style; the first also gets the theme's place. "This presentation" (and many presentations) with a different canvas size first rescales the presentation to the theme's canvas with the M4 rule (uniform fit, centred; sizes, outline and shadow by the same factor), reimplemented on the native model. Applying to some slides of a presentation with another canvas size scales the theme into its canvas instead.
+  - **Themes window** (Theme… in the top bar): make a theme from this slide; pick a theme; apply to this slide / group / presentation (one undo step); apply to presentations ticked in a searchable library list (one `ApplyTheme` core command; the core loads each, and each gets one undo step and stays unsaved), then "Save all changed"; Edit theme; Delete theme (moved to `Themes/deleted`).
+  - **Link:** native presentations remember the theme on each slide; `.pro6` ones get a copy. A theme whose features `.pro6` can't hold (background image, outline, shadow, spacing) says so in the window, and applying it makes a `.pro6` presentation native (and linked).
+  - **Theme editing:** Edit theme opens the theme as a one-slide sample presentation in the editor ("Theme: name"; Done goes back). Saving writes the `.optheme`; then the library folders are searched (on a worker thread) for native presentations with slides linked to it, and a prompt says how many slides in how many presentations would change: Restyle them / Not now. Restyling applies the theme to the linked slides and saves each presentation, except one with other unsaved changes, which is restyled but left unsaved (with a message).
+  - **Fixed on the way:** a `.opres` made by `pp6tool convert` was marked as a `.pro6`-mode document, so saving it in the app would have written `.pro6` XML into the `.opres`. `pp6tool convert` now marks it native, and a `.opres` is always saved as JSON.
+  - **Not done:** the plan's "many presentations from the library (multi-select)" is a checklist in the Themes window, not multi-select in the operator's library list.
 
 ### E8 — Paste Lyrics to Slides
 - [ ] **Paste Lyrics** opens a full-height text view with a live slide preview beside it
