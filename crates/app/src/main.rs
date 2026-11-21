@@ -2,6 +2,7 @@
 //! winit event loop; the output's GL runs on its own thread, and the show state
 //! lives in the core actor.
 
+mod arrangements;
 mod canvas;
 mod crash;
 mod editor;
@@ -101,6 +102,9 @@ struct Args {
     /// Open the New presentation window at startup (development / screenshots).
     #[arg(long)]
     open_new: bool,
+    /// Open the arrangement editor for --open's presentation (development / screenshots).
+    #[arg(long)]
+    open_arrangements: bool,
     /// Save the operator window as PNG 3 s after it opens, then exit.
     #[arg(long)]
     capture_ui: Option<PathBuf>,
@@ -389,6 +393,7 @@ fn main() -> ExitCode {
             playlists_path: paths.playlists.display().to_string(),
             settings_open: args.open_settings,
             open_new_at_start: args.open_new,
+            open_arrangements_at_start: args.open_arrangements,
             tile_w: settings.view.tile_width,
             edit: ui_state_edit,
             media_thumbs,

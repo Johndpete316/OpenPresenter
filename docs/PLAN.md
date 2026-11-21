@@ -225,31 +225,39 @@ OpenPresenter has to fit their existing ProPresenter workflows as seamlessly as 
 `.pro6` files keep opening, editing and saving as `.pro6` (nothing converts silently),
 and every new feature works on both kinds of file unless a `.pro6` truly can't hold it.
 
-- [ ] **Remember the slide-tile size.** The size slider under the presentation grid
-  (`ui.rs`, "Tile size slider") resets on restart; save it in `settings.toml`.
-- [ ] **Right-click menu on slides in the presentation grid.**
-  - *Edit in editor*: opens the editor with that slide selected.
-  - *Quick edit*: a small window with just the slide's text (fix spelling, change words; no
-    formatting). Saves through the normal edit path (undo, `.pro6` stays `.pro6`).
-  - Change the slide's colour, its group (move to another / new group), and its type
-    (e.g. enabled/disabled, label), without opening the editor.
-- [ ] **Arrangement editor.** Today the editor has a basic arrangements section
-  (`editor.rs`, `arrangements`). Wanted: a proper one, dragging groups into an order,
-  repeating groups, duplicate/rename/delete arrangements, preview of the resulting order.
-- [ ] **New presentation.** No visible way to make one: the only path today is Paste Lyrics →
-  "A new presentation" inside the editor. Add *New presentation* to the toolbar / library.
-- [ ] **Where `.opres` files go.** New presentations are saved to the *first* library folder
-  (`lyrics.rs`, `Target::New`). Add a setting for the folder new `.opres` files are saved
-  in (kept apart from the `.pro6` library), and make sure it's scanned as a library folder.
-- [ ] **Import / Export at the top.** A menu in the toolbar: import (`.pro6` → library, pasted
-  or `.txt` lyrics), export (`.opres` → `.pro6` where possible, text/lyrics, PNG slides
-  via the existing renderer).
-- [ ] **Start a song from pasted text.** A direct entry point (toolbar / start screen) that
-  opens Paste Lyrics for a new song, with on-screen instructions for the format
-  (today's rules, `editor/lyrics.rs`: `[Name]` on its own line starts a group, a name used
-  again repeats that group, a blank line starts a new slide). The window has a one-line hint
-  now; this needs a proper example. Possibly also accept `Verse 1:` / `Chorus` headers as
-  pasted from lyric sites.
+- [x] **Remember the slide-tile size.** Saved as `[view] tile_width` in `settings.toml` when
+  the slider is let go.
+- [x] **Right-click menu on slides in the presentation grid** (`grid_menu.rs`): Edit in
+  editor (opens on that slide); Quick edit text (just the words; styles inside the box are
+  kept where the words didn't change, `doc::rich::replace_plain`; slide notes too);
+  Enabled; Group (call it Verse/Chorus/… with its colour from Settings, rename, recolour);
+  Move slide to another group or to a new group from this slide (arrangements keep playing
+  the same slides). Each change is one undo step and saved at once (`.pro6` stays `.pro6`);
+  refused with a pointer to the editor if a `.pro6` can't hold it, and not offered while the
+  editor has unsaved changes to that presentation.
+- [x] **Arrangement editor** (`arrangements.rs`): a window from the grid's arrangement menu
+  ("Edit arrangements…") or the editor's strip. Arrangement list (New / Duplicate / Delete,
+  rename, Use in the show), the order as coloured chips (drag to reorder, drag back or
+  right-click to remove, "repeat after"), the group pool (click or drag to add, any number
+  of times), and the slides the order plays. From the grid each change saves at once; from
+  the editor it's part of the editor copy.
+- [x] **New presentation.** Toolbar *New*: a window to type or paste a song, styled like the
+  selected presentation, a theme, or a plain built-in look (`Theme::plain`); empty text
+  makes a blank presentation and opens it in the editor.
+- [x] **Where `.opres` files go.** Settings → Folders → *New presentations (.opres)*
+  (`new_presentations_dir`, default the first library folder), scanned with the library
+  (`Settings::library_folders`). Themes still live in the first library folder's
+  `Themes` folder.
+- [x] **Import / Export at the top** (`file_menu.rs`, toolbar *Import/Export*). Import:
+  presentations (copied in, `.pro6` to the first library folder, `.opres` to the
+  new-presentations folder; never converted), song words from a `.txt` (UTF-8/16,
+  Windows-1252) into the New window, playlists. Export the selected presentation: words as
+  `.txt`, slides as PNGs (background thread), and a `.opres` that came from a `.pro6` back to
+  `.pro6` (`doc::export_pro6`). Not yet: `.pro6` export of presentations made in
+  OpenPresenter (needs a `.pro6` writer for documents without an original).
+- [x] **Start a song from pasted text.** The New window shows the format with an example
+  ("Show an example"), and the parser accepts lyric-site headings (`Verse 1:`, `CHORUS`,
+  `(Bridge)`, `Pre-Chorus 2`) as well as `[Name]`.
 
 ## Unknowns to Verify
 Track findings here as real files arrive. "M0:" notes say how the parser currently handles each one. None are verified against a real file yet.

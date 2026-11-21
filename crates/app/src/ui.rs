@@ -128,6 +128,9 @@ pub struct UiState {
     pub grid_rename: Option<((PathBuf, String), String)>,
     /// Open the New presentation window on the first frame (`--open-new`).
     pub open_new_at_start: bool,
+    pub open_arrangements_at_start: bool,
+    /// The arrangement editor window.
+    pub arrange: Option<crate::arrangements::ArrangeWindow>,
     /// Exports running in the background (Import/Export menu).
     pub exports: Vec<crate::file_menu::Report>,
     /// Latest piece of information for the operator (not a problem), and when.
@@ -216,6 +219,17 @@ impl UiState {
         flat: usize,
     ) -> (ThumbKey, Option<&Result<TextureHandle, String>>) {
         self.thumb_with(tx, doc, flat, true)
+    }
+
+    /// A thumbnail of the saved file (`disk`) or of the editor copy.
+    pub(crate) fn thumb_any(
+        &mut self,
+        tx: &Sender<ThumbRequest>,
+        doc: &Arc<doc::Document>,
+        flat: usize,
+        disk: bool,
+    ) -> (ThumbKey, Option<&Result<TextureHandle, String>>) {
+        self.thumb_with(tx, doc, flat, disk)
     }
 
     fn thumb_with(
@@ -330,9 +344,17 @@ pub fn draw(
         && let Some(d) = show.edited_doc(&path).cloned()
     {
         crate::editor::editor(ui, st, show, thumbs, &mut actions, &path, &d);
+        crate::arrangements::window(ui.ctx(), st, show, thumbs, &mut actions);
         settings_window(ui.ctx(), st, show, settings, log_lines, &mut actions);
         toast(ui.ctx(), st, show);
         return actions;
+    }
+    if st.open_arrangements_at_start
+        && let Some(p) = show.selected.clone()
+        && show.docs.contains_key(&p)
+    {
+        st.open_arrangements_at_start = false;
+        crate::arrangements::open(st, show, &p, true);
     }
     if st.open_new_at_start {
         st.open_new_at_start = false;
@@ -344,6 +366,7 @@ pub fn draw(
             .as_ref()
             .and_then(|p| show.docs.get(p).map(|d| (p.clone(), d.clone())));
         crate::grid_menu::quick_edit_window(ui.ctx(), st, show, &mut actions);
+        crate::arrangements::window(ui.ctx(), st, show, thumbs, &mut actions);
         crate::editor::lyrics::new_window(
             ui.ctx(),
             st,
@@ -1483,6 +1506,12 @@ fn presentation(
                 pick(None, "Natural order".into());
                 for a in &arrangements {
                     pick(Some(a.uuid.clone()), a.name.clone());
+                }
+                if doc.theme.is_none() {
+                    ui.separator();
+                    if ui.button("Edit arrangements…").clicked() {
+                        crate::arrangements::open(st, show, &path, true);
+                    }
                 }
             });
         // Slide timers are supported; other cues and timeline/media tracks aren't yet.

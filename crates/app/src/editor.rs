@@ -146,8 +146,6 @@ pub struct EditState {
     notes_for: Option<(PathBuf, String)>,
     rename: Option<(usize, String)>,
     confirm_delete_group: Option<usize>,
-    arrangement: Option<String>,
-    arrangement_name: String,
     zoom: Zoom,
     /// Canvas offset when zoomed in beyond the view (screen points).
     pan: Vec2,
@@ -501,7 +499,7 @@ pub fn editor(
                 .fill(crate::theme::color::PANEL)
                 .inner_margin(6.0),
         )
-        .show(ui, |ui| strip(ui, st, thumbs, actions, path, d));
+        .show(ui, |ui| strip(ui, st, show, thumbs, actions, path, d));
     egui::Panel::right("editor-inspector")
         .resizable(true)
         .default_size(290.0)
@@ -955,6 +953,7 @@ struct Slot {
 fn strip(
     ui: &mut egui::Ui,
     st: &mut UiState,
+    show: &ShowState,
     thumbs: &Sender<ThumbRequest>,
     actions: &mut Vec<UiAction>,
     path: &Path,
@@ -964,7 +963,7 @@ fn strip(
         .id_salt("editor-strip-scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            arrangements(ui, st, actions, path, d);
+            arrangements(ui, st, show, path, d);
             ui.separator();
             let mut slots: Vec<Slot> = Vec::new();
             st.edit.tiles.clear();
@@ -2938,163 +2937,36 @@ fn rulers(
 fn arrangements(
     ui: &mut egui::Ui,
     st: &mut UiState,
-    actions: &mut Vec<UiAction>,
+    show: &ShowState,
     path: &Path,
     doc: &doc::Document,
 ) {
+    // A summary here; editing happens in the arrangement window.
     let list = doc.arrangements();
-    if st
-        .edit
-        .arrangement
-        .as_ref()
-        .is_some_and(|a| !list.iter().any(|x| &x.uuid == a))
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Arrangements").strong());
+        ui.label(
+            RichText::new(if list.is_empty() {
+                "none".to_owned()
+            } else {
+                list.iter()
+                    .map(|a| a.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .small()
+            .weak(),
+        );
+    });
+    if ui
+        .button("Edit arrangements…")
+        .on_hover_text(
+            "The order the groups are sung in: drag groups, repeat them, make several orders",
+        )
+        .clicked()
     {
-        st.edit.arrangement = None;
+        crate::arrangements::open(st, show, path, false);
     }
-    egui::CollapsingHeader::new("Arrangements")
-        .default_open(false)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let current = st
-                    .edit
-                    .arrangement
-                    .as_ref()
-                    .and_then(|a| list.iter().find(|x| &x.uuid == a));
-                egui::ComboBox::from_id_salt("edit-arrangement")
-                    .selected_text(
-                        current.map_or("Choose an arrangement".to_owned(), |a| a.name.clone()),
-                    )
-                    .show_ui(ui, |ui| {
-                        for a in &list {
-                            if ui
-                                .selectable_label(
-                                    st.edit.arrangement.as_ref() == Some(&a.uuid),
-                                    &a.name,
-                                )
-                                .clicked()
-                            {
-                                st.edit.arrangement = Some(a.uuid.clone());
-                                st.edit.arrangement_name = a.name.clone();
-                            }
-                        }
-                    });
-                if ui.button("New arrangement").clicked() {
-                    let uuid = new_uuid();
-                    let groups: Vec<usize> = (0..doc.groups().len()).collect();
-                    edit(
-                        actions,
-                        path,
-                        Op::AddArrangement {
-                            uuid: uuid.clone(),
-                            name: "New arrangement".into(),
-                            groups,
-                        },
-                    );
-                    st.edit.arrangement = Some(uuid);
-                    st.edit.arrangement_name = "New arrangement".into();
-                }
-            });
-            let Some(a) = st
-                .edit
-                .arrangement
-                .as_ref()
-                .and_then(|a| list.iter().find(|x| &x.uuid == a))
-            else {
-                return;
-            };
-            let uuid = a.uuid.clone();
-            ui.horizontal(|ui| {
-                ui.label("Name:");
-                ui.text_edit_singleline(&mut st.edit.arrangement_name);
-                if ui.small_button("Rename").clicked()
-                    && !st.edit.arrangement_name.trim().is_empty()
-                {
-                    edit(
-                        actions,
-                        path,
-                        Op::RenameArrangement {
-                            uuid: uuid.clone(),
-                            name: st.edit.arrangement_name.trim().to_owned(),
-                        },
-                    );
-                }
-                if ui
-                    .small_button(RichText::new("Delete arrangement").color(Color32::LIGHT_RED))
-                    .clicked()
-                {
-                    edit(actions, path, Op::RemoveArrangement { uuid: uuid.clone() });
-                    st.edit.arrangement = None;
-                }
-            });
-            if !a.unknown_group_ids.is_empty() {
-                ui.label(
-                    RichText::new(format!(
-                        "{} entry(ies) refer to groups that no longer exist.",
-                        a.unknown_group_ids.len()
-                    ))
-                    .color(Color32::YELLOW)
-                    .small(),
-                );
-            }
-            let seq = a.groups.clone();
-            ui.horizontal_wrapped(|ui| {
-                for (i, &g) in seq.iter().enumerate() {
-                    let group = &doc.groups()[g];
-                    egui::Frame::new()
-                        .stroke(Stroke::new(1.0, color32(group.color)))
-                        .inner_margin(3.0)
-                        .corner_radius(3.0)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(&group.name);
-                                let mut set = |new: Vec<usize>| {
-                                    edit(
-                                        actions,
-                                        path,
-                                        Op::SetArrangementGroups {
-                                            uuid: uuid.clone(),
-                                            groups: new,
-                                        },
-                                    )
-                                };
-                                if i > 0 && ui.small_button("<").clicked() {
-                                    let mut n = seq.clone();
-                                    n.swap(i, i - 1);
-                                    set(n);
-                                }
-                                if i + 1 < seq.len() && ui.small_button(">").clicked() {
-                                    let mut n = seq.clone();
-                                    n.swap(i, i + 1);
-                                    set(n);
-                                }
-                                if ui.small_button("x").clicked() {
-                                    let mut n = seq.clone();
-                                    n.remove(i);
-                                    set(n);
-                                }
-                            });
-                        });
-                }
-                egui::ComboBox::from_id_salt("arr-add")
-                    .selected_text("+ add group")
-                    .show_ui(ui, |ui| {
-                        for (gi, g) in doc.groups().iter().enumerate() {
-                            if ui.selectable_label(false, &g.name).clicked() {
-                                let mut n = seq.clone();
-                                n.push(gi);
-                                edit(
-                                    actions,
-                                    path,
-                                    Op::SetArrangementGroups {
-                                        uuid: uuid.clone(),
-                                        groups: n,
-                                    },
-                                );
-                            }
-                        }
-                    });
-            });
-        });
 }
 
 #[cfg(test)]
