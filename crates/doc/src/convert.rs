@@ -299,6 +299,7 @@ fn image_box(raw: &pro6::raw::RawElement, uuid: &str) -> Option<ImageBox> {
         rotation: num("rotation", 0.0),
         opacity: num("opacity", 1.0),
         locked: flag("locked"),
+        hidden: false,
         flip_h: flag("flippedHorizontally"),
         flip_v: flag("flippedVertically"),
         media: MediaRef { path, sha256: None },
@@ -480,6 +481,7 @@ fn text_box(t: &pro6::TextElement, path: &Path, key: String) -> TextBox {
         rotation: t.rotation,
         opacity: t.opacity,
         locked: t.locked,
+        hidden: false,
         valign: valign(t.vertical_alignment),
         fill: t.fill_color.filter(|_| t.drawing_fill).map(rgba),
         corner_radius: t.bezel_radius,
@@ -736,9 +738,9 @@ fn export_slide(s: &Slide, ix: &Index<'_>, path: &Path) -> Result<pro6::Slide, E
     let mut items = Vec::with_capacity(s.elements.len());
     for e in &s.elements {
         // Elements made here with nothing to copy (images, text boxes in a
-        // presentation without one) are native-only: their slide is flagged, and an
-        // export writes it without them.
-        if e.src().is_none() {
+        // presentation without one) and hidden elements are native-only: their
+        // slide is flagged, and an export writes it without them.
+        if e.src().is_none() || e.hidden() {
             continue;
         }
         items.push(export_element(e, ix, path)?);

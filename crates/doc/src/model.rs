@@ -181,6 +181,23 @@ impl Element {
         }
     }
 
+    pub fn hidden(&self) -> bool {
+        match self {
+            Element::Text(t) => t.hidden,
+            Element::Image(i) => i.hidden,
+            Element::Pro6(_) => false,
+        }
+    }
+
+    /// Name shown in the Layers list.
+    pub fn name(&self) -> &str {
+        match self {
+            Element::Text(t) => &t.name,
+            Element::Image(i) => &i.name,
+            Element::Pro6(p) => &p.kind,
+        }
+    }
+
     pub fn as_text(&self) -> Option<&TextBox> {
         match self {
             Element::Text(t) => Some(t),
@@ -301,6 +318,8 @@ pub struct ImageBox {
     pub rotation: f64,
     pub opacity: f64,
     pub locked: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     #[serde(default)]
     pub flip_h: bool,
     #[serde(default)]
@@ -379,6 +398,9 @@ pub struct TextBox {
     pub rotation: f64,
     pub opacity: f64,
     pub locked: bool,
+    /// Hidden in the editor's Layers: not drawn anywhere.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     pub valign: VAlign,
     /// Box fill, when drawn.
     pub fill: Option<Rgba>,

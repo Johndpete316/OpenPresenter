@@ -309,14 +309,27 @@ Filled in from real files and testing in PP6. Starting state:
   - **Also new everywhere:** image elements from `.pro6` files are now drawn (output, thumbnails, phone remote, `pp6tool render`) instead of warned about.
 
 ### E4 — Alignment, Layers, Snapping
-- [ ] Position panel (arrange, align to page, align selection, distribute, exact fields)
-- [ ] Layers tab (reorder, lock, hide, rename)
-- [ ] Multi-select, and moving or resizing several elements together
-- [ ] Snapping per Snapping ("sane"); magenta guides; equal-spacing labels
-- [ ] Safe-area overlay at the output resolution (toggle); optional grid (off by default)
+- [x] Position panel (arrange, align to page, align selection, distribute, exact fields)
+- [x] Layers tab (reorder, lock, hide, rename)
+- [x] Multi-select, and moving or resizing several elements together
+- [x] Snapping per Snapping ("sane"); magenta guides; equal-spacing labels
+- [x] Safe-area overlay at the output resolution (toggle); optional grid (off by default)
 - **Accept:**
   - snapping unit tests for target priority, one snap per axis, and the screen-pixel threshold at several zoom levels
   - a manual check that snapping feels natural
+- **Status (2026-11-21):** built; the unit tests pass. **The manual feel check is still to do** (needs a person with a mouse).
+  - **Snapping** (`crates/app/src/editor/snap.rs`, 10 unit tests: priority on ties, nearest wins, one snap per axis, threshold at 50/100/200%, safe area, equal spacing, grid only when on, resize edges):
+    - Targets in priority order: canvas centre lines, canvas edges, safe-area edges (5% in), other elements' edges and centres, equal spacing (continuing a row's gap, or centring between two), then the grid when it's on (40 px).
+    - 6 screen points, at any zoom. The nearest target wins per axis; at the same distance the higher priority one does.
+    - Moving snaps the (rotated) box's bounds by its edges and centre. Resizing snaps only the dragged edges, and only for upright boxes resized freely (not while keeping the shape).
+    - Alt drags freely; Shift while moving keeps to one axis (that axis's snap only); arrow nudges never snap.
+    - Magenta guide lines; equal spacing shows the gaps with their size in pixels. Guides show only while dragging.
+  - **Bottom bar:** Snap, Guides, Safe area (yellow outline 5% in from each edge, on the canvas, which the output scales to fit), Grid. The position readout follows the selection.
+  - **Selection:** click, Shift-click to add or remove, drag a marquee on the empty canvas (selects what it touches; Shift adds), Tab / Shift+Tab cycle through the slide's elements. Several selected: one dashed box with handles; drag to move together, handles resize them together (keeping the group's shape unless Shift is held); arrows nudge all; Delete removes all; each is one undo step. Hidden elements can't be clicked on the canvas (select them in Layers).
+  - **Position tab:** Forward / Backward / To Front / To Back, align to page (the selection moves as one), align selection (2+), distribute horizontally / vertically (3+, the outer two stay put), and X / Y / W / H / rotation fields for one element.
+  - **Layers tab:** front to back, drag to reorder, click to select (Shift adds), double-click to rename, Lock and Hide. Raw `.pro6` elements are listed but can't be selected.
+  - **Compatibility:** order and rename write to `.pro6`. Lock and hide are Unverified (the matrix), so they ask first; a native document exported to `.pro6` leaves hidden elements out.
+  - The inspector tabs are now Text / Image / Position / Layers / Slide; Effects and Adjust open from the toolbars as side panels.
 
 ### E5 — Copy Style / Apply to All
 - [ ] Copy Style button and shortcuts; paste to selection / slide / group / presentation

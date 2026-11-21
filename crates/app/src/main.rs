@@ -363,7 +363,7 @@ fn main() -> ExitCode {
         let n: Vec<usize> = v.split(':').filter_map(|x| x.parse().ok()).collect();
         if let [g, s, ref rest @ ..] = n[..] {
             ui_state_edit.select(g, s);
-            if let [e] = *rest {
+            for &e in rest {
                 ui_state_edit.select_element(e);
             }
         }

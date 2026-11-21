@@ -44,7 +44,7 @@ pub fn render_slide(
     if let Some(bg) = &slide.background_image {
         render_background_image(doc, bg, &mut frame);
     }
-    for el in &slide.elements {
+    for el in slide.elements.iter().filter(|e| !e.hidden()) {
         match el {
             Element::Text(t) => render_text(fonts, doc, slide, t, &mut frame)?,
             Element::Image(i) => render_image(doc, i, &mut frame),

@@ -26,7 +26,9 @@ use pp6core::{Command, ShowState};
 use crate::thumbs::ThumbRequest;
 use crate::ui::{UiAction, UiState, color32, paint_error};
 
+mod arrange;
 mod image;
+mod snap;
 mod text;
 
 const RULER: f32 = 18.0;
@@ -54,6 +56,9 @@ enum Tab {
     Image,
     /// Image adjustments (opens from the image toolbar or the background image).
     Adjust,
+    /// Arrange, align, distribute, exact position.
+    Position,
+    Layers,
     Slide,
 }
 
@@ -76,6 +81,9 @@ struct Drag {
     now_rotation: f64,
     /// Resizing keeps the shape (images by default; Shift switches).
     keep_aspect: bool,
+    /// Elements moved (several when a group is dragged): index, frame and rotation
+    /// at the start. With several, `frame` is their combined bounds.
+    members: Vec<(usize, doc::Rect, f64)>,
     /// Preview document for the canvas while dragging.
     preview: Option<(doc::Rect, f64, Arc<doc::Document>)>,
 }
@@ -87,8 +95,26 @@ pub struct EditState {
     pub close_requested: bool,
     /// Selected slide (group, slide index).
     sel: Option<(usize, usize)>,
-    /// Selected element (index into the slide's elements).
+    /// Selected element (index into the slide's elements); the primary one when
+    /// several are selected.
     element: Option<usize>,
+    /// The other selected elements (Shift-click, marquee).
+    multi: Vec<usize>,
+    /// Marquee being dragged on the empty canvas (canvas pixels).
+    marquee: Option<(Pos2, Pos2)>,
+    /// Snap guides of the drag in progress.
+    guides: Vec<snap::Guide>,
+    /// Bottom bar toggles: snapping (on unless `no_snap`), guides, safe area, grid.
+    no_snap: bool,
+    hide_guides: bool,
+    safe_area: bool,
+    grid: bool,
+    /// Tab (`false`) / Shift+Tab (`true`) pressed with nothing focused this frame.
+    tab_pressed: Option<bool>,
+    /// Layer being dragged in the Layers tab.
+    layer_drag: Option<usize>,
+    /// Layer being renamed: element index and the name typed so far.
+    layer_rename: Option<(usize, String)>,
     text: String,
     /// Which text box (path, slide UUID, element) `text` was loaded from.
     text_for: Option<(PathBuf, String, usize)>,
@@ -131,16 +157,42 @@ impl EditState {
         self.sel = Some((group, slide));
     }
 
-    /// Select a text box too (development / screenshots).
+    /// Select an element too; again to add more (development / screenshots).
     pub fn select_element(&mut self, element: usize) {
-        self.element = Some(element);
+        if self.element.is_none() {
+            self.element = Some(element);
+        } else {
+            self.multi.push(element);
+        }
     }
 
     fn select_slide(&mut self, g: usize, s: usize) {
         if self.sel != Some((g, s)) {
             self.sel = Some((g, s));
             self.element = None;
+            self.multi.clear();
             self.drag = None;
+        }
+    }
+
+    /// Selected elements, the primary one first.
+    fn selection(&self) -> Vec<usize> {
+        self.element
+            .into_iter()
+            .chain(self.multi.iter().copied())
+            .collect()
+    }
+
+    /// Add `e` to the selection, or take it out if it's in.
+    fn toggle(&mut self, e: usize) {
+        if self.element == Some(e) {
+            self.element = (!self.multi.is_empty()).then(|| self.multi.remove(0));
+        } else if let Some(i) = self.multi.iter().position(|m| *m == e) {
+            self.multi.remove(i);
+        } else if self.element.is_none() {
+            self.element = Some(e);
+        } else {
+            self.multi.push(e);
         }
     }
 }
@@ -210,6 +262,7 @@ fn new_text_box(d: &doc::Document, g: usize, s: usize) -> doc::TextBox {
             n.frame = frame;
             n.rotation = 0.0;
             n.locked = false;
+            n.hidden = false;
             n.paragraphs = vec![doc::Paragraph {
                 align,
                 line_spacing: 1.0,
@@ -230,6 +283,7 @@ fn new_text_box(d: &doc::Document, g: usize, s: usize) -> doc::TextBox {
             rotation: 0.0,
             opacity: 1.0,
             locked: false,
+            hidden: false,
             valign: doc::VAlign::Middle,
             fill: None,
             corner_radius: 0.0,
@@ -330,6 +384,33 @@ pub fn editor(
             .iter()
             .position(|g| !g.slides.is_empty())
             .map(|g| (g, 0));
+    }
+    if let Some((g, s)) = st.edit.sel {
+        st.edit
+            .multi
+            .retain(|&e| element(d, g, s, e).and_then(Element::frame).is_some());
+        if st.edit.element.is_none() {
+            st.edit.multi.clear();
+        }
+    }
+    // Tab with nothing focused cycles through the slide's elements instead of
+    // moving keyboard focus to the first button.
+    if st.edit.session.is_none() && ui.memory(|m| m.focused().is_none()) {
+        let tab = ui.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Key {
+                    key: egui::Key::Tab,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => Some(modifiers.shift),
+                _ => None,
+            })
+        });
+        if tab.is_some() {
+            ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+            st.edit.tab_pressed = tab;
+        }
     }
     if let (Some((g, s)), Some(e)) = (st.edit.sel, st.edit.element)
         && element(d, g, s, e).and_then(Element::frame).is_none()
@@ -558,6 +639,23 @@ fn context_bar(
                     );
                     return;
                 };
+                let count = st.edit.selection().len();
+                if count > 1 {
+                    ui.label(RichText::new(format!("{count} selected")).strong());
+                    ui.separator();
+                    if ui
+                        .button("Align…")
+                        .on_hover_text("Align, distribute and arrange the selection")
+                        .clicked()
+                    {
+                        st.edit.tab = Tab::Position;
+                    }
+                    ui.label(
+                        RichText::new("Drag to move them together; Shift-click to add or remove one.")
+                            .weak(),
+                    );
+                    return;
+                }
                 let Some(el) = element(d, g, s, e) else { return };
                 match el {
                     Element::Text(_) => text::toolbar(ui, st, actions, path, d, (g, s, e)),
@@ -606,9 +704,8 @@ fn bottom_bar(
                 // Position readout (live while dragging).
                 let geom = match (&st.edit.drag, st.edit.sel, st.edit.element) {
                     (Some(dr), _, _) => Some((dr.now_frame, dr.now_rotation)),
-                    (None, Some((g, s)), Some(e)) => {
-                        text_box(d, g, s, e).map(|t| (t.frame, t.rotation))
-                    }
+                    (None, Some((g, s)), Some(e)) => element(d, g, s, e)
+                        .and_then(|el| el.frame().map(|f| (f, el.rotation()))),
                     _ => None,
                 };
                 let readout = match geom {
@@ -644,6 +741,19 @@ fn bottom_bar(
                             }
                         }
                     });
+                ui.separator();
+                let mut snap_on = !st.edit.no_snap;
+                ui.checkbox(&mut snap_on, "Snap")
+                    .on_hover_text("Snap to the canvas, safe area and other elements while dragging (hold Alt to drag freely)");
+                st.edit.no_snap = !snap_on;
+                let mut guides = !st.edit.hide_guides;
+                ui.checkbox(&mut guides, "Guides")
+                    .on_hover_text("Show the magenta snap guides");
+                st.edit.hide_guides = !guides;
+                ui.checkbox(&mut st.edit.safe_area, "Safe area")
+                    .on_hover_text("Show the title-safe area (5% in from each edge)");
+                ui.checkbox(&mut st.edit.grid, "Grid")
+                    .on_hover_text("Show a grid and snap to it");
                 ui.separator();
                 let Some((g, s)) = st.edit.sel else { return };
                 let slide = &d.groups[g].slides[s];
@@ -1210,9 +1320,11 @@ fn inspector(
     d: &doc::Document,
 ) {
     ui.horizontal(|ui| {
+        // Effects and Adjust open from the toolbars (side panels with a Back button).
         ui.selectable_value(&mut st.edit.tab, Tab::Text, "Text");
-        ui.selectable_value(&mut st.edit.tab, Tab::Effects, "Effects");
         ui.selectable_value(&mut st.edit.tab, Tab::Image, "Image");
+        ui.selectable_value(&mut st.edit.tab, Tab::Position, "Position");
+        ui.selectable_value(&mut st.edit.tab, Tab::Layers, "Layers");
         ui.selectable_value(&mut st.edit.tab, Tab::Slide, "Slide");
     });
     ui.separator();
@@ -1246,6 +1358,8 @@ fn inspector(
             image::image_tab(ui, st, actions, path, d, (g, s, e.unwrap_or(usize::MAX)));
         }
         Tab::Adjust => image::adjust_tab(ui, st, actions, path, d, (g, s)),
+        Tab::Position => arrange::position_tab(ui, st, actions, path, d, (g, s)),
+        Tab::Layers => arrange::layers_tab(ui, st, actions, path, d, (g, s)),
         Tab::Slide => slide_tab(ui, st, actions, path, d, g, s),
     }
 }
@@ -1482,6 +1596,7 @@ struct Item<'a> {
     frame: doc::Rect,
     rotation: f64,
     locked: bool,
+    hidden: bool,
     uuid: &'a str,
     text: bool,
 }
@@ -1492,6 +1607,7 @@ impl<'a> Item<'a> {
             frame: e.frame()?,
             rotation: e.rotation(),
             locked: e.locked(),
+            hidden: e.hidden(),
             uuid: e.uuid(),
             text: matches!(e, Element::Text(_)),
         })
@@ -1540,17 +1656,122 @@ const HANDLES: [(i8, i8); 8] = [
     (-1, 0),
 ];
 
-/// Where the drag would put the element, given the pointer (canvas pixels).
-fn drag_update(dr: &mut Drag, p: Pos2) {
+/// Axis-aligned bounds of a (possibly rotated) box, canvas pixels.
+fn aabb(f: &doc::Rect, rotation: f64) -> snap::Bounds {
+    if rotation.rem_euclid(360.0) == 0.0 {
+        return snap::Bounds::of(f);
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for (hx, hy) in [(-1, -1), (1, -1), (1, 1), (-1, 1)] {
+        let p = handle_pos(f, rotation, hx, hy);
+        x0 = x0.min(f64::from(p.x));
+        y0 = y0.min(f64::from(p.y));
+        x1 = x1.max(f64::from(p.x));
+        y1 = y1.max(f64::from(p.y));
+    }
+    snap::Bounds { x0, y0, x1, y1 }
+}
+
+fn bounds_rect(b: &snap::Bounds) -> doc::Rect {
+    doc::Rect {
+        x: b.x0,
+        y: b.y0,
+        width: b.x1 - b.x0,
+        height: b.y1 - b.y0,
+    }
+}
+
+/// `r` moved and scaled the way `from` became `to`.
+fn map_rect(r: &doc::Rect, from: &doc::Rect, to: &doc::Rect) -> doc::Rect {
+    let sx = if from.width > 0.0 {
+        to.width / from.width
+    } else {
+        1.0
+    };
+    let sy = if from.height > 0.0 {
+        to.height / from.height
+    } else {
+        1.0
+    };
+    doc::Rect {
+        x: (to.x + (r.x - from.x) * sx).round(),
+        y: (to.y + (r.y - from.y) * sy).round(),
+        width: (r.width * sx).round().max(1.0),
+        height: (r.height * sy).round().max(1.0),
+    }
+}
+
+impl Drag {
+    /// Each dragged element's frame and rotation as the drag now has them.
+    fn member_frames(&self) -> Vec<(usize, doc::Rect, f64)> {
+        if self.members.len() <= 1 {
+            return vec![(self.element, self.now_frame, self.now_rotation)];
+        }
+        self.members
+            .iter()
+            .map(|(e, r, rot)| (*e, map_rect(r, &self.frame, &self.now_frame), *rot))
+            .collect()
+    }
+
+    fn changed(&self) -> bool {
+        self.now_frame != self.frame || self.now_rotation != self.rotation
+    }
+}
+
+/// Where the drag would put the element(s), given the pointer (canvas pixels).
+/// `snap`: the targets when snapping is on (and Alt isn't held); `one_axis`: Shift
+/// while moving. Returns the snap guides to show.
+fn drag_update(
+    dr: &mut Drag,
+    p: Pos2,
+    snap: Option<&snap::Targets>,
+    one_axis: bool,
+) -> Vec<snap::Guide> {
     let f = dr.frame;
+    let mut guides = Vec::new();
     match dr.grab {
         Grab::Move => {
-            let delta = p - dr.start;
-            dr.now_frame = doc::Rect {
+            let mut delta = p - dr.start;
+            if one_axis {
+                if delta.x.abs() >= delta.y.abs() {
+                    delta.y = 0.0;
+                } else {
+                    delta.x = 0.0;
+                }
+            }
+            let mut nf = doc::Rect {
                 x: (f.x + f64::from(delta.x)).round(),
                 y: (f.y + f64::from(delta.y)).round(),
                 ..f
             };
+            if let Some(t) = snap {
+                let (mut sx, mut sy, g) = snap::snap_move(&aabb(&nf, dr.rotation), t);
+                let keep_x = !one_axis || delta.y == 0.0;
+                let keep_y = !one_axis || delta.x == 0.0;
+                if !keep_x {
+                    sx = 0.0;
+                }
+                if !keep_y {
+                    sy = 0.0;
+                }
+                nf.x += sx;
+                nf.y += sy;
+                guides =
+                    g.into_iter()
+                        .filter(|g| {
+                            let axis = match g {
+                                snap::Guide::Line { axis, .. }
+                                | snap::Guide::Spacing { axis, .. } => *axis,
+                            };
+                            if axis == snap::Axis::X {
+                                keep_x
+                            } else {
+                                keep_y
+                            }
+                        })
+                        .collect();
+            }
+            dr.now_frame = nf;
         }
         Grab::Resize(hx, hy) => {
             // In the box's own axes: the grabbed edges follow the pointer, the
@@ -1584,12 +1805,46 @@ fn drag_update(dr: &mut Drag, p: Pos2) {
             );
             let c = centre(&f) + shift;
             let (w, h) = (f.width + dw, f.height + dh);
-            dr.now_frame = doc::Rect {
+            let mut nf = doc::Rect {
                 x: (f64::from(c.x) - w / 2.0).round(),
                 y: (f64::from(c.y) - h / 2.0).round(),
                 width: w,
                 height: h,
             };
+            // Edges snap when the box is upright and free to change shape.
+            if let Some(t) = snap
+                && dr.rotation.rem_euclid(360.0) == 0.0
+                && !dr.keep_aspect
+            {
+                let pts = |h: i8| match h {
+                    1 => Some(snap::Points::High),
+                    -1 => Some(snap::Points::Low),
+                    _ => None,
+                };
+                let (sx, sy, g) = snap::snap_resize(&snap::Bounds::of(&nf), pts(hx), pts(hy), t);
+                let mut s = nf;
+                match hx {
+                    1 => s.width += sx,
+                    -1 => {
+                        s.x += sx;
+                        s.width -= sx;
+                    }
+                    _ => {}
+                }
+                match hy {
+                    1 => s.height += sy,
+                    -1 => {
+                        s.y += sy;
+                        s.height -= sy;
+                    }
+                    _ => {}
+                }
+                if s.width >= MIN_SIZE && s.height >= MIN_SIZE {
+                    nf = s;
+                    guides = g;
+                }
+            }
+            dr.now_frame = nf;
         }
         Grab::Rotate => {
             let v = p - centre(&f);
@@ -1599,7 +1854,13 @@ fn drag_update(dr: &mut Drag, p: Pos2) {
             }
         }
     }
+    guides
 }
+
+/// Magenta, for snap guides (Canva-style).
+const GUIDE: Color32 = Color32::from_rgb(255, 40, 200);
+/// Grid spacing when the grid is on, canvas pixels.
+const GRID: f64 = 40.0;
 
 fn canvas(
     ui: &mut egui::Ui,
@@ -1664,11 +1925,12 @@ fn canvas(
         let l = to_local(f, r, p);
         (l.x + f.width as f32 / 2.0, l.y + f.height as f32 / 2.0)
     };
-    let (pressed, down, shift) = ui.input(|i| {
+    let (pressed, down, shift, alt) = ui.input(|i| {
         (
             i.pointer.primary_pressed(),
             i.pointer.primary_down(),
             i.modifiers.shift,
+            i.modifiers.alt,
         )
     });
     let mut session_owns = st.edit.session_drag;
@@ -1710,23 +1972,25 @@ fn canvas(
         .map(|x| text::preview(x, d));
     let shown = match st.edit.drag.as_mut() {
         _ if session_preview.is_some() => session_preview.clone().unwrap_or_else(|| d.clone()),
-        Some(dr) if dr.now_frame != dr.frame || dr.now_rotation != dr.rotation => {
+        Some(dr) if dr.changed() => {
             if dr
                 .preview
                 .as_ref()
                 .is_none_or(|(f, r, _)| *f != dr.now_frame || *r != dr.now_rotation)
             {
                 let mut p = (**d).clone();
-                match p.groups[g].slides[s].elements.get_mut(dr.element) {
-                    Some(Element::Text(t)) => {
-                        t.frame = dr.now_frame;
-                        t.rotation = dr.now_rotation;
+                for (e, f, r) in dr.member_frames() {
+                    match p.groups[g].slides[s].elements.get_mut(e) {
+                        Some(Element::Text(t)) => {
+                            t.frame = f;
+                            t.rotation = r;
+                        }
+                        Some(Element::Image(i)) => {
+                            i.frame = f;
+                            i.rotation = r;
+                        }
+                        _ => {}
                     }
-                    Some(Element::Image(i)) => {
-                        i.frame = dr.now_frame;
-                        i.rotation = dr.now_rotation;
-                    }
-                    _ => {}
                 }
                 dr.preview = Some((dr.now_frame, dr.now_rotation, Arc::new(p)));
             }
@@ -1769,23 +2033,62 @@ fn canvas(
         }
     }
 
-    // Element geometry as shown (dragged element at its new place).
-    let dragged = st
+    // Grid and safe area (bottom bar toggles).
+    if st.edit.grid {
+        let step = GRID as f32 * scale;
+        if step >= 4.0 {
+            let stroke = Stroke::new(1.0, Color32::from_white_alpha(28));
+            let mut x = rect.left() + step;
+            while x < rect.right() {
+                painter.line_segment(
+                    [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                    stroke,
+                );
+                x += step;
+            }
+            let mut y = rect.top() + step;
+            while y < rect.bottom() {
+                painter.line_segment(
+                    [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+                    stroke,
+                );
+                y += step;
+            }
+        }
+    }
+    if st.edit.safe_area {
+        let inset = Vec2::new(cw, ch) * snap::SAFE_INSET as f32 * scale;
+        painter.rect_stroke(
+            rect.shrink2(inset),
+            0.0,
+            Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 220, 80, 150)),
+            StrokeKind::Middle,
+        );
+    }
+
+    // Selection (primary first).
+    let selection: Vec<usize> = st.edit.selection();
+    // Element geometry as shown (dragged elements at their new place).
+    let dragged: Vec<(usize, doc::Rect, f64)> = st
         .edit
         .drag
         .as_ref()
-        .map(|dr| (dr.element, dr.now_frame, dr.now_rotation));
-    let geom = |e: usize, t: &Item<'_>| match dragged {
-        Some((de, f, r)) if de == e => (f, r),
-        _ => (t.frame, t.rotation),
+        .map(Drag::member_frames)
+        .unwrap_or_default();
+    let geom = |e: usize, t: &Item<'_>| {
+        dragged
+            .iter()
+            .find(|(de, _, _)| *de == e)
+            .map_or((t.frame, t.rotation), |(_, f, r)| (*f, *r))
     };
-    let selected_el = st.edit.element;
-    let boxes: Vec<(usize, Item<'_>)> = slide
+    let all: Vec<(usize, Item<'_>)> = slide
         .elements
         .iter()
         .enumerate()
         .filter_map(|(i, e)| Item::of(e).map(|it| (i, it)))
         .collect();
+    // Hidden elements can't be clicked on the canvas (select them in Layers).
+    let boxes: Vec<(usize, Item<'_>)> = all.iter().copied().filter(|(_, t)| !t.hidden).collect();
     let pointer = resp.hover_pos().map(to_canvas);
     let topmost_at = |p: Pos2| {
         boxes
@@ -1797,16 +2100,40 @@ fn canvas(
             })
             .map(|(e, _)| *e)
     };
-    let hovered = if st.edit.drag.is_none() {
+    let hovered = if st.edit.drag.is_none() && st.edit.marquee.is_none() {
         pointer.and_then(topmost_at)
     } else {
         None
     };
+    let item = |e: usize| all.iter().find(|(i, _)| *i == e).map(|(_, t)| *t);
+    let multi = selection.len() > 1;
+    // The selection's bounds when several are selected (group handles).
+    let group_bounds = multi
+        .then(|| {
+            selection
+                .iter()
+                .filter_map(|&e| item(e).map(|t| aabb(&geom(e, &t).0, geom(e, &t).1)))
+                .reduce(|a, b| a.union(&b))
+        })
+        .flatten();
 
-    // What a press at `p` (screen) would grab on the selected element.
+    // What a press at `p` (screen) would grab on the selection.
     let grab_at = |p: Pos2| -> Option<Grab> {
-        let e = selected_el?;
-        let t = boxes.iter().find(|(i, _)| *i == e)?.1;
+        if multi {
+            let b = bounds_rect(&group_bounds?);
+            for (hx, hy) in HANDLES {
+                if p.distance(to_screen(handle_pos(&b, 0.0, hx, hy))) <= HANDLE + 3.0 {
+                    return Some(Grab::Resize(hx, hy));
+                }
+            }
+            let c = to_canvas(p);
+            return selection
+                .iter()
+                .filter_map(|&e| item(e))
+                .any(|t| hit(&t.frame, t.rotation, c))
+                .then_some(Grab::Move);
+        }
+        let t = item(*selection.first()?)?;
         if t.locked {
             return None;
         }
@@ -1825,13 +2152,16 @@ fn canvas(
     };
 
     // Outlines and handles.
-    for (e, t) in &boxes {
+    for (e, t) in &all {
+        let selected = selection.contains(e);
+        if t.hidden && !selected {
+            continue;
+        }
         let (f, r) = geom(*e, t);
         let pts: Vec<Pos2> = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
             .iter()
             .map(|&(hx, hy)| to_screen(handle_pos(&f, r, hx, hy)))
             .collect();
-        let selected = st.edit.element == Some(*e);
         let stroke = if selected {
             Stroke::new(1.5, SELECT)
         } else if hovered == Some(*e) {
@@ -1839,7 +2169,20 @@ fn canvas(
         } else {
             Stroke::new(1.0, Color32::from_white_alpha(45))
         };
-        painter.add(egui::Shape::closed_line(pts.clone(), stroke));
+        if t.hidden {
+            let mut closed = pts.clone();
+            closed.push(pts[0]);
+            painter.add(egui::Shape::dashed_line(&closed, stroke, 5.0, 4.0));
+            painter.text(
+                pts[0] - Vec2::new(0.0, 4.0),
+                Align2::LEFT_BOTTOM,
+                "hidden",
+                FontId::proportional(11.0),
+                Color32::LIGHT_GRAY,
+            );
+        } else {
+            painter.add(egui::Shape::closed_line(pts.clone(), stroke));
+        }
         // Text taller than its box: a red badge (the strip tile gets one too).
         if st
             .canvas
@@ -1857,7 +2200,25 @@ fn canvas(
                 Color32::WHITE,
             );
         }
-        if selected && !t.locked {
+        // A picture that can't be shown: say so where it would be.
+        if !t.text
+            && let Some(msg) = st.canvas.as_ref().and_then(|c| c.problem(t.uuid))
+        {
+            let r = Rect::from_points(&pts);
+            painter.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(80, 20, 20, 160));
+            painter.text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                if msg.contains("wasn't found") {
+                    "Image not found"
+                } else {
+                    "Image can't be shown"
+                },
+                FontId::proportional(12.0),
+                Color32::WHITE,
+            );
+        }
+        if selected && !multi && !t.locked {
             let top = to_screen(handle_pos(&f, r, 0, -1));
             let arm = top + rotate(Vec2::new(0.0, -ROTATE_ARM), r);
             painter.line_segment([top, arm], Stroke::new(1.0, SELECT));
@@ -1883,6 +2244,36 @@ fn canvas(
             );
         }
     }
+    if let Some(b) = group_bounds {
+        let b = bounds_rect(&b);
+        let r = Rect::from_min_max(
+            to_screen(Pos2::new(b.x as f32, b.y as f32)),
+            to_screen(Pos2::new((b.x + b.width) as f32, (b.y + b.height) as f32)),
+        );
+        let pts = [
+            r.left_top(),
+            r.right_top(),
+            r.right_bottom(),
+            r.left_bottom(),
+            r.left_top(),
+        ];
+        painter.add(egui::Shape::dashed_line(
+            &pts,
+            Stroke::new(1.0, SELECT),
+            6.0,
+            4.0,
+        ));
+        for (hx, hy) in HANDLES {
+            let c = to_screen(handle_pos(&b, 0.0, hx, hy));
+            painter.rect(
+                Rect::from_center_size(c, Vec2::splat(HANDLE * 2.0)),
+                1.0,
+                Color32::WHITE,
+                Stroke::new(1.0, SELECT),
+                StrokeKind::Middle,
+            );
+        }
+    }
     if let Some(dr) = &st.edit.drag
         && dr.grab == Grab::Rotate
         && let Some(p) = resp.hover_pos()
@@ -1893,6 +2284,21 @@ fn canvas(
             format!("{:.0}°", dr.now_rotation),
             FontId::proportional(13.0),
             Color32::WHITE,
+        );
+    }
+    // Snap guides (only while dragging).
+    if st.edit.drag.is_some() && !st.edit.hide_guides {
+        paint_guides(&painter, &st.edit.guides, &to_screen);
+    }
+    // Marquee.
+    if let Some((a, b)) = st.edit.marquee {
+        let r = Rect::from_two_pos(to_screen(a), to_screen(b));
+        painter.rect(
+            r,
+            0.0,
+            Color32::from_rgba_unmultiplied(90, 160, 255, 30),
+            Stroke::new(1.0, SELECT),
+            StrokeKind::Middle,
         );
     }
 
@@ -1926,81 +2332,197 @@ fn canvas(
         && !session_owns
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
     {
-        let grab = grab_at(origin).map(|g| (selected_el, g)).or_else(|| {
+        let grab = grab_at(origin).or_else(|| {
+            // An element that isn't selected: select it (Shift adds it) and move.
             let e = topmost_at(to_canvas(origin))?;
-            st.edit.element = Some(e);
-            let t = boxes.iter().find(|(i, _)| *i == e)?.1;
-            (!t.locked).then_some((Some(e), Grab::Move))
+            if shift {
+                st.edit.toggle(e);
+            } else {
+                st.edit.element = Some(e);
+                st.edit.multi.clear();
+            }
+            Some(Grab::Move)
         });
-        if let Some((Some(e), grab)) = grab
-            && let Some((_, t)) = boxes.iter().find(|(i, _)| *i == e)
-        {
-            st.edit.drag = Some(Drag {
-                grab,
-                element: e,
-                start: to_canvas(origin),
-                frame: t.frame,
-                rotation: t.rotation,
-                now_frame: t.frame,
-                now_rotation: t.rotation,
-                keep_aspect: !t.text,
-                preview: None,
+        let members: Vec<(usize, doc::Rect, f64)> = st
+            .edit
+            .selection()
+            .into_iter()
+            .filter_map(|e| {
+                item(e)
+                    .filter(|t| !t.locked)
+                    .map(|t| (e, t.frame, t.rotation))
+            })
+            .collect();
+        match grab {
+            Some(grab) if !members.is_empty() => {
+                let single = members.len() == 1;
+                let (frame, rotation) = if single {
+                    (members[0].1, members[0].2)
+                } else {
+                    let b = members
+                        .iter()
+                        .map(|(_, f, r)| aabb(f, *r))
+                        .reduce(|a, b| a.union(&b))
+                        .unwrap_or(snap::Bounds::of(&members[0].1));
+                    (bounds_rect(&b), 0.0)
+                };
+                if single || grab != Grab::Rotate {
+                    let text = single && item(members[0].0).is_some_and(|t| t.text);
+                    st.edit.drag = Some(Drag {
+                        grab,
+                        element: members[0].0,
+                        start: to_canvas(origin),
+                        frame,
+                        rotation,
+                        now_frame: frame,
+                        now_rotation: rotation,
+                        keep_aspect: !text,
+                        members,
+                        preview: None,
+                    });
+                }
+            }
+            Some(_) => {}
+            None => {
+                // Empty canvas: a marquee.
+                let c = to_canvas(origin);
+                st.edit.marquee = Some((c, c));
+            }
+        }
+    }
+    if let Some(p) = ui.input(|i| i.pointer.interact_pos()) {
+        if let Some(dr) = st.edit.drag.as_mut() {
+            let text = dr.members.len() == 1 && item(dr.element).is_some_and(|t| t.text);
+            // Images and groups keep their shape unless Shift is held; text boxes
+            // the other way round.
+            dr.keep_aspect = shift ^ !text;
+            let targets = (!st.edit.no_snap && !alt).then(|| {
+                let others: Vec<snap::Bounds> = boxes
+                    .iter()
+                    .filter(|(e, _)| !dr.members.iter().any(|(m, _, _)| m == e))
+                    .map(|(_, t)| aabb(&t.frame, t.rotation))
+                    .collect();
+                snap::Targets::new(
+                    (f64::from(cw), f64::from(ch)),
+                    others,
+                    st.edit.grid.then_some(GRID),
+                    scale,
+                )
             });
+            let one_axis = shift && dr.grab == Grab::Move;
+            st.edit.guides = drag_update(dr, to_canvas(p), targets.as_ref(), one_axis);
+        }
+        if let Some((_, b)) = st.edit.marquee.as_mut() {
+            *b = to_canvas(p);
         }
     }
-    if let Some(dr) = st.edit.drag.as_mut()
-        && let Some(p) = ui.input(|i| i.pointer.interact_pos())
-    {
-        let is_text = boxes.iter().any(|(i, t)| *i == dr.element && t.text);
-        // Images keep their shape unless Shift is held; text boxes the other way round.
-        dr.keep_aspect = shift ^ !is_text;
-        drag_update(dr, to_canvas(p));
-    }
-    if resp.drag_stopped()
-        && let Some(dr) = st.edit.drag.take()
-    {
-        if dr.now_frame != dr.frame {
-            edit(
-                actions,
-                path,
-                Op::SetFrame {
-                    group: g,
-                    slide: s,
-                    element: dr.element,
-                    frame: dr.now_frame,
-                },
-            );
+    if resp.drag_stopped() {
+        st.edit.guides.clear();
+        if let Some(dr) = st.edit.drag.take()
+            && dr.changed()
+        {
+            if dr.members.len() == 1 {
+                if dr.now_frame != dr.frame {
+                    edit(
+                        actions,
+                        path,
+                        Op::SetFrame {
+                            group: g,
+                            slide: s,
+                            element: dr.element,
+                            frame: dr.now_frame,
+                        },
+                    );
+                }
+                if dr.now_rotation != dr.rotation {
+                    edit(
+                        actions,
+                        path,
+                        Op::SetRotation {
+                            group: g,
+                            slide: s,
+                            element: dr.element,
+                            degrees: dr.now_rotation,
+                        },
+                    );
+                }
+            } else {
+                let edits = dr
+                    .member_frames()
+                    .into_iter()
+                    .map(|(e, frame, _)| Op::SetFrame {
+                        group: g,
+                        slide: s,
+                        element: e,
+                        frame,
+                    })
+                    .collect();
+                edit(
+                    actions,
+                    path,
+                    Op::Batch {
+                        label: if dr.grab == Grab::Move {
+                            "Move"
+                        } else {
+                            "Resize"
+                        }
+                        .into(),
+                        edits,
+                    },
+                );
+            }
         }
-        if dr.now_rotation != dr.rotation {
-            edit(
-                actions,
-                path,
-                Op::SetRotation {
-                    group: g,
-                    slide: s,
-                    element: dr.element,
-                    degrees: dr.now_rotation,
-                },
-            );
+        if let Some((a, b)) = st.edit.marquee.take() {
+            let m = snap::Bounds {
+                x0: f64::from(a.x.min(b.x)),
+                y0: f64::from(a.y.min(b.y)),
+                x1: f64::from(a.x.max(b.x)),
+                y1: f64::from(a.y.max(b.y)),
+            };
+            let picked: Vec<usize> = boxes
+                .iter()
+                .filter(|(_, t)| {
+                    let b = aabb(&t.frame, t.rotation);
+                    b.x0 < m.x1 && b.x1 > m.x0 && b.y0 < m.y1 && b.y1 > m.y0
+                })
+                .map(|(e, _)| *e)
+                .collect();
+            if !shift {
+                st.edit.element = None;
+                st.edit.multi.clear();
+            }
+            for e in picked {
+                if !st.edit.selection().contains(&e) {
+                    st.edit.toggle(e);
+                }
+            }
         }
     }
     // (While editing text, the canvas has keyboard focus and egui reports Enter /
     // Space as clicks; the session handles the pointer itself.)
     if resp.clicked() && !session_owns && st.edit.session.is_none() {
-        st.edit.element = resp
+        let e = resp
             .interact_pointer_pos()
             .map(to_canvas)
             .and_then(topmost_at);
+        match e {
+            Some(e) if shift => st.edit.toggle(e),
+            _ => {
+                st.edit.element = e;
+                st.edit.multi.clear();
+            }
+        }
     }
     // Double-click a text box: edit its text in place.
     if resp.double_clicked()
         && !session_owns
         && let Some(p) = resp.interact_pointer_pos().map(to_canvas)
         && let Some(e) = topmost_at(p)
-        && let Some((_, t)) = boxes.iter().find(|(i, _)| *i == e)
+        && let Some(t) = item(e)
         && t.text
     {
         st.edit.drag = None;
+        st.edit.multi.clear();
         let at = local_of(&t.frame, t.rotation, p);
         text::begin(st, d, (g, s, e), Some(at), scale * ppp, now);
     }
@@ -2026,21 +2548,39 @@ fn canvas(
         }
     }
 
-    // Keyboard: arrows nudge (1 px, Shift 10 px), Enter edits the text, Esc
-    // deselects. Never while typing.
-    if st.edit.session.is_none()
-        && ui.memory(|m| m.focused().is_none())
+    let keys_free = st.edit.session.is_none() && ui.memory(|m| m.focused().is_none());
+    // Tab / Shift+Tab: select the next / previous element.
+    if keys_free && let Some(back) = st.edit.tab_pressed.take() {
+        let order: Vec<usize> = boxes.iter().map(|(e, _)| *e).collect();
+        if !order.is_empty() {
+            let at = st
+                .edit
+                .element
+                .and_then(|e| order.iter().position(|o| *o == e));
+            let next = match (at, back) {
+                (None, false) => 0,
+                (None, true) => order.len() - 1,
+                (Some(i), false) => (i + 1) % order.len(),
+                (Some(i), true) => (i + order.len() - 1) % order.len(),
+            };
+            st.edit.element = Some(order[next]);
+            st.edit.multi.clear();
+        }
+    }
+    st.edit.tab_pressed = None;
+
+    // Keyboard: arrows nudge (1 px, Shift 10 px), Enter edits the text, Delete
+    // removes, Esc deselects. Never while typing.
+    if keys_free
+        && !multi
         && ui.input(|i| i.key_pressed(egui::Key::Enter))
         && let Some(e) = st.edit.element
-        && boxes.iter().any(|(i, t)| *i == e && t.text)
+        && item(e).is_some_and(|t| t.text)
     {
         text::begin(st, d, (g, s, e), None, scale * ppp, now);
     }
-    if st.edit.session.is_none()
-        && ui.memory(|m| m.focused().is_none())
-        && let Some(e) = st.edit.element
-        && let Some((_, t)) = boxes.iter().find(|(i, _)| *i == e)
-    {
+    let selection = st.edit.selection();
+    if keys_free && !selection.is_empty() {
         let (dx, dy, esc, delete) = ui.input(|i| {
             let step = if i.modifiers.shift { 10.0 } else { 1.0 };
             let k = |key| if i.key_pressed(key) { step } else { 0.0 };
@@ -2052,64 +2592,150 @@ fn canvas(
             )
         });
         if delete && st.edit.drag.is_none() {
-            text::send_checked(
-                st,
-                actions,
-                path,
-                d,
-                Op::RemoveElement {
+            let mut sel = selection.clone();
+            sel.sort_unstable_by(|a, b| b.cmp(a));
+            let mut edits: Vec<Op> = sel
+                .into_iter()
+                .map(|e| Op::RemoveElement {
                     group: g,
                     slide: s,
                     element: e,
-                },
-                None,
-            );
+                })
+                .collect();
+            let op = if edits.len() == 1 {
+                edits.remove(0)
+            } else {
+                Op::Batch {
+                    label: "Delete".into(),
+                    edits,
+                }
+            };
+            text::send_checked(st, actions, path, d, op, None);
             st.edit.element = None;
+            st.edit.multi.clear();
             return;
         }
-        if (dx != 0.0 || dy != 0.0) && !t.locked {
-            edit_merging(
-                actions,
-                path,
-                Op::SetFrame {
+        if dx != 0.0 || dy != 0.0 {
+            let moved: Vec<(usize, Item<'_>)> = selection
+                .iter()
+                .filter_map(|&e| item(e).filter(|t| !t.locked).map(|t| (e, t)))
+                .collect();
+            let mut edits: Vec<Op> = moved
+                .iter()
+                .map(|(e, t)| Op::SetFrame {
                     group: g,
                     slide: s,
-                    element: e,
+                    element: *e,
                     frame: doc::Rect {
                         x: t.frame.x + dx,
                         y: t.frame.y + dy,
                         ..t.frame
                     },
-                },
-                format!("nudge:{}:{}", slide.uuid, t.uuid),
+                })
+                .collect();
+            let key = format!(
+                "nudge:{}:{}",
+                slide.uuid,
+                moved
+                    .iter()
+                    .map(|(_, t)| t.uuid)
+                    .collect::<Vec<_>>()
+                    .join(",")
             );
+            match edits.len() {
+                0 => {}
+                1 => edit_merging(actions, path, edits.remove(0), key),
+                _ => edit_merging(
+                    actions,
+                    path,
+                    Op::Batch {
+                        label: "Move".into(),
+                        edits,
+                    },
+                    key,
+                ),
+            }
         }
         if esc {
             st.edit.element = None;
+            st.edit.multi.clear();
         }
     }
 
-    // Rulers, with the selected element's extent marked.
-    let extent = st
-        .edit
-        .element
-        .and_then(|e| boxes.iter().find(|(i, _)| *i == e))
-        .map(|(e, t)| {
-            let (f, r) = geom(*e, t);
-            let pts: Vec<Pos2> = HANDLES
-                .iter()
-                .map(|&(hx, hy)| handle_pos(&f, r, hx, hy))
-                .collect();
-            let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-            for p in pts {
-                x0 = x0.min(p.x);
-                y0 = y0.min(p.y);
-                x1 = x1.max(p.x);
-                y1 = y1.max(p.y);
-            }
-            (x0, x1, y0, y1)
-        });
+    // Rulers, with the selection's extent marked.
+    let extent = selection
+        .iter()
+        .filter_map(|&e| {
+            item(e).map(|t| {
+                let (f, r) = geom(e, &t);
+                aabb(&f, r)
+            })
+        })
+        .reduce(|a, b| a.union(&b))
+        .map(|b| (b.x0 as f32, b.x1 as f32, b.y0 as f32, b.y1 as f32));
     rulers(ui, full, area, rect, scale, extent);
+}
+
+fn paint_guides(painter: &egui::Painter, guides: &[snap::Guide], to_screen: &dyn Fn(Pos2) -> Pos2) {
+    let stroke = Stroke::new(1.0, GUIDE);
+    let pt = |axis: snap::Axis, along: f64, cross: f64| match axis {
+        snap::Axis::X => to_screen(Pos2::new(along as f32, cross as f32)),
+        snap::Axis::Y => to_screen(Pos2::new(cross as f32, along as f32)),
+    };
+    for g in guides {
+        match g {
+            snap::Guide::Line {
+                axis,
+                pos,
+                from,
+                to,
+                ..
+            } => {
+                painter.line_segment([pt(*axis, *pos, *from), pt(*axis, *pos, *to)], stroke);
+            }
+            snap::Guide::Spacing {
+                axis,
+                gaps,
+                cross,
+                gap,
+            } => {
+                for (a, b) in gaps {
+                    // Measured along the axis, at `cross` on the other one.
+                    let (p, q) = match axis {
+                        snap::Axis::X => (
+                            to_screen(Pos2::new(*a as f32, *cross as f32)),
+                            to_screen(Pos2::new(*b as f32, *cross as f32)),
+                        ),
+                        snap::Axis::Y => (
+                            to_screen(Pos2::new(*cross as f32, *a as f32)),
+                            to_screen(Pos2::new(*cross as f32, *b as f32)),
+                        ),
+                    };
+                    painter.line_segment([p, q], stroke);
+                    let tick = match axis {
+                        snap::Axis::X => Vec2::new(0.0, 4.0),
+                        snap::Axis::Y => Vec2::new(4.0, 0.0),
+                    };
+                    painter.line_segment([p - tick, p + tick], stroke);
+                    painter.line_segment([q - tick, q + tick], stroke);
+                    let mid = p + (q - p) / 2.0;
+                    let label = format!("{gap:.0}");
+                    let r = Rect::from_center_size(
+                        mid - tick * 3.0,
+                        Vec2::new(8.0 + 7.0 * label.len() as f32, 16.0),
+                    );
+                    painter.rect_filled(r, 3.0, GUIDE);
+                    painter.text(
+                        r.center(),
+                        Align2::CENTER_CENTER,
+                        label,
+                        FontId::proportional(11.0),
+                        Color32::WHITE,
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn rulers(
@@ -2514,6 +3140,7 @@ mod tests {
                 rotation: 0.0,
                 opacity: 1.0,
                 locked: false,
+                hidden: false,
                 flip_h: false,
                 flip_v: false,
                 media: doc::MediaRef {
@@ -2560,6 +3187,156 @@ mod tests {
             }]
         );
         assert_eq!(h.st.edit.element, None);
+    }
+
+    /// The harness slide with a small image added: text box 0 at (112, 84) 800×600,
+    /// image 1 at (920, 690) 80×40.
+    fn with_image(h: &mut Harness) {
+        let mut d = (*h.doc).clone();
+        d.groups[0].slides[0]
+            .elements
+            .push(Element::Image(Box::new(doc::ImageBox {
+                uuid: new_uuid(),
+                name: "pic".into(),
+                frame: doc::Rect {
+                    x: 920.0,
+                    y: 690.0,
+                    width: 80.0,
+                    height: 40.0,
+                },
+                rotation: 0.0,
+                opacity: 1.0,
+                locked: false,
+                hidden: false,
+                flip_h: false,
+                flip_v: false,
+                media: doc::MediaRef {
+                    path: "Media/none.png".into(),
+                    sha256: None,
+                },
+                adjust: doc::Adjust::default(),
+                src: None,
+            })));
+        h.doc = Arc::new(d);
+    }
+
+    fn shift_click(h: &mut Harness, at: Pos2) {
+        h.mods = egui::Modifiers::SHIFT;
+        h.click(at);
+        h.mods = egui::Modifiers::NONE;
+        h.frame(vec![]);
+    }
+
+    #[test]
+    fn shift_click_selects_several_and_they_move_as_one_step() {
+        let mut h = Harness::new();
+        with_image(&mut h);
+        h.frame(vec![]);
+        h.click(h.at(512.0, 384.0));
+        let p = h.at(960.0, 710.0);
+        shift_click(&mut h, p);
+        assert_eq!(h.st.edit.selection(), vec![0, 1]);
+        let edits = h.drag(
+            h.at(960.0, 710.0),
+            h.at(960.0, 710.0) + Vec2::new(-30.0, -30.0),
+        );
+        match edits.as_slice() {
+            [Op::Batch { edits, .. }] => {
+                assert_eq!(edits.len(), 2, "{edits:?}");
+                let dx = |op: &Op, x0: f64| match op {
+                    Op::SetFrame { frame, .. } => frame.x - x0,
+                    other => panic!("{other:?}"),
+                };
+                assert_eq!(
+                    dx(&edits[0], 112.0),
+                    dx(&edits[1], 920.0),
+                    "same move for both"
+                );
+                assert!(dx(&edits[0], 112.0) < 0.0);
+            }
+            other => panic!("expected one batch, got {other:?}"),
+        }
+        // Shift-click again: out of the selection.
+        let p = h.at(960.0, 710.0);
+        shift_click(&mut h, p);
+        assert_eq!(h.st.edit.selection(), vec![0]);
+    }
+
+    #[test]
+    fn marquee_selects_what_it_touches() {
+        let mut h = Harness::new();
+        with_image(&mut h);
+        h.frame(vec![]);
+        // From the empty bottom-right corner up-left over the image only.
+        let edits = h.drag(h.at(1020.0, 765.0), h.at(950.0, 700.0));
+        assert!(edits.is_empty());
+        assert_eq!(h.st.edit.selection(), vec![1]);
+        assert!(h.st.edit.marquee.is_none());
+    }
+
+    #[test]
+    fn dragging_snaps_to_the_canvas_centre_unless_alt_is_held() {
+        let mut h = Harness::new();
+        with_image(&mut h);
+        h.frame(vec![]);
+        h.click(h.at(960.0, 710.0));
+        // Image centre (960, 710) dragged to 2 canvas px right of the canvas centre.
+        let s = h.scale();
+        let to = h.at(514.0, 300.0);
+        let edits = h.drag(h.at(960.0, 710.0), to);
+        match edits.as_slice() {
+            [Op::SetFrame { frame, .. }] => {
+                assert_eq!(
+                    frame.x + frame.width / 2.0,
+                    512.0,
+                    "snapped to the centre ({s})"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        // Again with Alt: no snapping.
+        h.mods = egui::Modifiers::ALT;
+        let edits = h.drag(h.at(960.0, 710.0), to);
+        h.mods = egui::Modifiers::NONE;
+        match edits.as_slice() {
+            [Op::SetFrame { frame, .. }] => {
+                assert!(
+                    (frame.x + frame.width / 2.0 - 514.0).abs() <= 1.0,
+                    "{frame:?}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn tab_cycles_through_the_elements() {
+        let mut h = Harness::new();
+        with_image(&mut h);
+        h.frame(vec![]);
+        let tab = |shift: bool| egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: if shift {
+                egui::Modifiers::SHIFT
+            } else {
+                egui::Modifiers::NONE
+            },
+        };
+        h.frame(vec![tab(false)]);
+        assert_eq!(h.st.edit.element, Some(0));
+        h.frame(vec![tab(false)]);
+        assert_eq!(h.st.edit.element, Some(1));
+        h.frame(vec![tab(false)]);
+        assert_eq!(h.st.edit.element, Some(0), "wraps round");
+        h.frame(vec![tab(true)]);
+        assert_eq!(h.st.edit.element, Some(1), "Shift+Tab goes back");
+        assert!(
+            h.ctx.memory(|m| m.focused().is_none()),
+            "no button took focus"
+        );
     }
 
     #[test]
@@ -2878,6 +3655,7 @@ mod tests {
             now_frame: f,
             now_rotation: rotation,
             keep_aspect: false,
+            members: vec![(0, f, rotation)],
             preview: None,
         }
     }
@@ -2887,7 +3665,7 @@ mod tests {
         let mut dr = drag(Grab::Resize(1, 1), 0.0);
         dr.keep_aspect = true;
         // Pointer mostly right: the width leads, the height follows at 2:1.
-        drag_update(&mut dr, Pos2::new(100.0, 10.0));
+        drag_update(&mut dr, Pos2::new(100.0, 10.0), None, false);
         assert_eq!(dr.now_frame.width, 300.0);
         assert_eq!(dr.now_frame.height, 150.0);
         assert_eq!(
@@ -2898,7 +3676,7 @@ mod tests {
         // An edge handle: the other side grows evenly about the centre.
         let mut dr = drag(Grab::Resize(0, 1), 0.0);
         dr.keep_aspect = true;
-        drag_update(&mut dr, Pos2::new(0.0, 50.0));
+        drag_update(&mut dr, Pos2::new(0.0, 50.0), None, false);
         assert_eq!((dr.now_frame.width, dr.now_frame.height), (300.0, 150.0));
         assert_eq!(dr.now_frame.x, 50.0);
         assert_eq!(dr.now_frame.y, 100.0);
@@ -2911,7 +3689,7 @@ mod tests {
     #[test]
     fn move_follows_the_pointer_in_whole_pixels() {
         let mut d = drag(Grab::Move, 0.0);
-        drag_update(&mut d, Pos2::new(10.4, -5.6));
+        drag_update(&mut d, Pos2::new(10.4, -5.6), None, false);
         assert_eq!((d.now_frame.x, d.now_frame.y), (110.0, 94.0));
         assert_eq!((d.now_frame.width, d.now_frame.height), (200.0, 100.0));
     }
@@ -2920,18 +3698,18 @@ mod tests {
     fn resize_keeps_the_opposite_edge() {
         // Right edge dragged 50 px right: left edge stays at 100.
         let mut d = drag(Grab::Resize(1, 0), 0.0);
-        drag_update(&mut d, Pos2::new(50.0, 30.0));
+        drag_update(&mut d, Pos2::new(50.0, 30.0), None, false);
         assert_eq!(d.now_frame.x, 100.0);
         assert_eq!(d.now_frame.width, 250.0);
         assert_eq!(d.now_frame.height, 100.0, "edge handle changes one axis");
         // Top-left corner dragged in: the bottom-right corner stays put.
         let mut d = drag(Grab::Resize(-1, -1), 0.0);
-        drag_update(&mut d, Pos2::new(20.0, 10.0));
+        drag_update(&mut d, Pos2::new(20.0, 10.0), None, false);
         assert_eq!((d.now_frame.x, d.now_frame.y), (120.0, 110.0));
         assert_eq!((d.now_frame.width, d.now_frame.height), (180.0, 90.0));
         // Never smaller than the minimum.
         let mut d = drag(Grab::Resize(1, 1), 0.0);
-        drag_update(&mut d, Pos2::new(-1000.0, -1000.0));
+        drag_update(&mut d, Pos2::new(-1000.0, -1000.0), None, false);
         assert_eq!(
             (d.now_frame.width, d.now_frame.height),
             (MIN_SIZE, MIN_SIZE)
@@ -2943,7 +3721,7 @@ mod tests {
         // Rotated 90°: the box's own right edge points down on screen.
         let mut d = drag(Grab::Resize(1, 0), 90.0);
         let left_before = handle_pos(&d.frame, 90.0, -1, 0);
-        drag_update(&mut d, Pos2::new(0.0, 40.0));
+        drag_update(&mut d, Pos2::new(0.0, 40.0), None, false);
         assert!(close(d.now_frame.width, 240.0), "{:?}", d.now_frame);
         let left_after = handle_pos(&d.now_frame, 90.0, -1, 0);
         assert!(
@@ -2956,11 +3734,11 @@ mod tests {
     fn rotate_points_the_handle_at_the_pointer() {
         let mut d = drag(Grab::Rotate, 0.0);
         let c = centre(&d.frame);
-        drag_update(&mut d, c + Vec2::new(100.0, 0.0)); // pointer to the right
+        drag_update(&mut d, c + Vec2::new(100.0, 0.0), None, false); // pointer to the right
         assert_eq!(d.now_rotation, 90.0);
-        drag_update(&mut d, c + Vec2::new(0.0, -100.0)); // straight up
+        drag_update(&mut d, c + Vec2::new(0.0, -100.0), None, false); // straight up
         assert_eq!(d.now_rotation, 0.0);
-        drag_update(&mut d, c + Vec2::new(-100.0, 0.0));
+        drag_update(&mut d, c + Vec2::new(-100.0, 0.0), None, false);
         assert_eq!(d.now_rotation, 270.0);
     }
 

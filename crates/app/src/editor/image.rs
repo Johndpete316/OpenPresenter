@@ -230,6 +230,7 @@ pub fn new_element(d: &doc::Document, im: &Imported) -> ImageBox {
         rotation: 0.0,
         opacity: 1.0,
         locked: false,
+        hidden: false,
         flip_h: false,
         flip_v: false,
         media: im.media.clone(),

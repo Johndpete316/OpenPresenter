@@ -136,6 +136,7 @@ fn inserting_images_needs_native_and_export_leaves_them_out() {
         rotation: 0.0,
         opacity: 1.0,
         locked: false,
+        hidden: false,
         flip_h: false,
         flip_v: false,
         media: MediaRef {
@@ -281,4 +282,65 @@ fn media_paths_resolve_next_to_the_document() {
         PathBuf::from(r"C:\Pics\b.png")
     );
     assert_eq!(abs.file_name(), "b.png");
+}
+
+#[test]
+fn layer_edits_reorder_lock_hide_and_rename() {
+    let (d, _) = with_image();
+    // Image 0 (behind), text 1 (in front).
+    let mut n = d.clone();
+    let front = Edit::MoveElement {
+        group: 0,
+        slide: 0,
+        from: 0,
+        to: 1,
+    };
+    assert_eq!(
+        doc::check(&n, &front),
+        doc::Check::Ok,
+        "order is .pro6-safe"
+    );
+    front.apply(&mut n).unwrap();
+    assert!(matches!(
+        n.groups[0].slides[0].elements[1],
+        Element::Image(_)
+    ));
+    let back = through_pro6(&n);
+    assert!(
+        matches!(back.groups[0].slides[0].elements[1], Element::Image(_)),
+        "order written to .pro6"
+    );
+    let rename = Edit::RenameElement {
+        group: 0,
+        slide: 0,
+        element: 1,
+        name: "Logo".into(),
+    };
+    rename.apply(&mut n).unwrap();
+    assert_eq!(image(&through_pro6(&n)).name, "Logo");
+    let lock = Edit::SetLocked {
+        group: 0,
+        slide: 0,
+        element: 1,
+        locked: true,
+    };
+    assert!(
+        matches!(doc::check(&n, &lock), doc::Check::NeedsNative { .. }),
+        "lock is unverified"
+    );
+    let hide = Edit::SetHidden {
+        group: 0,
+        slide: 0,
+        element: 1,
+        hidden: true,
+    };
+    let doc::Check::NeedsNative { slides, .. } = doc::check(&n, &hide) else {
+        panic!("hide is unverified");
+    };
+    hide.apply(&mut n).unwrap();
+    doc::mark_native(&mut n, &slides);
+    assert!(n.groups[0].slides[0].elements[1].hidden());
+    // A .pro6 export leaves hidden elements out (they aren't drawn either).
+    let (out, _) = doc::export_pro6(&n, ExportChoice::DropUnsupported).unwrap();
+    assert_eq!(doc::from_pro6(out).groups[0].slides[0].images().count(), 0);
 }

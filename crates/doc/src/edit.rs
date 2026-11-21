@@ -103,6 +103,32 @@ pub enum Edit {
         slide: usize,
         element: usize,
     },
+    /// Change an element's place in the stacking order (`to` is its index after
+    /// the move; the last element is drawn on top).
+    MoveElement {
+        group: usize,
+        slide: usize,
+        from: usize,
+        to: usize,
+    },
+    SetLocked {
+        group: usize,
+        slide: usize,
+        element: usize,
+        locked: bool,
+    },
+    SetHidden {
+        group: usize,
+        slide: usize,
+        element: usize,
+        hidden: bool,
+    },
+    RenameElement {
+        group: usize,
+        slide: usize,
+        element: usize,
+        name: String,
+    },
     /// Slide background image (`None` = none).
     SetBackgroundImage {
         group: usize,
@@ -251,6 +277,12 @@ impl Edit {
             } => "Insert image".into(),
             Edit::AddElement { .. } => "Insert text box".into(),
             Edit::RemoveElement { .. } => "Delete".into(),
+            Edit::MoveElement { .. } => "Arrange".into(),
+            Edit::SetLocked { locked: true, .. } => "Lock".into(),
+            Edit::SetLocked { locked: false, .. } => "Unlock".into(),
+            Edit::SetHidden { hidden: true, .. } => "Hide".into(),
+            Edit::SetHidden { hidden: false, .. } => "Show".into(),
+            Edit::RenameElement { .. } => "Rename".into(),
             Edit::SetBackgroundImage { image: Some(_), .. } => "Set background image".into(),
             Edit::SetBackgroundImage { image: None, .. } => "Remove background image".into(),
             Edit::SetSlideEnabled { enabled: true, .. } => "Enable slide".into(),
@@ -332,7 +364,12 @@ impl Edit {
                 Element::Text(t) if t.src.is_some() => vec![Feature::Text, Feature::ElementFrame],
                 _ => vec![Feature::NewTextBox],
             },
-            Edit::RemoveElement { .. } => vec![Feature::SlideStructure],
+            Edit::RemoveElement { .. }
+            | Edit::MoveElement { .. }
+            | Edit::RenameElement { .. }
+            | Edit::SetHidden { hidden: false, .. } => vec![Feature::SlideStructure],
+            Edit::SetLocked { .. } => vec![Feature::LayerLock],
+            Edit::SetHidden { hidden: true, .. } => vec![Feature::LayerHide],
             Edit::SetBackgroundImage { image: Some(b), .. } => {
                 let mut v = vec![Feature::ImageBackground];
                 if b.adjust.has_color() {
@@ -549,6 +586,56 @@ impl Edit {
                 s.elements.remove(*element);
                 Ok(())
             }
+            Edit::MoveElement {
+                group,
+                slide,
+                from,
+                to,
+            } => {
+                let s = slide_mut(doc, *group, *slide)?;
+                if *from >= s.elements.len() || *to >= s.elements.len() {
+                    return Err(not_found("element"));
+                }
+                let e = s.elements.remove(*from);
+                s.elements.insert(*to, e);
+                Ok(())
+            }
+            Edit::SetLocked {
+                group,
+                slide,
+                element,
+                locked,
+            } => {
+                match placed_mut(doc, *group, *slide, *element)? {
+                    Placed::Text(t) => t.locked = *locked,
+                    Placed::Image(i) => i.locked = *locked,
+                }
+                Ok(())
+            }
+            Edit::SetHidden {
+                group,
+                slide,
+                element,
+                hidden,
+            } => {
+                match placed_mut(doc, *group, *slide, *element)? {
+                    Placed::Text(t) => t.hidden = *hidden,
+                    Placed::Image(i) => i.hidden = *hidden,
+                }
+                Ok(())
+            }
+            Edit::RenameElement {
+                group,
+                slide,
+                element,
+                name,
+            } => {
+                match placed_mut(doc, *group, *slide, *element)? {
+                    Placed::Text(t) => t.name.clone_from(name),
+                    Placed::Image(i) => i.name.clone_from(name),
+                }
+                Ok(())
+            }
             Edit::SetBackgroundImage {
                 group,
                 slide,
@@ -750,6 +837,10 @@ impl Edit {
             | Edit::SetImageAdjust { group, slide, .. }
             | Edit::AddElement { group, slide, .. }
             | Edit::RemoveElement { group, slide, .. }
+            | Edit::MoveElement { group, slide, .. }
+            | Edit::SetLocked { group, slide, .. }
+            | Edit::SetHidden { group, slide, .. }
+            | Edit::RenameElement { group, slide, .. }
             | Edit::SetBackgroundImage { group, slide, .. }
             | Edit::SetSlideBackground { group, slide, .. }
             | Edit::DuplicateSlide { group, slide } => at(*group, *slide).into_iter().collect(),

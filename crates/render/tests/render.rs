@@ -558,6 +558,7 @@ fn image_box(media: doc::MediaRef, frame: doc::Rect) -> doc::ImageBox {
         rotation: 0.0,
         opacity: 1.0,
         locked: false,
+        hidden: false,
         flip_h: false,
         flip_v: false,
         media,
