@@ -177,6 +177,56 @@ fn every_edit_survives_pro6_export() {
             element: 0,
             text: "Box text".into(),
         },
+        Edit::SetRichText {
+            group: 1,
+            slide: 0,
+            element: 0,
+            paragraphs: {
+                let base = doc::Run {
+                    text: "Plain ".into(),
+                    font: "Liberation Sans".into(),
+                    size: 48.0,
+                    color: Some([255, 255, 255]),
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                    letter_spacing: 0.0,
+                };
+                vec![
+                    doc::Paragraph {
+                        align: doc::Align::Center,
+                        line_spacing: 1.0,
+                        runs: vec![
+                            base.clone(),
+                            doc::Run {
+                                text: "bold red".into(),
+                                bold: true,
+                                color: Some([220, 30, 30]),
+                                ..base.clone()
+                            },
+                        ],
+                    },
+                    doc::Paragraph {
+                        align: doc::Align::Right,
+                        line_spacing: 1.0,
+                        runs: vec![doc::Run {
+                            text: "Serif, italic, underlined\nwith a line break".into(),
+                            font: "Liberation Serif".into(),
+                            size: 30.0,
+                            italic: true,
+                            underline: true,
+                            ..base
+                        }],
+                    },
+                ]
+            },
+        },
+        Edit::SetVAlign {
+            group: 1,
+            slide: 0,
+            element: 0,
+            valign: doc::VAlign::Bottom,
+        },
         Edit::SetSlideEnabled {
             group: 1,
             slide: 0,
@@ -522,4 +572,69 @@ fn native_edits_match_the_m7_pro6_operations() {
         let m7 = doc::from_pro6(pro6::parse_str(&pro6::write_string(&p), &file).unwrap());
         assert_eq!(shape(&through_pro6(&d)), shape(&m7), "after {edit:?}");
     }
+}
+
+#[test]
+fn effects_and_spacing_need_native_mode() {
+    let d = doc::load(&fixture("song_1024x768.pro6")).unwrap();
+    let outline = Edit::SetOutline {
+        group: 0,
+        slide: 0,
+        element: 0,
+        outline: Some(doc::Outline {
+            width: 3.0,
+            color: doc::Rgba {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
+        }),
+    };
+    assert!(matches!(
+        doc::check(&d, &outline),
+        doc::Check::NeedsNative { .. }
+    ));
+    let off = Edit::SetOutline {
+        group: 0,
+        slide: 0,
+        element: 0,
+        outline: None,
+    };
+    assert_eq!(
+        doc::check(&d, &off),
+        doc::Check::Ok,
+        "turning it off is fine in .pro6"
+    );
+    let mut paragraphs = d.groups[0].slides[0]
+        .text_boxes()
+        .next()
+        .unwrap()
+        .paragraphs
+        .clone();
+    paragraphs[0].line_spacing = 1.5;
+    let spaced = Edit::SetRichText {
+        group: 0,
+        slide: 0,
+        element: 0,
+        paragraphs,
+    };
+    match doc::check(&d, &spaced) {
+        doc::Check::NeedsNative { features, slides } => {
+            assert_eq!(features, vec![doc::Feature::LineSpacing]);
+            assert_eq!(slides, vec![d.groups[0].slides[0].uuid.clone()]);
+        }
+        doc::Check::Ok => panic!("line spacing is unverified in .pro6"),
+    }
+    // Accepted: native; exporting leaves the native-only parts out but works.
+    let mut n = d.clone();
+    outline.apply(&mut n).unwrap();
+    spaced.apply(&mut n).unwrap();
+    doc::mark_native(&mut n, &[d.groups[0].slides[0].uuid.clone()]);
+    let (out, report) = doc::export_pro6(&n, ExportChoice::DropUnsupported).unwrap();
+    assert_eq!(report.left_out.len(), 1);
+    let back = doc::from_pro6(out);
+    let t = back.groups[0].slides[0].text_boxes().next().unwrap();
+    assert!(t.outline.is_none());
+    assert_eq!(t.paragraphs[0].line_spacing, 1.0);
 }

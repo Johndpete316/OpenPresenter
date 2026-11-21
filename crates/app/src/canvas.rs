@@ -29,6 +29,8 @@ struct Request {
 struct Done {
     key: CanvasKey,
     image: Result<egui::ColorImage, String>,
+    /// Text boxes (UUIDs) whose text is taller than the box.
+    overflow: Vec<String>,
 }
 
 pub struct CanvasRenderer {
@@ -39,6 +41,7 @@ pub struct CanvasRenderer {
     shown: Option<CanvasKey>,
     texture: Option<TextureHandle>,
     error: Option<String>,
+    overflow: Vec<String>,
 }
 
 impl CanvasRenderer {
@@ -57,6 +60,7 @@ impl CanvasRenderer {
                     while let Ok(newer) = req_rx.try_recv() {
                         req = newer;
                     }
+                    let mut overflow = Vec::new();
                     let image = req
                         .doc
                         .slides()
@@ -67,6 +71,12 @@ impl CanvasRenderer {
                                 .map_err(|e| e.user_message())
                         })
                         .map(|frame| {
+                            overflow = frame
+                                .warnings
+                                .iter()
+                                .filter(|w| w.overflow)
+                                .map(|w| w.element_uuid.clone())
+                                .collect();
                             let img = frame.composite();
                             egui::ColorImage::from_rgba_unmultiplied(
                                 [img.width() as usize, img.height() as usize],
@@ -77,6 +87,7 @@ impl CanvasRenderer {
                         .send(Done {
                             key: req.key,
                             image,
+                            overflow,
                         })
                         .is_err()
                     {
@@ -92,6 +103,7 @@ impl CanvasRenderer {
             shown: None,
             texture: None,
             error: None,
+            overflow: Vec::new(),
         })
     }
 
@@ -134,6 +146,7 @@ impl CanvasRenderer {
                 }
                 Err(e) => self.error = Some(e),
             }
+            self.overflow = d.overflow;
             self.shown = Some(d.key);
         }
     }
@@ -142,5 +155,10 @@ impl CanvasRenderer {
     /// failed, why.
     pub fn image(&self) -> (Option<&TextureHandle>, Option<&str>) {
         (self.texture.as_ref(), self.error.as_deref())
+    }
+
+    /// Text boxes (UUIDs) overflowing in the latest image.
+    pub fn overflow(&self) -> &[String] {
+        &self.overflow
     }
 }

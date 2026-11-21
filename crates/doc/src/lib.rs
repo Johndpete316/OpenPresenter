@@ -13,6 +13,7 @@ pub mod edit;
 pub mod file;
 pub mod history;
 pub mod model;
+pub mod rich;
 
 pub use compat::{Feature, Mode, Support, needs_native, pro6_support};
 pub use convert::{ExportChoice, ExportError, ExportReport, export_pro6, from_pro6, to_pro6};

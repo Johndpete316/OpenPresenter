@@ -22,16 +22,22 @@ pub struct ThumbKey {
     pub flat: usize,
     pub width: u32,
     pub height: u32,
+    /// Disk-cached (saved document) vs rendered fresh (editor copy, with overflow).
+    pub disk: bool,
 }
 
 pub struct ThumbRequest {
     pub key: ThumbKey,
     pub doc: Arc<doc::Document>,
+    /// Use the disk cache (only for saved documents: it's keyed by the file).
+    pub disk: bool,
 }
 
 pub struct ThumbResult {
     pub key: ThumbKey,
     pub image: Result<egui::ColorImage, String>,
+    /// Some text box overflows (known only for fresh renders).
+    pub overflow: bool,
 }
 
 pub fn spawn(
@@ -49,11 +55,13 @@ pub fn spawn(
                 let _ = std::fs::create_dir_all(d);
             }
             while let Ok(req) = req_rx.recv() {
-                let image = thumbnail(&mut fonts, cache_dir.as_deref(), &req);
+                let (image, overflow) =
+                    thumbnail(&mut fonts, cache_dir.as_deref().filter(|_| req.disk), &req);
                 if res_tx
                     .send(ThumbResult {
                         key: req.key,
                         image,
+                        overflow,
                     })
                     .is_err()
                 {
@@ -91,28 +99,39 @@ fn thumbnail(
     fonts: &mut Fonts,
     cache_dir: Option<&std::path::Path>,
     req: &ThumbRequest,
-) -> Result<egui::ColorImage, String> {
+) -> (Result<egui::ColorImage, String>, bool) {
     let disk = cache_dir.zip(disk_key(req)).map(|(d, k)| d.join(k));
     if let Some(p) = &disk
         && let Ok(img) = image::open(p)
     {
         let rgba = img.to_rgba8();
-        return Ok(egui::ColorImage::from_rgba_unmultiplied(
-            [rgba.width() as usize, rgba.height() as usize],
-            rgba.as_raw(),
-        ));
+        return (
+            Ok(egui::ColorImage::from_rgba_unmultiplied(
+                [rgba.width() as usize, rgba.height() as usize],
+                rgba.as_raw(),
+            )),
+            false,
+        );
     }
-    let slide = req.doc.slides().nth(req.key.flat).ok_or("slide missing")?;
-    let frame = render_slide(fonts, &req.doc, slide, req.key.width, req.key.height)
-        .map_err(|e| e.user_message())?;
+    let Some(slide) = req.doc.slides().nth(req.key.flat) else {
+        return (Err("slide missing".into()), false);
+    };
+    let frame = match render_slide(fonts, &req.doc, slide, req.key.width, req.key.height) {
+        Ok(f) => f,
+        Err(e) => return (Err(e.user_message()), false),
+    };
+    let overflow = frame.warnings.iter().any(|w| w.overflow);
     let img = frame.composite();
     if let Some(p) = &disk
         && let Err(e) = img.save(p)
     {
         tracing::debug!(path = %p.display(), error = %e, "couldn't cache thumbnail");
     }
-    Ok(egui::ColorImage::from_rgba_unmultiplied(
-        [img.width() as usize, img.height() as usize],
-        img.as_raw(),
-    ))
+    (
+        Ok(egui::ColorImage::from_rgba_unmultiplied(
+            [img.width() as usize, img.height() as usize],
+            img.as_raw(),
+        )),
+        overflow,
+    )
 }

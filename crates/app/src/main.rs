@@ -292,6 +292,7 @@ fn main() -> ExitCode {
     let (fonts_tx, fonts_rx) = crossbeam_channel::bounded(1);
     let (web_fonts_tx, web_fonts_rx) = crossbeam_channel::bounded::<render::Fonts>(1);
     let (canvas_fonts_tx, canvas_fonts_rx) = crossbeam_channel::bounded::<render::Fonts>(1);
+    let (ui_fonts_tx, ui_fonts_rx) = crossbeam_channel::bounded::<render::Fonts>(1);
     let mut font_dirs = settings.font_dirs.clone();
     font_dirs.extend(args.font_dirs.iter().cloned());
     let raster = match raster::spawn(
@@ -299,7 +300,7 @@ fn main() -> ExitCode {
         font_dirs,
         link.clone(),
         proxy.clone(),
-        vec![fonts_tx, web_fonts_tx, canvas_fonts_tx],
+        vec![fonts_tx, web_fonts_tx, canvas_fonts_tx, ui_fonts_tx],
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -379,6 +380,7 @@ fn main() -> ExitCode {
             settings_open: args.open_settings,
             edit: ui_state_edit,
             media_thumbs,
+            fonts_rx: Some(ui_fonts_rx),
             canvas: match canvas::CanvasRenderer::spawn(canvas_fonts_rx, proxy.clone()) {
                 Ok(c) => Some(c),
                 Err(e) => {

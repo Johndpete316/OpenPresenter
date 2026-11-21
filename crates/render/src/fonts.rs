@@ -146,6 +146,58 @@ impl Fonts {
         })
     }
 
+    /// Every installed font family, sorted (for font pickers).
+    pub fn families(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .system
+            .db()
+            .faces()
+            .filter_map(|f| f.families.first().map(|(n, _)| n.clone()))
+            .collect();
+        v.sort_by_key(|n| n.to_lowercase());
+        v.dedup();
+        v
+    }
+
+    /// `text` drawn in `family` at `px` pixels, white on transparent, as straight RGBA
+    /// `(width, height, pixels)`. `None` if the family isn't installed.
+    pub fn sample(&mut self, family: &str, text: &str, px: f32) -> Option<(u32, u32, Vec<u8>)> {
+        use cosmic_text::{Attrs, Buffer, Color, Family as CtFamily, Metrics, Shaping};
+        let font = self.resolve(family, false, false)?;
+        let metrics = Metrics::new(px, px * 1.3);
+        let attrs = Attrs::new()
+            .family(CtFamily::Name(&font.family))
+            .weight(font.weight)
+            .style(font.style);
+        let mut buffer = Buffer::new(&mut self.system, metrics);
+        buffer.set_size(None, None);
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.system, false);
+        let w = buffer
+            .layout_runs()
+            .map(|r| r.line_w)
+            .fold(0.0f32, f32::max)
+            .ceil() as u32
+            + 2;
+        let h = (px * 1.3).ceil() as u32 + 2;
+        let mut out = vec![0u8; (w * h * 4) as usize];
+        buffer.draw(
+            &mut self.system,
+            &mut self.swash,
+            Color::rgba(255, 255, 255, 255),
+            |x, y, gw, gh, c| {
+                for yy in y.max(0)..(y + gh as i32).min(h as i32) {
+                    for xx in x.max(0)..(x + gw as i32).min(w as i32) {
+                        let i = ((yy as u32 * w + xx as u32) * 4) as usize;
+                        let a = out[i + 3].max(c.a());
+                        out[i..i + 4].copy_from_slice(&[255, 255, 255, a]);
+                    }
+                }
+            },
+        );
+        Some((w, h, out))
+    }
+
     /// Family names of a face (for detecting per-glyph fallback).
     pub(crate) fn face_families(&self, id: fontdb::ID) -> Vec<String> {
         self.system

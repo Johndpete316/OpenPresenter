@@ -228,24 +228,67 @@ pub enum TextProblem {
     NoStyledText,
 }
 
+/// Text outline, drawn around the glyphs (under the fill).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Outline {
+    /// Canvas pixels.
     pub width: f64,
-    pub color: Option<Rgba>,
+    pub color: Rgba,
 }
 
-/// Drop shadow as `.pro6` stores it (blur | colour | offset); field meanings assumed.
+/// Drop shadow of the text (and its outline).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Shadow {
-    pub blur: Option<f64>,
-    pub color: Option<Rgba>,
-    pub offset: Option<(f64, f64)>,
+    /// Colour; its alpha is the shadow's opacity.
+    pub color: Rgba,
+    /// Blur radius, canvas pixels.
+    pub blur: f64,
+    /// Offset in canvas pixels, x right, y down.
+    pub offset: (f64, f64),
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+impl Shadow {
+    /// `(angle in degrees clockwise from "right", distance)` of the offset.
+    pub fn polar(&self) -> (f64, f64) {
+        let (x, y) = self.offset;
+        (y.atan2(x).to_degrees().rem_euclid(360.0), x.hypot(y))
+    }
+
+    pub fn from_polar(angle: f64, distance: f64) -> (f64, f64) {
+        let a = angle.to_radians();
+        (distance * a.cos(), distance * a.sin())
+    }
+}
+
+fn one() -> f64 {
+    1.0
+}
+
+fn is_one(v: &f64) -> bool {
+    *v == 1.0
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Paragraph {
     pub align: Align,
+    /// Line height as a multiple of the font's own (1 = as the font says).
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub line_spacing: f64,
     pub runs: Vec<Run>,
+}
+
+impl Default for Paragraph {
+    fn default() -> Self {
+        Paragraph {
+            align: Align::default(),
+            line_spacing: 1.0,
+            runs: Vec::new(),
+        }
+    }
 }
 
 /// A stretch of text with one style. `\n` inside `text` is a line break within the
@@ -261,6 +304,22 @@ pub struct Run {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    /// Extra space between letters, canvas pixels.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub letter_spacing: f64,
+}
+
+impl Run {
+    /// Same style (everything but the text).
+    pub fn same_style(&self, o: &Run) -> bool {
+        self.font == o.font
+            && self.size == o.size
+            && self.color == o.color
+            && self.bold == o.bold
+            && self.italic == o.italic
+            && self.underline == o.underline
+            && self.letter_spacing == o.letter_spacing
+    }
 }
 
 /// An arrangement: a sequence of groups (by UUID; groups may repeat).

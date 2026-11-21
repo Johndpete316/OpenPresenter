@@ -61,4 +61,6 @@ impl RenderError {
 pub struct RenderWarning {
     pub element_uuid: String,
     pub message: String,
+    /// The text is taller than its box (the editor badges the box and slide).
+    pub overflow: bool,
 }

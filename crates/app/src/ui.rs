@@ -121,6 +121,13 @@ pub struct UiState {
     /// Last image shown in the preview: kept on screen until the next one is ready.
     pub(crate) last_preview: Option<TextureHandle>,
     pub(crate) textures: HashMap<ThumbKey, Result<TextureHandle, String>>,
+    /// Thumbnails whose slide has overflowing text.
+    pub(crate) thumb_overflow: HashSet<ThumbKey>,
+    /// Fonts for the editor (caret layout, font picker), once loaded.
+    pub fonts_rx: Option<crossbeam_channel::Receiver<render::Fonts>>,
+    pub fonts: Option<render::Fonts>,
+    /// Installed font families (from `fonts`).
+    pub families: Vec<String>,
     pub(crate) requested: HashSet<ThumbKey>,
 }
 
@@ -144,6 +151,11 @@ impl UiState {
         rx: &crossbeam_channel::Receiver<ThumbResult>,
     ) {
         while let Ok(r) = rx.try_recv() {
+            if r.overflow {
+                self.thumb_overflow.insert(r.key);
+            } else {
+                self.thumb_overflow.remove(&r.key);
+            }
             let tex = r.image.map(|img| {
                 ctx.load_texture(
                     format!("thumb-{:?}", r.key),
@@ -157,16 +169,24 @@ impl UiState {
         if self.textures.len() > 2000 {
             self.textures.clear();
             self.requested.clear();
+            self.thumb_overflow.clear();
+        }
+        if self.fonts.is_none()
+            && let Some(f) = self.fonts_rx.as_ref().and_then(|rx| rx.try_recv().ok())
+        {
+            self.families = f.families();
+            self.fonts = Some(f);
         }
     }
 
+    /// Editor thumbnail: rendered fresh (the editor copy isn't the file on disk).
     pub(crate) fn thumb_public(
         &mut self,
         tx: &Sender<ThumbRequest>,
         doc: &Arc<doc::Document>,
         flat: usize,
     ) -> (ThumbKey, Option<&Result<TextureHandle, String>>) {
-        self.thumb(tx, doc, flat)
+        self.thumb_with(tx, doc, flat, false)
     }
 
     fn thumb(
@@ -174,6 +194,16 @@ impl UiState {
         tx: &Sender<ThumbRequest>,
         doc: &Arc<doc::Document>,
         flat: usize,
+    ) -> (ThumbKey, Option<&Result<TextureHandle, String>>) {
+        self.thumb_with(tx, doc, flat, true)
+    }
+
+    fn thumb_with(
+        &mut self,
+        tx: &Sender<ThumbRequest>,
+        doc: &Arc<doc::Document>,
+        flat: usize,
+        disk: bool,
     ) -> (ThumbKey, Option<&Result<TextureHandle, String>>) {
         let width = THUMB_W;
         let height = (width as f32 * doc.canvas.height as f32 / doc.canvas.width as f32)
@@ -184,12 +214,14 @@ impl UiState {
             flat,
             width,
             height,
+            disk,
         };
         if !self.requested.contains(&key) {
             self.requested.insert(key);
             let _ = tx.send(ThumbRequest {
                 key,
                 doc: doc.clone(),
+                disk,
             });
         }
         (key, self.textures.get(&key))

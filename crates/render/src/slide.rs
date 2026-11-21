@@ -8,12 +8,14 @@
 
 use std::time::Instant;
 
-use cosmic_text::{Align as CtAlign, Attrs, Buffer, Color, Family, Metrics, Shaping, Wrap};
-use doc::{Align, Document, Element, Rgba, Slide, TextBox, TextProblem, VAlign};
+use cosmic_text::Color;
+use doc::{Document, Element, Rgba, Slide, TextBox, TextProblem};
 
+use crate::effects;
 use crate::error::{RenderError, RenderWarning};
-use crate::fonts::{Fonts, ResolvedFont};
+use crate::fonts::Fonts;
 use crate::frame::{Placement, SlideFrame, mul};
+use crate::text::{self, Ctx, TextLayout};
 
 /// Render `slide` of `doc` for an output of `width × height` pixels.
 pub fn render_slide(
@@ -44,6 +46,7 @@ pub fn render_slide(
             Element::Pro6(raw) => frame.warnings.push(RenderWarning {
                 element_uuid: raw.uuid.clone(),
                 message: format!("<{}> elements aren't drawn yet", raw.kind),
+                overflow: false,
             }),
         }
     }
@@ -60,6 +63,25 @@ fn to_rgba8(c: Rgba) -> [u8; 4] {
     c.to_rgba8()
 }
 
+fn warning(el: &TextBox, message: String) -> RenderWarning {
+    RenderWarning {
+        element_uuid: el.uuid.clone(),
+        message,
+        overflow: false,
+    }
+}
+
+/// Straight-alpha colour with `opacity` applied.
+fn with_opacity(c: Rgba, opacity: f64) -> [u8; 4] {
+    let [r, g, b, a] = c.to_rgba8();
+    [
+        r,
+        g,
+        b,
+        (f64::from(a) * opacity.clamp(0.0, 1.0)).round() as u8,
+    ]
+}
+
 fn render_text(
     fonts: &mut Fonts,
     doc: &Document,
@@ -67,76 +89,72 @@ fn render_text(
     el: &TextBox,
     frame: &mut SlideFrame,
 ) -> Result<(), RenderError> {
-    let warn = |frame: &mut SlideFrame, message: String| {
-        frame.warnings.push(RenderWarning {
-            element_uuid: el.uuid.clone(),
-            message,
-        });
-    };
-    if el.shadow.is_some() {
-        warn(frame, "text shadow isn't drawn yet".into());
-    }
-    if el.outline.is_some() {
-        warn(frame, "text outline (stroke) isn't drawn yet".into());
-    }
-
     let p = frame.placement;
     let r = el.frame;
     let (x0, y0) = p.map(r.x, r.y);
     let box_w = (r.width as f32 * p.scale).max(1.0);
     let box_h = r.height as f32 * p.scale;
 
-    let fill = el.fill.map(|f| {
-        let c = to_rgba8(f);
-        [
-            c[0],
-            c[1],
-            c[2],
-            (f64::from(c[3]) * el.opacity).round() as u8,
-        ]
-    });
+    let fill = el.fill.map(|f| with_opacity(f, el.opacity));
     if fill.is_some() && el.corner_radius > 0.0 {
-        warn(
-            frame,
+        frame.warnings.push(warning(
+            el,
             "rounded corners on the element fill aren't drawn yet".into(),
-        );
+        ));
     }
+    if el.problem == Some(TextProblem::NoStyledText) {
+        frame.warnings.push(warning(
+            el,
+            "element has no RTFData; its text isn't drawn".into(),
+        ));
+    }
+    let ctx = Ctx {
+        file: &doc.path,
+        slide: &slide.uuid,
+        element: &el.uuid,
+    };
+    let layout = text::layout(fonts, el, p.scale, false, &ctx)?;
+    let text_h = layout.as_ref().map_or(0.0, |l| l.text_h);
+    if let Some(l) = &layout {
+        for n in &l.notes {
+            frame.warnings.push(warning(el, n.clone()));
+        }
+        if l.text_h > box_h + 0.5 {
+            frame.warnings.push(RenderWarning {
+                overflow: true,
+                ..warning(
+                    el,
+                    format!(
+                        "text is taller than its box ({:.0} vs {:.0} canvas px)",
+                        l.text_h / p.scale,
+                        r.height
+                    ),
+                )
+            });
+        }
+    }
+    let dy = text::valign_offset(el.valign, box_h, text_h);
 
-    let fail = |e: RenderError| Err(e.logged());
-    let layout = match &el.problem {
-        None => layout_text(fonts, doc, slide, el, frame, box_w, box_h)?,
-        Some(TextProblem::NoStyledText) => {
-            warn(frame, "element has no RTFData; its text isn't drawn".into());
-            None
-        }
-        Some(TextProblem::Unreadable { message }) => {
-            return fail(RenderError::BadText {
-                message: message.clone(),
-                file: doc.path.clone(),
-                slide_uuid: slide.uuid.clone(),
-                element_uuid: el.uuid.clone(),
-            });
-        }
-        Some(TextProblem::FontNotInTable { index }) => {
-            return fail(RenderError::FontNotInTable {
-                index: *index,
-                file: doc.path.clone(),
-                slide_uuid: slide.uuid.clone(),
-                element_uuid: el.uuid.clone(),
-            });
-        }
-    };
-    let text_h = layout.as_ref().map_or(0.0, |(_, h)| *h);
-    let dy = match el.valign {
-        VAlign::Top => 0.0,
-        VAlign::Bottom => box_h - text_h,
-        VAlign::Middle => (box_h - text_h) / 2.0,
-    };
+    // Effects, in output pixels.
+    let outline = el.outline.filter(|_| layout.is_some()).map(|o| {
+        (
+            (o.width as f32 * p.scale).max(0.0),
+            with_opacity(o.color, el.opacity),
+        )
+    });
+    let shadow = el.shadow.filter(|_| layout.is_some()).map(|s| {
+        (
+            (s.blur as f32 * p.scale).max(0.0),
+            s.offset.0 as f32 * p.scale,
+            s.offset.1 as f32 * p.scale,
+            with_opacity(s.color, el.opacity),
+        )
+    });
 
     // 360° (seen in real files) is no rotation. Degrees clockwise (assumed; unverified
     // against PP6), about the box centre.
     let rotation = el.rotation.rem_euclid(360.0);
-    if rotation == 0.0 {
+    if rotation == 0.0 && outline.is_none() && shadow.is_none() {
         let c = p.canvas;
         let mut layer = Layer {
             width: frame.width as usize,
@@ -151,204 +169,160 @@ fn render_text(
         if let Some(color) = fill {
             layer.fill(x0, y0, box_w, box_h, color);
         }
-        if let Some((mut buffer, _)) = layout {
-            layer.draw(
-                fonts,
-                &mut buffer,
-                x0.round() as i32,
-                (y0 + dy).round() as i32,
-            );
+        if let Some(mut l) = layout {
+            layer.draw(fonts, &mut l, x0.round() as i32, (y0 + dy).round() as i32);
         }
         return Ok(());
     }
 
-    // Rotated: draw the box upright into its own layer, then rotate it onto the frame.
-    const MARGIN: f32 = 4.0;
-    let top = dy.min(0.0).floor() - MARGIN;
-    let bottom = box_h.max(dy + text_h).ceil() + MARGIN;
-    let left = -MARGIN;
-    let right = box_w.ceil() + MARGIN;
-    let (tw, th) = ((right - left) as usize, (bottom - top) as usize);
-    let mut tmp = vec![0u8; tw * th * 4];
+    // Layered: draw the box upright into its own layer (fill, shadow, outline,
+    // text), then put it on the frame (rotated if needed).
+    let reach =
+        outline.map_or(0.0, |o| o.0) + shadow.map_or(0.0, |s| s.0 * 1.5 + s.1.abs().max(s.2.abs()));
+    let margin = (4.0 + reach).ceil() as i32;
+    // Integer layer origin in frame pixels, so upright text lands on the same pixels
+    // as the direct path.
+    let (ox, oy) = (
+        x0.round() as i32 - margin,
+        y0.round() as i32 + (dy.min(0.0).floor() as i32) - margin,
+    );
+    let bottom = (y0 + box_h.max(dy + text_h)).ceil() as i32 + margin;
+    let right = (x0 + box_w).ceil() as i32 + margin;
+    let (tw, th) = ((right - ox).max(1) as usize, (bottom - oy).max(1) as usize);
+    let (text_x, text_y) = (x0.round() as i32 - ox, (y0 + dy).round() as i32 - oy);
+
+    let mut text_layer = vec![0u8; tw * th * 4];
+    if let Some(mut l) = layout {
+        Layer {
+            width: tw,
+            clip: (0, 0, tw as i32, th as i32),
+            buf: &mut text_layer,
+        }
+        .draw(fonts, &mut l, text_x, text_y);
+    }
+    let mut boxed = vec![0u8; tw * th * 4];
     {
         let mut layer = Layer {
             width: tw,
             clip: (0, 0, tw as i32, th as i32),
-            buf: &mut tmp,
+            buf: &mut boxed,
         };
         if let Some(color) = fill {
-            layer.fill(-left, -top, box_w, box_h, color);
-        }
-        if let Some((mut buffer, _)) = layout {
-            layer.draw(
-                fonts,
-                &mut buffer,
-                (-left).round() as i32,
-                (dy - top).round() as i32,
-            );
+            layer.fill(x0 - ox as f32, y0 - oy as f32, box_w, box_h, color);
         }
     }
-    composite_rotated(
-        frame,
-        &tmp,
-        (tw, th),
-        (box_w / 2.0 - left, box_h / 2.0 - top),
-        (x0 + box_w / 2.0, y0 + box_h / 2.0),
-        rotation as f32,
-    );
+    if outline.is_some() || shadow.is_some() {
+        let alpha: Vec<u8> = text_layer.as_chunks::<4>().0.iter().map(|p| p[3]).collect();
+        let covered = match outline {
+            Some((radius, _)) => effects::dilate(&alpha, tw, th, radius),
+            None => alpha,
+        };
+        if let Some((blur, sx, sy, color)) = shadow {
+            let soft = effects::blur(&covered, tw, th, blur);
+            paint_mask(
+                &mut boxed,
+                tw,
+                th,
+                &soft,
+                color,
+                (sx.round() as i32, sy.round() as i32),
+            );
+        }
+        if let Some((_, color)) = outline {
+            paint_mask(&mut boxed, tw, th, &covered, color, (0, 0));
+        }
+    }
+    over(&mut boxed, &text_layer);
+
+    if rotation == 0.0 {
+        composite_offset(frame, &boxed, (tw, th), (ox, oy));
+    } else {
+        composite_rotated(
+            frame,
+            &boxed,
+            (tw, th),
+            (x0 + box_w / 2.0 - ox as f32, y0 + box_h / 2.0 - oy as f32),
+            (x0 + box_w / 2.0, y0 + box_h / 2.0),
+            rotation as f32,
+        );
+    }
     Ok(())
 }
 
-/// Lay out a text box's runs at output scale. `None` when there's no text to draw.
-fn layout_text(
-    fonts: &mut Fonts,
-    doc: &Document,
-    slide: &Slide,
-    el: &TextBox,
+/// Paint `color` through `mask` (shifted by `offset`) over a premultiplied layer.
+fn paint_mask(dst: &mut [u8], w: usize, h: usize, mask: &[u8], color: [u8; 4], offset: (i32, i32)) {
+    for y in 0..h as i32 {
+        let sy = y - offset.1;
+        if sy < 0 || sy >= h as i32 {
+            continue;
+        }
+        for x in 0..w as i32 {
+            let sx = x - offset.0;
+            if sx < 0 || sx >= w as i32 {
+                continue;
+            }
+            let m = mask[sy as usize * w + sx as usize];
+            if m == 0 {
+                continue;
+            }
+            let i = (y as usize * w + x as usize) * 4;
+            blend(
+                &mut dst[i..i + 4],
+                [color[0], color[1], color[2], mul(color[3], m)],
+            );
+        }
+    }
+}
+
+/// Premultiplied `src` over `dst` (same size).
+fn over(dst: &mut [u8], src: &[u8]) {
+    for (d, s) in dst
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(src.as_chunks::<4>().0)
+    {
+        if s[3] == 0 {
+            continue;
+        }
+        let inv = 255 - s[3];
+        for k in 0..4 {
+            d[k] = s[k].saturating_add(mul(d[k], inv));
+        }
+    }
+}
+
+/// Premultiplied layer onto the frame at an integer offset, clipped to the canvas.
+fn composite_offset(
     frame: &mut SlideFrame,
-    box_w: f32,
-    box_h: f32,
-) -> Result<Option<(Buffer, f32)>, RenderError> {
-    let warn = |frame: &mut SlideFrame, message: String| {
-        frame.warnings.push(RenderWarning {
-            element_uuid: el.uuid.clone(),
-            message,
-        });
-    };
-    // Empty text (including PP6's hidden "Double-click to edit" placeholder) draws nothing.
-    if el.runs().all(|r| r.text.is_empty()) {
-        return Ok(None);
-    }
-    let p = frame.placement;
-
-    // Resolve every run's font first: a missing font is an error, never a substitute.
-    let missing = |font: String| RenderError::MissingFont {
-        font,
-        file: doc.path.clone(),
-        slide_uuid: slide.uuid.clone(),
-        element_uuid: el.uuid.clone(),
-    };
-    let mut styles: Vec<(ResolvedFont, Metrics, Color)> = Vec::new();
-    let mut spans: Vec<(String, usize)> = Vec::new();
-    let mut aligns: Vec<Option<CtAlign>> = Vec::new();
-    let mut underline = false;
-    for (pi, para) in el.paragraphs.iter().enumerate() {
-        if pi > 0 {
-            // Paragraph break carries the previous style (sets the empty line's height).
-            if let Some(&(_, s)) = spans.last() {
-                spans.push(("\n".into(), s));
-            }
+    src: &[u8],
+    (sw, sh): (usize, usize),
+    (ox, oy): (i32, i32),
+) {
+    let c = frame.placement.canvas;
+    let width = frame.width as usize;
+    for y in 0..sh as i32 {
+        let fy = oy + y;
+        if fy < c.y as i32 || fy >= (c.y + c.height) as i32 {
+            continue;
         }
-        let align = match para.align {
-            Align::Left => CtAlign::Left,
-            Align::Center => CtAlign::Center,
-            Align::Right => CtAlign::Right,
-            Align::Justified => CtAlign::Justified,
-        };
-        let soft_breaks: usize = para.runs.iter().map(|r| r.text.matches('\n').count()).sum();
-        aligns.extend(std::iter::repeat_n(Some(align), soft_breaks + 1));
-        for run in &para.runs {
-            let name = &run.font;
-            let font = fonts
-                .resolve(name, run.bold, run.italic)
-                .ok_or_else(|| missing(name.clone()).logged())?;
-            if font.inexact {
-                warn(
-                    frame,
-                    format!(
-                        "'{}' has no {} face; the nearest face of the same font is used",
-                        font.family,
-                        style_name(run.bold, run.italic)
-                    ),
-                );
+        for x in 0..sw as i32 {
+            let fx = ox + x;
+            if fx < c.x as i32 || fx >= (c.x + c.width) as i32 {
+                continue;
             }
-            underline |= run.underline;
-            let px = run.size as f32 * p.scale;
-            let metrics = Metrics::new(px, fonts.line_height(&font, px));
-            let [cr, cg, cb] = run.color.unwrap_or([0, 0, 0]);
-            let color = Color::rgba(cr, cg, cb, (255.0 * el.opacity).round() as u8);
-            let idx = match styles
-                .iter()
-                .position(|s| s.0 == font && s.1 == metrics && s.2 == color)
-            {
-                Some(i) => i,
-                None => {
-                    styles.push((font, metrics, color));
-                    styles.len() - 1
-                }
-            };
-            spans.push((run.text.clone(), idx));
-        }
-    }
-    trim_line_ends(&mut spans);
-    if underline {
-        warn(frame, "underline isn't drawn yet".into());
-    }
-    let Some(first) = styles.first() else {
-        return Ok(None); // no text
-    };
-
-    let attrs: Vec<Attrs<'_>> = styles
-        .iter()
-        .map(|(f, m, c)| {
-            Attrs::new()
-                .family(Family::Name(&f.family))
-                .weight(f.weight)
-                .style(f.style)
-                .metrics(*m)
-                .color(*c)
-        })
-        .collect();
-    let mut buffer = Buffer::new(&mut fonts.system, first.1);
-    buffer.set_size(Some(box_w), None);
-    buffer.set_wrap(Wrap::WordOrGlyph);
-    buffer.set_rich_text(
-        spans.iter().map(|(t, i)| (t.as_str(), attrs[*i].clone())),
-        &attrs[0],
-        Shaping::Advanced,
-        None,
-    );
-    for (line, align) in buffer.lines.iter_mut().zip(&aligns) {
-        line.set_align(*align);
-    }
-    buffer.shape_until_scroll(&mut fonts.system, false);
-
-    // Per-glyph fallback (character missing from the chosen font) is reported.
-    let wanted: Vec<String> = styles.iter().map(|s| s.0.family.to_lowercase()).collect();
-    let mut fallback = 0usize;
-    let mut text_h = 0f32;
-    for run in buffer.layout_runs() {
-        text_h = text_h.max(run.line_top + run.line_height);
-        for g in run.glyphs {
-            if !fonts
-                .face_families(g.font_id)
-                .iter()
-                .any(|f| wanted.contains(&f.to_lowercase()))
-            {
-                fallback += 1;
+            let si = (y as usize * sw + x as usize) * 4;
+            let a = src[si + 3];
+            if a == 0 {
+                continue;
+            }
+            let di = (fy as usize * width + fx as usize) * 4;
+            let inv = 255 - a;
+            for k in 0..4 {
+                frame.text[di + k] = src[si + k].saturating_add(mul(frame.text[di + k], inv));
             }
         }
     }
-    if fallback > 0 {
-        warn(
-            frame,
-            format!(
-                "{fallback} character(s) aren't in the slide's font and are drawn from another font"
-            ),
-        );
-    }
-    if text_h > box_h + 0.5 {
-        warn(
-            frame,
-            format!(
-                "text is taller than its box ({:.0} vs {:.0} canvas px)",
-                text_h / p.scale,
-                el.frame.height
-            ),
-        );
-    }
-
-    Ok(Some((buffer, text_h)))
 }
 
 /// A premultiplied RGBA pixel buffer with a clip rectangle `(x0, y0, x1, y1)`.
@@ -373,28 +347,67 @@ impl Layer<'_> {
         }
     }
 
-    /// Draw laid-out text with its top-left at `(ox, oy)`.
-    fn draw(&mut self, fonts: &mut Fonts, buffer: &mut Buffer, ox: i32, oy: i32) {
+    /// Draw laid-out text (glyphs and underlines) with its top-left at `(ox, oy)`.
+    fn draw(&mut self, fonts: &mut Fonts, l: &mut TextLayout, ox: i32, oy: i32) {
         let (cx0, cy0, cx1, cy1) = self.clip;
         let width = self.width;
-        let buf = &mut *self.buf;
-        buffer.draw(
-            &mut fonts.system,
-            &mut fonts.swash,
-            Color::rgba(0, 0, 0, 255),
-            |x, y, w, h, color| {
-                let a = color.a();
-                if a == 0 {
-                    return;
+        {
+            let buf = &mut *self.buf;
+            l.buffer.draw(
+                &mut fonts.system,
+                &mut fonts.swash,
+                Color::rgba(0, 0, 0, 255),
+                |x, y, w, h, color| {
+                    let a = color.a();
+                    if a == 0 {
+                        return;
+                    }
+                    for yy in (oy + y).max(cy0)..(oy + y + h as i32).min(cy1) {
+                        for xx in (ox + x).max(cx0)..(ox + x + w as i32).min(cx1) {
+                            let i = (yy as usize * width + xx as usize) * 4;
+                            blend(&mut buf[i..i + 4], [color.r(), color.g(), color.b(), a]);
+                        }
+                    }
+                },
+            );
+        }
+        // Underlines: a bar under each run of underlined glyphs, in the text colour.
+        let mut bars: Vec<(f32, f32, f32, f32, Color)> = Vec::new();
+        for run in l.buffer.layout_runs() {
+            let mut cur: Option<(f32, f32, f32, f32, Color, usize)> = None;
+            for g in run.glyphs {
+                if !l.underline.get(g.metadata).copied().unwrap_or(false) {
+                    if let Some(b) = cur.take() {
+                        bars.push((b.0, b.1, b.2, b.3, b.4));
+                    }
+                    continue;
                 }
-                for yy in (oy + y).max(cy0)..(oy + y + h as i32).min(cy1) {
-                    for xx in (ox + x).max(cx0)..(ox + x + w as i32).min(cx1) {
-                        let i = (yy as usize * width + xx as usize) * 4;
-                        blend(&mut buf[i..i + 4], [color.r(), color.g(), color.b(), a]);
+                let y = run.line_y + g.font_size * 0.12;
+                let t = (g.font_size * 0.06).max(1.0);
+                let color = l.colors[g.metadata];
+                match &mut cur {
+                    Some(b) if b.5 == g.metadata && (b.1 - g.x).abs() < 1.0 => b.1 = g.x + g.w,
+                    _ => {
+                        if let Some(b) = cur.take() {
+                            bars.push((b.0, b.1, b.2, b.3, b.4));
+                        }
+                        cur = Some((g.x, g.x + g.w, y, t, color, g.metadata));
                     }
                 }
-            },
-        );
+            }
+            if let Some(b) = cur {
+                bars.push((b.0, b.1, b.2, b.3, b.4));
+            }
+        }
+        for (xa, xb, y, t, c) in bars {
+            self.fill(
+                ox as f32 + xa,
+                oy as f32 + y,
+                xb - xa,
+                t,
+                [c.r(), c.g(), c.b(), c.a()],
+            );
+        }
     }
 }
 
@@ -479,40 +492,6 @@ fn composite_rotated(
     }
 }
 
-/// Drop spaces/tabs at the end of each line (layout only). PP6 (WPF) ignores them
-/// when aligning, so "sing \n" centres like "sing\n"; real songs have many.
-fn trim_line_ends(spans: &mut [(String, usize)]) {
-    let mut at_line_end = true;
-    for (text, _) in spans.iter_mut().rev() {
-        let mut kept: Vec<char> = Vec::with_capacity(text.len());
-        for c in text.chars().rev() {
-            match c {
-                ' ' | '\t' if at_line_end => {}
-                '\n' => {
-                    at_line_end = true;
-                    kept.push(c);
-                }
-                _ => {
-                    at_line_end = false;
-                    kept.push(c);
-                }
-            }
-        }
-        if kept.len() != text.chars().count() {
-            *text = kept.into_iter().rev().collect();
-        }
-    }
-}
-
-fn style_name(bold: bool, italic: bool) -> &'static str {
-    match (bold, italic) {
-        (true, true) => "bold italic",
-        (true, false) => "bold",
-        (false, true) => "italic",
-        (false, false) => "regular",
-    }
-}
-
 /// Source-over blend of a straight-alpha colour onto a premultiplied pixel.
 fn blend(dst: &mut [u8], [r, g, b, a]: [u8; 4]) {
     let inv = 255 - a;
@@ -520,22 +499,4 @@ fn blend(dst: &mut [u8], [r, g, b, a]: [u8; 4]) {
     dst[1] = mul(g, a).saturating_add(mul(dst[1], inv));
     dst[2] = mul(b, a).saturating_add(mul(dst[2], inv));
     dst[3] = a.saturating_add(mul(dst[3], inv));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::trim_line_ends;
-
-    #[test]
-    fn trailing_spaces_are_trimmed_across_runs_and_lines() {
-        let mut s = vec![
-            ("sing ".to_string(), 0),
-            (" \nlove; ".to_string(), 1),
-            ("\n".to_string(), 1),
-            ("a  b ".to_string(), 0),
-        ];
-        trim_line_ends(&mut s);
-        let t: Vec<&str> = s.iter().map(|x| x.0.as_str()).collect();
-        assert_eq!(t, ["sing", "\nlove;", "\n", "a  b"]);
-    }
 }

@@ -112,14 +112,132 @@ fn per_paragraph_alignment_fonts_and_colours() {
 }
 
 #[test]
-fn bottom_aligned_bold_and_unsupported_shadow_warning() {
+fn bottom_aligned_bold_with_drop_shadow() {
     let mut f = fonts();
-    let d = load("render_1024x768.pro6");
+    let mut d = load("render_1024x768.pro6");
     let frame = render(&mut f, &d, 2, 1024, 768).unwrap();
+    assert!(frame.warnings.is_empty(), "{:?}", frame.warnings);
+    // The fixture's shadow: black at 1/3 opacity, 4 px right and down, no blur.
+    let shadow = frame
+        .text
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[3] > 70 && p[3] < 100 && p[0] < 10)
+        .count();
+    assert!(shadow > 50, "shadow pixels: {shadow}");
+    // Without it, the ink's bottom moves up by the offset.
     let (_, _, _, y1) = ink_bbox(&frame);
-    assert!(y1 > 684 - 30 && y1 < 684, "bottom-aligned: {y1}");
-    let msgs: Vec<_> = frame.warnings.iter().map(|w| w.message.as_str()).collect();
-    assert_eq!(msgs, ["text shadow isn't drawn yet"]);
+    for e in &mut d.groups[0].slides[2].elements {
+        if let doc::Element::Text(t) = e {
+            t.shadow = None;
+        }
+    }
+    let plain = render(&mut f, &d, 2, 1024, 768).unwrap();
+    let (_, _, _, y1_plain) = ink_bbox(&plain);
+    assert!(
+        y1_plain > 684 - 30 && y1_plain < 684,
+        "bottom-aligned: {y1_plain}"
+    );
+    assert!(y1.abs_diff(y1_plain + 4) <= 1, "{y1} vs {y1_plain}");
+}
+
+fn first_box(d: &mut doc::Document, slide: usize) -> &mut doc::TextBox {
+    d.groups[0].slides[slide]
+        .elements
+        .iter_mut()
+        .find_map(|e| match e {
+            doc::Element::Text(t) => Some(&mut **t),
+            doc::Element::Pro6(_) => None,
+        })
+        .unwrap()
+}
+
+#[test]
+fn outline_underline_and_letter_spacing_are_drawn() {
+    let mut f = fonts();
+    let mut d = load("render_1024x768.pro6");
+    let plain = render(&mut f, &d, 0, 1024, 768).unwrap();
+    let (x0, y0, x1, y1) = ink_bbox(&plain);
+
+    // A 6 px red outline grows the ink by about 6 px on every side.
+    first_box(&mut d, 0).outline = Some(doc::Outline {
+        width: 6.0,
+        color: doc::Rgba {
+            r: 1.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        },
+    });
+    let outlined = render(&mut f, &d, 0, 1024, 768).unwrap();
+    assert!(outlined.warnings.is_empty(), "{:?}", outlined.warnings);
+    let (a0, b0, a1, b1) = ink_bbox(&outlined);
+    for (grown, by) in [(x0 - a0, 6), (y0 - b0, 6), (a1 - x1, 6), (b1 - y1, 6)] {
+        assert!(grown.abs_diff(by) <= 2, "grew {grown}, wanted about {by}");
+    }
+    assert!(
+        outlined.text.as_chunks::<4>().0.contains(&[255, 0, 0, 255]),
+        "red outline"
+    );
+    first_box(&mut d, 0).outline = None;
+
+    // Underline: ink reaches lower, but stays inside the line.
+    for r in first_box(&mut d, 0)
+        .paragraphs
+        .iter_mut()
+        .flat_map(|p| &mut p.runs)
+    {
+        r.underline = true;
+    }
+    let under = render(&mut f, &d, 0, 1024, 768).unwrap();
+    assert!(under.warnings.is_empty(), "{:?}", under.warnings);
+    let (_, _, _, u1) = ink_bbox(&under);
+    assert!(
+        u1 >= y1,
+        "underline at or below the descenders: {u1} vs {y1}"
+    );
+    for r in first_box(&mut d, 0)
+        .paragraphs
+        .iter_mut()
+        .flat_map(|p| &mut p.runs)
+    {
+        r.underline = false;
+        r.letter_spacing = 10.0;
+    }
+
+    // Letter spacing widens the (centred) lines.
+    let spaced = render(&mut f, &d, 0, 1024, 768).unwrap();
+    let (s0, _, s1, _) = ink_bbox(&spaced);
+    assert!(s1 - s0 > x1 - x0 + 50, "{} vs {}", s1 - s0, x1 - x0);
+
+    // Line spacing 2 roughly doubles the gap between the two lines.
+    for r in first_box(&mut d, 0)
+        .paragraphs
+        .iter_mut()
+        .flat_map(|p| &mut p.runs)
+    {
+        r.letter_spacing = 0.0;
+    }
+    for p in &mut first_box(&mut d, 0).paragraphs {
+        p.line_spacing = 2.0;
+    }
+    let tall = render(&mut f, &d, 0, 1024, 768).unwrap();
+    let (_, t0, _, t1) = ink_bbox(&tall);
+    assert!(t1 - t0 > (y1 - y0) + 30, "{} vs {}", t1 - t0, y1 - y0);
+}
+
+#[test]
+fn overflow_is_flagged() {
+    let mut f = fonts();
+    let mut d = load("render_1024x768.pro6");
+    first_box(&mut d, 0).frame.height = 40.0;
+    let frame = render(&mut f, &d, 0, 1024, 768).unwrap();
+    assert!(
+        frame.warnings.iter().any(|w| w.overflow),
+        "{:?}",
+        frame.warnings
+    );
 }
 
 #[test]
@@ -292,4 +410,125 @@ fn rotation_turns_the_box_about_its_centre() {
         (ex + dy).abs() <= 3 && (ey - dx).abs() <= 3,
         "({dx},{dy}) -> ({ex},{ey})"
     );
+}
+
+#[test]
+fn editing_layout_matches_the_drawn_text() {
+    use doc::rich::Pos;
+    let mut f = fonts();
+    let d = load("render_1024x768.pro6");
+    let slide = &d.groups[0].slides[0];
+    let el = slide.text_boxes().next().unwrap();
+    let frame = render(&mut f, &d, 0, 1024, 768).unwrap();
+    let (x0, y0, x1, y1) = ink_bbox(&frame);
+    let lay = render::layout_box(&mut f, &d.path, &slide.uuid, el, 1.0).unwrap();
+    assert!(!lay.overflows());
+    // The caret's lines cover the ink (box-local → canvas: add the frame origin).
+    let (bx, by) = (el.frame.x as f32, el.frame.y as f32);
+    let (cx, ctop, ch) = lay.caret(Pos::new(0, 0));
+    assert!(ch > 30.0, "line height {ch}");
+    assert!(
+        (by + ctop) as u32 <= y0 + 2,
+        "{} vs ink top {y0}",
+        by + ctop
+    );
+    assert!(
+        (bx + cx) as u32 <= x0 + 2,
+        "start of the centred first line"
+    );
+    let last = doc::rich::end(&el.paragraphs);
+    let (ex, etop, eh) = lay.caret(last);
+    assert!(
+        (by + etop + eh) as u32 + 2 >= y1,
+        "last line reaches the ink bottom"
+    );
+    assert!((bx + ex) as u32 + 4 >= x1 || etop > ctop, "end of a line");
+    // Clicking where a caret is drawn puts the caret there.
+    let text = doc::rich::text(&el.paragraphs[0]);
+    for off in (0..=text.len()).filter(|o| text.is_char_boundary(*o)) {
+        let p = Pos::new(0, off);
+        let (x, top, h) = lay.caret(p);
+        assert_eq!(lay.hit(x + 0.1, top + h / 2.0), p, "offset {off}");
+    }
+    // A selection of the whole text spans every line.
+    let sel = lay.selection(Pos::new(0, 0), last);
+    assert!(sel.len() >= 2, "{sel:?}");
+}
+
+/// E2 acceptance: every text attribute survives saving and renders the same after
+/// reopening (the editor canvas, output window and `pp6tool render` all draw with
+/// `render_slide`, so equal documents give equal pixels everywhere).
+#[test]
+fn styled_text_renders_the_same_after_saving_and_reopening() {
+    let mut f = fonts();
+    let dir = std::env::temp_dir().join(format!("render-e2-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("styled.pro6");
+    std::fs::copy(fixtures().join("render_1024x768.pro6"), &file).unwrap();
+    let mut d = doc::open(&file).unwrap();
+    {
+        let t = first_box(&mut d, 0);
+        let base = t.paragraphs[0].runs[0].clone();
+        t.paragraphs = vec![
+            doc::Paragraph {
+                align: doc::Align::Left,
+                line_spacing: 1.4,
+                runs: vec![
+                    doc::Run {
+                        text: "Bold ".into(),
+                        bold: true,
+                        ..base.clone()
+                    },
+                    doc::Run {
+                        text: "serif".into(),
+                        font: "Liberation Serif".into(),
+                        color: Some([255, 200, 0]),
+                        size: 60.0,
+                        ..base.clone()
+                    },
+                ],
+            },
+            doc::Paragraph {
+                align: doc::Align::Right,
+                line_spacing: 1.0,
+                runs: vec![doc::Run {
+                    text: "under\nspaced".into(),
+                    underline: true,
+                    letter_spacing: 6.0,
+                    ..base
+                }],
+            },
+        ];
+        t.valign = doc::VAlign::Top;
+        t.outline = Some(doc::Outline {
+            width: 3.0,
+            color: doc::Rgba {
+                r: 0.0,
+                g: 0.3,
+                b: 1.0,
+                a: 1.0,
+            },
+        });
+        t.shadow = Some(doc::Shadow {
+            color: doc::Rgba {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.7,
+            },
+            blur: 4.0,
+            offset: (5.0, 5.0),
+        });
+        t.rotation = 8.0;
+    }
+    let before = render(&mut f, &d, 0, 1280, 720).unwrap();
+    assert!(before.warnings.is_empty(), "{:?}", before.warnings);
+    d.mode = doc::Mode::Native;
+    let saved = doc::save(&d).unwrap();
+    let back = doc::open(&file).unwrap();
+    assert_eq!(back.path, saved.path, "reopened as the .opres");
+    let after = render(&mut f, &back, 0, 1280, 720).unwrap();
+    assert!(after.text == before.text, "same pixels after reopening");
+    std::fs::remove_dir_all(&dir).unwrap();
 }

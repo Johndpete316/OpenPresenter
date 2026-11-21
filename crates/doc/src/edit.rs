@@ -27,6 +27,33 @@ pub enum Edit {
         element: usize,
         text: String,
     },
+    /// Replace a text box's styled text (rich text editing, style changes).
+    SetRichText {
+        group: usize,
+        slide: usize,
+        element: usize,
+        paragraphs: Vec<Paragraph>,
+    },
+    SetVAlign {
+        group: usize,
+        slide: usize,
+        element: usize,
+        valign: VAlign,
+    },
+    /// Text outline (`None` = none).
+    SetOutline {
+        group: usize,
+        slide: usize,
+        element: usize,
+        outline: Option<Outline>,
+    },
+    /// Drop shadow (`None` = none).
+    SetShadow {
+        group: usize,
+        slide: usize,
+        element: usize,
+        shadow: Option<Shadow>,
+    },
     /// Move / resize an element (canvas pixels).
     SetFrame {
         group: usize,
@@ -168,6 +195,10 @@ impl Edit {
     pub fn label(&self) -> String {
         match self {
             Edit::SetText { .. } | Edit::SetBoxText { .. } => "Edit text".into(),
+            Edit::SetRichText { .. } => "Edit text".into(),
+            Edit::SetVAlign { .. } => "Vertical alignment".into(),
+            Edit::SetOutline { .. } => "Outline".into(),
+            Edit::SetShadow { .. } => "Drop shadow".into(),
             Edit::SetFrame { .. } => "Move".into(),
             Edit::SetRotation { .. } => "Rotate".into(),
             Edit::SetSlideEnabled { enabled: true, .. } => "Enable slide".into(),
@@ -197,6 +228,38 @@ impl Edit {
             Edit::SetText { .. } | Edit::SetBoxText { .. } | Edit::AddSlide { .. } => {
                 vec![Feature::Text, Feature::SlideStructure]
             }
+            Edit::SetRichText { paragraphs, .. } => {
+                let mut v = vec![
+                    Feature::Text,
+                    Feature::FontFamily,
+                    Feature::FontSize,
+                    Feature::TextColor,
+                    Feature::Bold,
+                    Feature::Italic,
+                    Feature::Underline,
+                    Feature::HorizontalAlign,
+                ];
+                if paragraphs.iter().any(|p| p.line_spacing != 1.0) {
+                    v.push(Feature::LineSpacing);
+                }
+                if paragraphs
+                    .iter()
+                    .flat_map(|p| &p.runs)
+                    .any(|r| r.letter_spacing != 0.0)
+                {
+                    v.push(Feature::LetterSpacing);
+                }
+                v
+            }
+            Edit::SetVAlign { .. } => vec![Feature::VerticalAlign],
+            // Turning an effect off is only a flag, which .pro6 holds.
+            Edit::SetOutline {
+                outline: Some(_), ..
+            } => vec![Feature::TextOutline],
+            Edit::SetShadow {
+                shadow: Some(_), ..
+            } => vec![Feature::TextShadow],
+            Edit::SetOutline { .. } | Edit::SetShadow { .. } => vec![Feature::Text],
             Edit::SetFrame { .. } => vec![Feature::ElementFrame],
             Edit::SetRotation { .. } => vec![Feature::ElementRotation],
             Edit::SetSlideBackground { .. } => vec![Feature::BackgroundColor],
@@ -246,6 +309,58 @@ impl Edit {
                 element,
                 text,
             } => set_text(text_mut(doc, *group, *slide, *element)?, text),
+            Edit::SetRichText {
+                group,
+                slide,
+                element,
+                paragraphs,
+            } => {
+                let t = text_mut(doc, *group, *slide, *element)?;
+                if t.problem.is_some() {
+                    return set_text(t, "");
+                }
+                if paragraphs
+                    .iter()
+                    .flat_map(|p| &p.runs)
+                    .any(|r| r.font.trim().is_empty() || !(r.size.is_finite() && r.size > 0.0))
+                {
+                    return Err(EditError::NoStyle {
+                        uuid: t.uuid.clone(),
+                    });
+                }
+                t.paragraphs.clone_from(paragraphs);
+                Ok(())
+            }
+            Edit::SetVAlign {
+                group,
+                slide,
+                element,
+                valign,
+            } => {
+                text_mut(doc, *group, *slide, *element)?.valign = *valign;
+                Ok(())
+            }
+            Edit::SetOutline {
+                group,
+                slide,
+                element,
+                outline,
+            } => {
+                if outline.is_some_and(|o| !(o.width.is_finite() && o.width > 0.0)) {
+                    return Err(not_found("usable outline width"));
+                }
+                text_mut(doc, *group, *slide, *element)?.outline = *outline;
+                Ok(())
+            }
+            Edit::SetShadow {
+                group,
+                slide,
+                element,
+                shadow,
+            } => {
+                text_mut(doc, *group, *slide, *element)?.shadow = *shadow;
+                Ok(())
+            }
             Edit::SetFrame {
                 group,
                 slide,
@@ -449,6 +564,10 @@ impl Edit {
         match self {
             Edit::SetText { group, slide, .. }
             | Edit::SetBoxText { group, slide, .. }
+            | Edit::SetRichText { group, slide, .. }
+            | Edit::SetVAlign { group, slide, .. }
+            | Edit::SetOutline { group, slide, .. }
+            | Edit::SetShadow { group, slide, .. }
             | Edit::SetFrame { group, slide, .. }
             | Edit::SetRotation { group, slide, .. }
             | Edit::SetSlideBackground { group, slide, .. }
@@ -537,11 +656,13 @@ fn set_text(t: &mut TextBox, text: &str) -> Result<(), EditError> {
         });
     };
     let align = t.paragraphs.first().map(|p| p.align).unwrap_or_default();
+    let line_spacing = t.paragraphs.first().map_or(1.0, |p| p.line_spacing);
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
     t.paragraphs = text
         .split('\n')
         .map(|line| Paragraph {
             align,
+            line_spacing,
             runs: if line.is_empty() {
                 Vec::new()
             } else {

@@ -38,6 +38,13 @@ fn rgba(c: pro6::Rgba) -> Rgba {
     }
 }
 
+const BLACK: Rgba = Rgba {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 1.0,
+};
+
 fn to_p(c: Rgba) -> pro6::Rgba {
     pro6::Rgba {
         r: c.r,
@@ -248,6 +255,7 @@ fn plain_paragraphs(t: &pro6::TextElement) -> Vec<Paragraph> {
     text.split('\n')
         .map(|line| Paragraph {
             align: Align::Left,
+            line_spacing: 1.0,
             runs: vec![Run {
                 text: line.to_owned(),
                 font: String::new(),
@@ -256,6 +264,7 @@ fn plain_paragraphs(t: &pro6::TextElement) -> Vec<Paragraph> {
                 bold: false,
                 italic: false,
                 underline: false,
+                letter_spacing: 0.0,
             }],
         })
         .collect()
@@ -271,6 +280,7 @@ fn text_box(t: &pro6::TextElement, path: &Path, key: String) -> TextBox {
                 .iter()
                 .map(|p| Paragraph {
                     align: align(p.align),
+                    line_spacing: 1.0,
                     runs: p
                         .runs
                         .iter()
@@ -290,6 +300,7 @@ fn text_box(t: &pro6::TextElement, path: &Path, key: String) -> TextBox {
                             bold: run.bold,
                             italic: run.italic,
                             underline: run.underline,
+                            letter_spacing: 0.0,
                         })
                         .collect(),
                 })
@@ -310,6 +321,7 @@ fn text_box(t: &pro6::TextElement, path: &Path, key: String) -> TextBox {
         let first = paragraphs.iter().find_map(|p| {
             p.runs.first().map(|r| Paragraph {
                 align: p.align,
+                line_spacing: 1.0,
                 runs: vec![Run {
                     text: String::new(),
                     ..r.clone()
@@ -341,17 +353,18 @@ fn text_box(t: &pro6::TextElement, path: &Path, key: String) -> TextBox {
                 let width = s.width.as_ref()?.value;
                 (width > 0.0).then(|| Outline {
                     width,
-                    color: s.color.as_ref().map(|c| rgba(c.value)),
+                    color: s.color.as_ref().map_or(BLACK, |c| rgba(c.value)),
                 })
             }),
         shadow: t
             .shadow
             .as_ref()
             .filter(|_| t.drawing_shadow)
+            // Assumed layout `blur|colour|{x, y}` with y up (Cocoa); unverified.
             .map(|s| Shadow {
-                blur: s.value.blur,
-                color: s.value.color.map(rgba),
-                offset: s.value.offset,
+                blur: s.value.blur.unwrap_or(0.0),
+                color: s.value.color.map_or(BLACK, rgba),
+                offset: s.value.offset.map_or((0.0, 0.0), |(x, y)| (x, -y)),
             }),
         paragraphs,
         problem,
@@ -667,15 +680,14 @@ fn export_text(
             None => pt.drawing_fill = false,
         }
     }
-    if t.outline != base.outline {
-        return Err(ExportError::Unsupported {
-            what: "A changed text outline",
-        });
+    // Outline and shadow changes can't be written to .pro6 yet (unverified); they
+    // only exist in native documents, whose export leaves them out. Turning one
+    // off is just the drawing flag.
+    if t.outline.is_none() && base.outline.is_some() {
+        pt.drawing_stroke = false;
     }
-    if t.shadow != base.shadow {
-        return Err(ExportError::Unsupported {
-            what: "A changed drop shadow",
-        });
+    if t.shadow.is_none() && base.shadow.is_some() {
+        pt.drawing_shadow = false;
     }
     if t.paragraphs != base.paragraphs {
         let text_err = |source| ExportError::Text {

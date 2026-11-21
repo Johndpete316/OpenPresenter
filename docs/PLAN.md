@@ -245,7 +245,7 @@ Track findings here as real files arrive. "M0:" notes say how the parser current
 - [ ] RTF font names: family names vs PostScript names (e.g. `ArialMT`, `Helvetica-Bold`). M2 resolves both.
 - [ ] Text overflow beyond the element box (`adjustsHeightToFit`, shrink-to-fit?). M2: draws past the box (clipped to canvas) with a warning.
 - [ ] `drawingBackgroundColor` semantics (slide vs document). M2: slide colour if the slide's flag is true, else the document's if its flag is true, else black.
-- [ ] Shadow, stroke (outline), rotation, underline, and fill corner radius: not drawn in M2 (each produces a render warning).
+- [ ] Fill corner radius: not drawn (render warning). Shadow, stroke (outline), rotation and underline are drawn since the editor redesign (E1/E2). Their directions and field meanings are assumed (see docs/EDITOR-PLAN.md Unknowns).
 - [ ] How PP6 layers slide background colour vs background media, and its media scaling (fit/fill). M5: media under an optional slide colour; media fits the canvas area.
 - [ ] Does PP6 accept files edited here: new slides/groups (fresh UUIDs, no Win payloads), regenerated RTF, and arrangements written in the assumed structure?
 - [x] Arrangement XML structure. **Verified** (see above); the M3/M7 assumption was right.

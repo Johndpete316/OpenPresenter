@@ -244,18 +244,44 @@ Filled in from real files and testing in PP6. Starting state:
   - **Tests:** the canvas and strip interactions run headless against a plain egui context with synthetic pointer and key input (`crates/app/src/editor.rs` tests). A hands-on check with a mouse is still to do.
 
 ### E2 — Rich Text
-- [ ] In-canvas text editing with caret and selection, built on the `cosmic-text` editor with per-run attributes
-- [ ] Font picker from installed fonts (`fontdb`), with search and preview; missing-font error per the `PLAN.md` rules
-- [ ] Size field with −/+ steppers; colour picker with recent colours
-- [ ] Bold / italic / underline
-- [ ] Horizontal align (left, centre, right, justify) and vertical align (top, middle, bottom)
-- [ ] Line spacing and letter spacing
-- [ ] Effects panel with live preview:
+- [x] In-canvas text editing with caret and selection, built on the `cosmic-text` editor with per-run attributes
+- [x] Font picker from installed fonts (`fontdb`), with search and preview; missing-font error per the `PLAN.md` rules
+- [x] Size field with −/+ steppers; colour picker with recent colours
+- [x] Bold / italic / underline
+- [x] Horizontal align (left, centre, right, justify) and vertical align (top, middle, bottom)
+- [x] Line spacing and letter spacing
+- [x] Effects panel with live preview:
   - **Outline:** width, colour
   - **Drop shadow:** colour, angle, distance, blur, opacity
-- [ ] Overflow detection → red badge on the box and its thumbnail
-- [ ] Each attribute wired through `pro6_support` (warning modal when needed)
+- [x] Overflow detection → red badge on the box and its thumbnail
+- [x] Each attribute wired through `pro6_support` (warning modal when needed)
 - **Accept:** every attribute renders the same in the editor, the output window and `pp6tool render`.
+- **Status (2026-11-21):** done.
+  - **Acceptance.** The editor canvas, the output and `pp6tool render` all draw with `render_slide`. `styled_text_renders_the_same_after_saving_and_reopening` in `crates/render/tests/render.rs` styles a box with every attribute, saves it as `.opres` and reopens it, with identical pixels.
+  - **Editing in place:**
+    - Double-click a box, or press Enter with one selected.
+    - Typing, Enter (new paragraph), Shift+Enter (line break), Backspace/Delete (Ctrl = word), arrows / Home / End (Ctrl = word / whole text), Shift to select, mouse click/drag/double-click, Ctrl+A, copy / cut / paste, Ctrl+B / I / U.
+    - Esc, clicking outside, another slide, or Save ends it as **one** undo step.
+    - The canvas shows the text live through `render`.
+    - **Built on cosmic-text, not its `Editor`:** caret, selection and hit testing come from the same cosmic-text layout the output uses (`render::layout_box`, tested to agree with the drawn text). The text model is the document's own runs (`doc::rich`, unit-tested). This avoids converting between cosmic-text's buffer and our runs on every keystroke.
+  - **Toolbar** (appears when a text box is selected):
+    - Font picker with search and each name drawn in its own font. A font that isn't installed shows in red.
+    - Size with −/+, colour with eight recent colours, B / I / U.
+    - Four alignments and three vertical alignments.
+    - Spacing popover: line ×, letter px.
+    - Effects.
+    - While editing, changes apply to the selection, or to what you type next. Otherwise they apply to the whole box as one edit; slider runs merge into one undo step.
+  - **Effects** opens in the inspector column with a Back button: outline (width, colour) and drop shadow (colour, opacity, angle, distance, blur).
+  - **Rendering:** `render` now draws underline, outline, drop shadow, letter spacing and line spacing.
+    - Outline uses a Euclidean distance transform, so corners are round.
+    - Shadow is a three-pass box blur of the text plus outline.
+    - Both are in the same pixel path as everything else.
+  - **Overflow** is reported by the renderer. It shows as a red "Text doesn't fit" badge on the canvas box and "doesn't fit" on strip tiles. Editor thumbnails are now rendered fresh, not from the disk cache, which was keyed by the saved file and could show stale slides.
+  - **"This won't work in ProPresenter 6"** modal: Don't do it / Continue anyway. It appears for outline, shadow, line spacing and letter spacing (all Unverified). Turning an effect off needs no prompt.
+  - **Exporting a native document to `.pro6`** leaves out changed outlines, shadows and spacing (write without the unsupported parts). Turning off an existing outline or shadow is written to `.pro6`.
+  - **Outline and shadow are per text box, not per run.** That's simpler to edit; see Unknowns for what real files do.
+  - **Existing `.pro6` outlines and shadows** (`drawingStroke` / `drawingShadow`) are now drawn instead of warned about. The shadow offset's y is read as pointing up (Cocoa), so `{4, -4}` draws down-right. That is assumed; see Unknowns.
+  - **Test fonts:** the bundled ones have no italic faces, so italic is tested through warnings only.
 
 ### E3 — Images
 - [ ] Insert an image (file dialog, drag-and-drop, paste from clipboard): PNG, JPEG
@@ -317,7 +343,11 @@ Filled in from real files and testing in PP6. Starting state:
 ## Unknowns to Verify
 - [ ] Every `Unverified` row in the Compatibility Matrix
 - [ ] PP6 element type for images (foreground) and how slide backgrounds are stored
-- [ ] Whether shadow and outline are per element or per run in `.pro6`
+- [ ] Whether shadow and outline are per element or per run in `.pro6`.
+  - Real hymn files use **per-run RTF outlines** (`\outl \strokewidth \strokec`, PLAN.md "Found in real files"). These aren't read or drawn yet.
+  - The editor's outline is per box, using the element's stroke.
+  - Decide with John whether to import RTF outlines (to the box outline when uniform) before relying on outlines in real files.
+- [ ] Shadow offset direction: `{x, y}` read with y up (Cocoa), so `{4.95, -4.95}` is drawn down-right. Compare a shadowed slide with PP6.
 - [x] Export-to-`.pro6` behaviour for `Native` documents: ask each export (John, 2026-11-21)
 
 ## Additional Tooling

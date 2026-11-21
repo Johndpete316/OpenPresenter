@@ -26,6 +26,8 @@ use pp6core::{Command, ShowState};
 use crate::thumbs::ThumbRequest;
 use crate::ui::{UiAction, UiState, color32, paint_error};
 
+mod text;
+
 const RULER: f32 = 18.0;
 const HANDLE: f32 = 4.5;
 /// Rotation handle distance above the box, in screen points.
@@ -46,6 +48,8 @@ pub enum Zoom {
 enum Tab {
     #[default]
     Text,
+    /// Outline and shadow (opens from the text toolbar, Canva-style).
+    Effects,
     Slide,
 }
 
@@ -100,6 +104,15 @@ pub struct EditState {
     view: Option<(Rect, f32)>,
     /// Slide tiles in the strip, last frame.
     tiles: Vec<((usize, usize), Rect)>,
+    /// Text being edited in place on the canvas.
+    session: Option<text::TextSession>,
+    /// The pointer is selecting text in the session's box.
+    session_drag: bool,
+    /// An edit waiting for "Continue anyway" (won't work in ProPresenter 6).
+    pending_native: Option<text::PendingNative>,
+    recent_colors: Vec<[u8; 3]>,
+    font_search: String,
+    font_previews: std::collections::HashMap<String, Option<egui::TextureHandle>>,
 }
 
 impl EditState {
@@ -168,11 +181,12 @@ fn close_prompt(
     show: &ShowState,
     path: &Path,
     actions: &mut Vec<UiAction>,
+    pending_edit: bool,
 ) {
     if !st.edit.close_requested {
         return;
     }
-    if !show.unsaved.contains(path) {
+    if !show.unsaved.contains(path) && !pending_edit {
         st.edit.close_requested = false;
         st.edit.on = false;
         return;
@@ -243,6 +257,7 @@ pub fn editor(
         st.edit.drag = None;
     }
 
+    text::check_session(st, actions, path, d);
     top_bar(ui, st, show, actions, path, d);
     context_bar(ui, st, actions, path, d);
     bottom_bar(ui, st, actions, path, d);
@@ -269,7 +284,13 @@ pub fn editor(
     egui::CentralPanel::default()
         .frame(egui::Frame::new().fill(Color32::from_gray(24)))
         .show(ui, |ui| canvas(ui, st, actions, path, d));
-    close_prompt(ui.ctx(), st, show, path, actions);
+    text::native_prompt(ui.ctx(), st, actions, path);
+    let mut pending = false;
+    if st.edit.close_requested {
+        pending = st.edit.session.as_ref().is_some_and(|s| s.dirty());
+        text::commit(st, actions, path, d);
+    }
+    close_prompt(ui.ctx(), st, show, path, actions, pending);
 }
 
 // ───────────────────────────── bars ─────────────────────────────
@@ -282,7 +303,8 @@ fn top_bar(
     path: &Path,
     d: &doc::Document,
 ) {
-    let unsaved = show.unsaved.contains(path);
+    let unsaved =
+        show.unsaved.contains(path) || st.edit.session.as_ref().is_some_and(|s| s.dirty());
     egui::Panel::top("editor-top")
         .frame(egui::Frame::new().fill(crate::theme::color::HEADER).inner_margin(6.0))
         .show(ui, |ui| {
@@ -316,6 +338,7 @@ fn top_bar(
                         format!("Undo {l} (Ctrl+Z)")
                     }));
                 if (r.clicked() || key_undo) && undo.is_some() {
+                    text::commit(st, actions, path, d);
                     actions.push(UiAction::Core(Command::Undo(path.to_path_buf())));
                     st.edit.text_for = None;
                     st.edit.notes_for = None;
@@ -326,6 +349,7 @@ fn top_bar(
                         format!("Redo {l} (Ctrl+Shift+Z)")
                     }));
                 if (r.clicked() || key_redo) && redo.is_some() {
+                    text::commit(st, actions, path, d);
                     actions.push(UiAction::Core(Command::Redo(path.to_path_buf())));
                     st.edit.text_for = None;
                     st.edit.notes_for = None;
@@ -340,6 +364,7 @@ fn top_bar(
                 if (ui.add_enabled(unsaved, save).on_hover_text("Save (Ctrl+S)").clicked() || key_save)
                     && unsaved
                 {
+                    text::commit(st, actions, path, d);
                     actions.push(UiAction::Core(Command::Save(path.to_path_buf())));
                 }
                 if ui
@@ -347,6 +372,7 @@ fn top_bar(
                     .on_hover_text("Throw away unsaved changes (the saved file is untouched)")
                     .clicked()
                 {
+                    st.edit.session = None;
                     actions.push(UiAction::Core(Command::Revert(path.to_path_buf())));
                     st.edit.text_for = None;
                     st.edit.notes_for = None;
@@ -399,15 +425,7 @@ fn context_bar(
                     return;
                 };
                 let Some(t) = text_box(d, g, s, e) else { return };
-                ui.label(RichText::new("Text box").strong());
-                if !t.name.is_empty() {
-                    ui.label(RichText::new(format!("“{}”", t.name)).weak());
-                }
-                ui.separator();
-                if ui.button("Edit text").on_hover_text("Double-click the box on the canvas").clicked() {
-                    st.edit.tab = Tab::Text;
-                    st.edit.focus_text = true;
-                }
+                text::toolbar(ui, st, actions, path, d, (g, s, e));
                 let rotation = t.rotation.rem_euclid(360.0);
                 if rotation != 0.0
                     && ui
@@ -621,7 +639,7 @@ fn strip(
                     let (rect, resp) =
                         ui.allocate_exact_size(Vec2::new(tile_w, tile_h), Sense::click_and_drag());
                     st.edit.tiles.push(((gi, si), rect));
-                    let (_, tex) = st.thumb_public(thumbs, d, flat);
+                    let (key, tex) = st.thumb_public(thumbs, d, flat);
                     match tex {
                         Some(Ok(t)) => {
                             egui::Image::new(t).paint_at(ui, rect);
@@ -663,6 +681,20 @@ fn strip(
                         FontId::proportional(11.0),
                         Color32::WHITE,
                     );
+                    if st.thumb_overflow.contains(&key) {
+                        let b = Rect::from_min_size(
+                            rect.left_bottom() + Vec2::new(2.0, -17.0),
+                            Vec2::new(78.0, 15.0),
+                        );
+                        p.rect_filled(b, 3.0, Color32::from_rgb(190, 30, 30));
+                        p.text(
+                            b.center(),
+                            Align2::CENTER_CENTER,
+                            "doesn't fit",
+                            FontId::proportional(10.0),
+                            Color32::WHITE,
+                        );
+                    }
                     if slide.pro6_incompatible {
                         let b = Rect::from_min_size(
                             rect.right_top() + Vec2::new(-52.0, 2.0),
@@ -1041,6 +1073,7 @@ fn inspector(
 ) {
     ui.horizontal(|ui| {
         ui.selectable_value(&mut st.edit.tab, Tab::Text, "Text");
+        ui.selectable_value(&mut st.edit.tab, Tab::Effects, "Effects");
         ui.selectable_value(&mut st.edit.tab, Tab::Slide, "Slide");
     });
     ui.separator();
@@ -1050,6 +1083,20 @@ fn inspector(
     };
     match st.edit.tab {
         Tab::Text => text_tab(ui, st, actions, path, d, g, s),
+        Tab::Effects => {
+            let e = st.edit.element.or_else(|| {
+                d.groups[g].slides[s]
+                    .elements
+                    .iter()
+                    .position(|e| matches!(e, Element::Text(_)))
+            });
+            match e {
+                Some(e) => text::effects_tab(ui, st, actions, path, d, (g, s, e)),
+                None => {
+                    ui.label(RichText::new("This slide has no text box.").weak());
+                }
+            }
+        }
         Tab::Slide => slide_tab(ui, st, actions, path, d, g, s),
     }
 }
@@ -1092,6 +1139,23 @@ fn text_tab(
             RichText::new(format!("This text box can't be edited: {why}")).color(Color32::YELLOW),
         );
         return;
+    }
+    ui.label(
+        RichText::new("Double-click the text on the canvas to edit it there, with styles.")
+            .small()
+            .weak(),
+    );
+    let mixed = {
+        let mut runs = t.runs();
+        let first = runs.next();
+        first.is_some_and(|f| runs.any(|r| !r.same_style(f)))
+    };
+    if mixed {
+        ui.label(
+            RichText::new("This box mixes styles: text applied here takes the first line's style for all of it.")
+                .small()
+                .color(Color32::YELLOW),
+        );
     }
     let r = ui.add(
         egui::TextEdit::multiline(&mut st.edit.text)
@@ -1395,8 +1459,69 @@ fn canvas(
     let to_screen = |p: Pos2| rect.min + p.to_vec2() * scale;
     let to_canvas = |p: Pos2| Pos2::ZERO + (p - rect.min) / scale;
 
-    // The image: the editor copy, or a preview of the drag in progress.
+    let ppp = ui.ctx().pixels_per_point();
+    let now = ui.input(|i| i.time);
+    if let Some(sess) = st.edit.session.as_mut() {
+        sess.scale = scale * ppp;
+    }
+
+    // Text being edited owns the pointer inside its box: place the caret, select.
+    let sess_box = st
+        .edit
+        .session
+        .as_ref()
+        .filter(|x| x.g == g && x.s == s)
+        .and_then(|x| text_box(d, g, s, x.e).map(|t| (t.frame, t.rotation)));
+    let local_of = |f: &doc::Rect, r: f64, p: Pos2| {
+        let l = to_local(f, r, p);
+        (l.x + f.width as f32 / 2.0, l.y + f.height as f32 / 2.0)
+    };
+    let (pressed, down, shift) = ui.input(|i| {
+        (
+            i.pointer.primary_pressed(),
+            i.pointer.primary_down(),
+            i.modifiers.shift,
+        )
+    });
+    let mut session_owns = st.edit.session_drag;
+    if let Some((f, r)) = sess_box
+        && let Some(p) = resp.hover_pos().map(to_canvas)
+    {
+        if pressed {
+            if hit(&f, r, p) {
+                text::pointer(
+                    st,
+                    d,
+                    local_of(&f, r, p),
+                    text::Mouse::Press { extend: shift },
+                    now,
+                );
+                st.edit.session_drag = true;
+                session_owns = true;
+            } else {
+                text::commit(st, actions, path, d);
+            }
+        } else if st.edit.session_drag && down {
+            text::pointer(st, d, local_of(&f, r, p), text::Mouse::Drag, now);
+        }
+        if resp.double_clicked() && hit(&f, r, p) {
+            text::pointer(st, d, local_of(&f, r, p), text::Mouse::Double, now);
+            session_owns = true;
+        }
+    }
+    if !down {
+        st.edit.session_drag = false;
+    }
+
+    // The image: the editor copy, the text being edited, or a drag in progress.
+    let session_preview = st
+        .edit
+        .session
+        .as_mut()
+        .filter(|x| x.g == g && x.s == s)
+        .map(|x| text::preview(x, d));
     let shown = match st.edit.drag.as_mut() {
+        _ if session_preview.is_some() => session_preview.clone().unwrap_or_else(|| d.clone()),
         Some(dr) if dr.now_frame != dr.frame || dr.now_rotation != dr.rotation => {
             if dr
                 .preview
@@ -1418,7 +1543,6 @@ fn canvas(
     };
     painter.rect_filled(rect, 0.0, Color32::BLACK);
     if let Some(c) = &mut st.canvas {
-        let ppp = ui.ctx().pixels_per_point();
         c.request(
             &shown,
             flat_index(d, g, s),
@@ -1524,6 +1648,23 @@ fn canvas(
             Stroke::new(1.0, Color32::from_white_alpha(45))
         };
         painter.add(egui::Shape::closed_line(pts.clone(), stroke));
+        // Text taller than its box: a red badge (the strip tile gets one too).
+        if st
+            .canvas
+            .as_ref()
+            .is_some_and(|c| c.overflow().iter().any(|u| u == &t.uuid))
+        {
+            let at = pts[3];
+            let badge = Rect::from_min_size(at + Vec2::new(0.0, 2.0), Vec2::new(118.0, 18.0));
+            painter.rect_filled(badge, 3.0, Color32::from_rgb(190, 30, 30));
+            painter.text(
+                badge.center(),
+                Align2::CENTER_CENTER,
+                "Text doesn't fit",
+                FontId::proportional(11.0),
+                Color32::WHITE,
+            );
+        }
         if selected && !t.locked {
             let top = to_screen(handle_pos(&f, r, 0, -1));
             let arm = top + rotate(Vec2::new(0.0, -ROTATE_ARM), r);
@@ -1563,8 +1704,15 @@ fn canvas(
         );
     }
 
+    text::paint(ui, &painter, st, d, &to_screen);
+
     // Cursor.
-    if let Some(p) = resp.hover_pos() {
+    if let Some((f, r)) = sess_box
+        && let Some(p) = resp.hover_pos()
+        && hit(&f, r, to_canvas(p))
+    {
+        ui.ctx().set_cursor_icon(CursorIcon::Text);
+    } else if let Some(p) = resp.hover_pos() {
         let icon = match st.edit.drag.as_ref().map(|d| d.grab).or_else(|| grab_at(p)) {
             Some(Grab::Move) => Some(CursorIcon::Move),
             Some(Grab::Rotate) => Some(CursorIcon::Grab),
@@ -1583,6 +1731,7 @@ fn canvas(
 
     // Press / drag / release.
     if resp.drag_started()
+        && !session_owns
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
     {
         let grab = grab_at(origin).map(|g| (selected_el, g)).or_else(|| {
@@ -1639,25 +1788,58 @@ fn canvas(
             );
         }
     }
-    if resp.clicked() {
+    // (While editing text, the canvas has keyboard focus and egui reports Enter /
+    // Space as clicks; the session handles the pointer itself.)
+    if resp.clicked() && !session_owns && st.edit.session.is_none() {
         st.edit.element = resp
             .interact_pointer_pos()
             .map(to_canvas)
             .and_then(topmost_at);
     }
+    // Double-click a text box: edit its text in place.
     if resp.double_clicked()
-        && let Some(e) = resp
-            .interact_pointer_pos()
-            .map(to_canvas)
-            .and_then(topmost_at)
+        && !session_owns
+        && let Some(p) = resp.interact_pointer_pos().map(to_canvas)
+        && let Some(e) = topmost_at(p)
+        && let Some((_, t)) = boxes.iter().find(|(i, _)| *i == e)
     {
-        st.edit.element = Some(e);
-        st.edit.tab = Tab::Text;
-        st.edit.focus_text = true;
+        st.edit.drag = None;
+        let at = local_of(&t.frame, t.rotation, p);
+        text::begin(st, d, (g, s, e), Some(at), scale * ppp, now);
     }
 
-    // Keyboard: arrows nudge (1 px, Shift 10 px), Esc deselects. Never while typing.
-    if ui.memory(|m| m.focused().is_none())
+    // Keys go to the text being edited (focus stays on the canvas while it is).
+    if st.edit.session.is_some() {
+        let id = resp.id;
+        let focused = ui.memory(|m| m.focused());
+        if focused.is_none() || focused == Some(id) {
+            ui.memory_mut(|m| {
+                m.request_focus(id);
+                m.set_focus_lock_filter(
+                    id,
+                    egui::EventFilter {
+                        tab: true,
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        escape: true,
+                    },
+                );
+            });
+            text::keys(ui, st, actions, path, d);
+        }
+    }
+
+    // Keyboard: arrows nudge (1 px, Shift 10 px), Enter edits the text, Esc
+    // deselects. Never while typing.
+    if st.edit.session.is_none()
+        && ui.memory(|m| m.focused().is_none())
+        && ui.input(|i| i.key_pressed(egui::Key::Enter))
+        && let Some(e) = st.edit.element
+    {
+        text::begin(st, d, (g, s, e), None, scale * ppp, now);
+    }
+    if st.edit.session.is_none()
+        && ui.memory(|m| m.focused().is_none())
         && let Some(e) = st.edit.element
         && let Some((_, t)) = boxes.iter().find(|(i, _)| *i == e)
     {
@@ -2007,6 +2189,8 @@ mod tests {
             Arc::make_mut(&mut show.docs).insert(path.clone(), doc.clone());
             let mut st = UiState::default();
             st.edit.select(0, 0);
+            let fonts = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/fonts");
+            st.fonts = Some(render::Fonts::from_dirs(&[&fonts]));
             let (thumbs, _thumbs_rx) = crossbeam_channel::unbounded();
             Harness {
                 ctx: egui::Context::default(),
@@ -2157,6 +2341,157 @@ mod tests {
             }
             other => panic!("expected one SetFrame, got {other:?}"),
         }
+    }
+
+    fn double_click(h: &mut Harness, at: Pos2) -> Vec<Op> {
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let mut out = h.frame(vec![egui::Event::PointerMoved(at)]);
+        out.extend(h.frame(vec![
+            button(true),
+            button(false),
+            button(true),
+            button(false),
+        ]));
+        out.extend(h.frame(vec![]));
+        out
+    }
+
+    fn key(h: &mut Harness, key: egui::Key) -> Vec<Op> {
+        h.frame(vec![egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: h.mods,
+        }])
+    }
+
+    fn plain(paras: &[doc::Paragraph]) -> Vec<String> {
+        paras.iter().map(doc::rich::text).collect()
+    }
+
+    #[test]
+    fn typing_in_place_sends_one_text_edit() {
+        let mut h = Harness::new();
+        h.frame(vec![]);
+        h.frame(vec![]);
+        // Slide 1: "Centred middle" / "second line", centred in the box.
+        let mid = h.at(512.0, 384.0);
+        assert!(double_click(&mut h, mid).is_empty());
+        assert!(h.st.edit.session.is_some(), "editing in place");
+        // Caret to the very end, type, new paragraph, type, Backspace once.
+        h.mods.command = true;
+        key(&mut h, egui::Key::End);
+        h.mods.command = false;
+        h.frame(vec![egui::Event::Text("!".into())]);
+        key(&mut h, egui::Key::Enter);
+        h.frame(vec![egui::Event::Text("third liner".into())]);
+        assert!(
+            key(&mut h, egui::Key::Backspace).is_empty(),
+            "nothing sent while typing"
+        );
+        // Select the first word and make it bold.
+        h.mods.command = true;
+        key(&mut h, egui::Key::Home);
+        h.mods.command = false;
+        h.mods.shift = true;
+        h.mods.command = true;
+        key(&mut h, egui::Key::ArrowRight);
+        h.mods.shift = false;
+        key(&mut h, egui::Key::B);
+        h.mods.command = false;
+        // Esc ends it: one edit with everything.
+        let edits = key(&mut h, egui::Key::Escape);
+        assert!(h.st.edit.session.is_none());
+        match edits.as_slice() {
+            [
+                Op::SetRichText {
+                    group: 0,
+                    slide: 0,
+                    element: 0,
+                    paragraphs,
+                },
+            ] => {
+                assert_eq!(
+                    plain(paragraphs),
+                    ["Centred middle", "second line!", "third line"]
+                );
+                assert!(paragraphs[0].runs[0].bold && paragraphs[0].runs[0].text == "Centred");
+                assert!(!paragraphs[0].runs.last().unwrap().bold);
+                assert_eq!(
+                    paragraphs[2].runs[0].font, paragraphs[1].runs[0].font,
+                    "new paragraph keeps the style"
+                );
+            }
+            other => panic!("expected one SetRichText, got {other:?}"),
+        }
+        assert_eq!(h.st.edit.element, Some(0), "box stays selected");
+    }
+
+    #[test]
+    fn clicking_outside_ends_editing_and_unchanged_text_sends_nothing() {
+        let mut h = Harness::new();
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let mid = h.at(512.0, 384.0);
+        double_click(&mut h, mid);
+        assert!(h.st.edit.session.is_some());
+        let edits = h.click(h.at(20.0, 20.0));
+        assert!(h.st.edit.session.is_none());
+        assert!(edits.is_empty(), "{edits:?}");
+    }
+
+    #[test]
+    fn toolbar_styles_the_whole_box_and_effects_ask_first() {
+        let mut h = Harness::new();
+        h.frame(vec![]);
+        h.click(h.at(512.0, 384.0));
+        assert_eq!(h.st.edit.element, Some(0));
+        // Ctrl+B is for text editing; the toolbar's apply does the whole box.
+        let d = h.doc.clone();
+        let mut actions = Vec::new();
+        text::apply_for_test(&mut h.st, &mut actions, &h.path, &d, (0, 0, 0), true);
+        match actions.as_slice() {
+            [
+                UiAction::Core(Command::Edit {
+                    edit: Op::SetRichText { paragraphs, .. },
+                    ..
+                }),
+            ] => {
+                assert!(paragraphs.iter().flat_map(|p| &p.runs).all(|r| r.bold));
+            }
+            _ => panic!("expected a SetRichText edit"),
+        }
+        // An outline in a .pro6 document waits for "Continue anyway".
+        let mut actions = Vec::new();
+        text::send_checked(
+            &mut h.st,
+            &mut actions,
+            &h.path,
+            &d,
+            Op::SetOutline {
+                group: 0,
+                slide: 0,
+                element: 0,
+                outline: Some(doc::Outline {
+                    width: 2.0,
+                    color: doc::Rgba {
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 1.0,
+                    },
+                }),
+            },
+            None,
+        );
+        assert!(actions.is_empty());
+        assert!(h.st.edit.pending_native.is_some());
     }
 
     #[test]
