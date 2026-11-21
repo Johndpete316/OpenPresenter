@@ -121,7 +121,12 @@ fn thumbnail(
         Err(e) => return (Err(e.user_message()), false),
     };
     let overflow = frame.warnings.iter().any(|w| w.overflow);
-    let img = frame.composite();
+    // A video slide is drawn over its video's poster: keep it see-through.
+    let img = if slide.video.is_some() {
+        frame.transparent()
+    } else {
+        frame.composite()
+    };
     if let Some(p) = &disk
         && let Err(e) = img.save(p)
     {

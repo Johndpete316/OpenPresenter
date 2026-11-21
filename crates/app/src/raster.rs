@@ -56,10 +56,15 @@ pub enum RenderCmd {
         height: u32,
     },
     Redraw,
-    /// Background media to show (and to pre-load next).
+    /// Background media to show (and to pre-load next). `cue`: how it plays when it's
+    /// a slide's video (`None` = loop at full volume); `restart` changes to start it
+    /// again from the beginning.
     Media {
         current: Option<PathBuf>,
         next: Option<PathBuf>,
+        cue: Option<doc::SlideVideo>,
+        paused: bool,
+        restart: u64,
     },
     /// mpv has a new frame (posted from mpv's thread).
     MediaFrame,
@@ -130,8 +135,16 @@ pub fn spawn(
 struct Sent {
     live: Option<(usize, usize)>,
     layers: Option<(bool, bool)>,
-    media: Option<(Option<PathBuf>, Option<PathBuf>)>,
+    media: Option<MediaSent>,
 }
+
+type MediaSent = (
+    Option<PathBuf>,
+    Option<PathBuf>,
+    Option<doc::SlideVideo>,
+    bool,
+    u64,
+);
 
 /// A rendered frame, or the operator message for a slide that can't be drawn.
 type Rendered = Result<Arc<SlideFrame>, String>;
@@ -190,11 +203,20 @@ impl Worker {
             self.sent = Sent::default();
         }
         self.apply_live(s, force);
-        let media = (s.background_media.clone(), s.background_next.clone());
+        let media: MediaSent = (
+            s.background_media.clone(),
+            s.background_next.clone(),
+            s.background_cue.as_ref().map(|c| c.video.clone()),
+            s.media_paused,
+            s.media_restart,
+        );
         if self.sent.media.as_ref() != Some(&media) {
             self.send(RenderCmd::Media {
                 current: media.0.clone(),
                 next: media.1.clone(),
+                cue: media.2.clone(),
+                paused: media.3,
+                restart: media.4,
             });
             self.sent.media = Some(media);
         }

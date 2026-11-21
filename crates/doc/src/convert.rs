@@ -168,6 +168,7 @@ pub(crate) fn convert(p: &pro6::Document) -> Document {
                                         loop_to_beginning: t.loop_to_beginning,
                                     },
                                 ),
+                                video: None,
                                 pro6_incompatible: false,
                                 theme: None,
                                 src: Some(skey),

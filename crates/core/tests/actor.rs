@@ -1058,3 +1058,72 @@ fn editing_a_theme_restyles_linked_slides_in_native_presentations() {
     drop(core);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn slide_videos_play_pause_and_follow_their_end_setting() {
+    // A native copy of the song: slide 1 has a video that waits for Play and goes to
+    // the next slide at its end; slide 2's video goes away at its end.
+    let dir = std::env::temp_dir().join(format!("opcore-video-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut d = doc::load(&fixture("song_1024x768.pro6")).unwrap();
+    let order = opcore::slide_order(&d, None);
+    let (a, b) = (order[0], order[1]);
+    let mut first = doc::SlideVideo::new(doc::MediaRef {
+        path: "intro.mp4".into(),
+        sha256: None,
+    });
+    first.start = doc::VideoStart::OnClick;
+    first.end = doc::VideoEnd::Next;
+    let mut second = doc::SlideVideo::new(doc::MediaRef {
+        path: "/videos/missions.mp4".into(),
+        sha256: None,
+    });
+    second.end = doc::VideoEnd::Stop;
+    for (r, v) in [(a, first), (b, second)] {
+        doc::Edit::SetSlideVideo {
+            group: r.group,
+            slide: r.slide,
+            video: Some(v),
+        }
+        .apply(&mut d)
+        .unwrap();
+    }
+    d.path = dir.join("Video Sunday.opres");
+    d.mode = doc::Mode::Native;
+    let path = doc::save(&d).unwrap().path;
+
+    let (core, rx) = start(CoreConfig::default());
+    core.send(Command::GoTo {
+        presentation: path.clone(),
+        position: 0,
+    });
+    let s = wait(&rx, "first slide live", |s| pos(s) == Some(0));
+    let intro = dir.join("intro.mp4");
+    assert_eq!(
+        s.background_media.as_deref(),
+        Some(intro.as_path()),
+        "relative to the file"
+    );
+    assert!(s.media_paused, "waits for Play");
+    assert!(s.background_cue.is_some());
+    core.send(Command::MediaPlay);
+    let s = wait(&rx, "playing", |s| !s.media_paused);
+    let restarts = s.media_restart;
+    core.send(Command::MediaRestart);
+    wait(&rx, "restarted", |s| s.media_restart > restarts);
+    // An end report for something no longer playing is ignored.
+    core.send(Command::MediaEnded("/other.mp4".into()));
+    // Its end: the next slide, whose own video takes over.
+    core.send(Command::MediaEnded(intro.clone()));
+    let s = wait(&rx, "next slide", |s| pos(s) == Some(1));
+    let missions = std::path::PathBuf::from("/videos/missions.mp4");
+    assert_eq!(s.background_media.as_deref(), Some(missions.as_path()));
+    assert!(!s.media_paused, "starts when the slide is shown");
+    // Its end: the video goes away; the slide stays.
+    core.send(Command::MediaEnded(missions));
+    let s = wait(&rx, "video gone", |s| s.background_media.is_none());
+    assert_eq!(pos(&s), Some(1));
+    assert!(s.background_cue.is_none());
+    std::fs::remove_dir_all(&dir).unwrap();
+}

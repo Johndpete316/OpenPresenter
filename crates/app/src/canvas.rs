@@ -87,7 +87,17 @@ impl CanvasRenderer {
                                 .filter(|w| w.media)
                                 .map(|w| (w.element_uuid.clone(), w.message.clone()))
                                 .collect();
-                            let img = frame.composite();
+                            // A video slide is drawn over the video's poster.
+                            let video = req
+                                .doc
+                                .slides()
+                                .nth(req.flat)
+                                .is_some_and(|sl| sl.video.is_some());
+                            let img = if video {
+                                frame.transparent()
+                            } else {
+                                frame.composite()
+                            };
                             egui::ColorImage::from_rgba_unmultiplied(
                                 [img.width() as usize, img.height() as usize],
                                 img.as_raw(),

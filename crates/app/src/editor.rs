@@ -34,6 +34,7 @@ pub(crate) mod lyrics;
 mod snap;
 mod text;
 mod themes;
+mod video;
 pub use themes::THEMES_DIR;
 
 const RULER: f32 = 18.0;
@@ -65,6 +66,8 @@ enum Tab {
     Position,
     Layers,
     Slide,
+    /// The slide's video.
+    Video,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -653,6 +656,15 @@ fn top_bar(
                         text::commit(st, actions, path, d);
                         image::start(st, ui.ctx(), path, image::Source::Pick, image::Target::Insert(g, s));
                     }
+                    if ui
+                        .button("Video")
+                        .on_hover_text("A video that plays full screen under this slide's text when the slide is live")
+                        .clicked()
+                    {
+                        text::commit(st, actions, path, d);
+                        video::pick(st, actions, path, d, (g, s));
+                        st.edit.tab = Tab::Video;
+                    }
                 }
                 ui.separator();
                 let save = egui::Button::new(RichText::new("Save").strong()).fill(if unsaved {
@@ -1006,6 +1018,12 @@ fn strip(
                     let (rect, resp) =
                         ui.allocate_exact_size(Vec2::new(tile_w, tile_h), Sense::click_and_drag());
                     st.edit.tiles.push(((gi, si), rect));
+                    if slide.video.is_some() {
+                        ui.painter().rect_filled(rect, 0.0, Color32::BLACK);
+                        if let Some(t) = video_poster(st, path, d, gi, si) {
+                            egui::Image::new(&t).paint_at(ui, rect);
+                        }
+                    }
                     let (key, tex) = st.thumb_public(thumbs, d, flat);
                     match tex {
                         Some(Ok(t)) => {
@@ -1438,13 +1456,15 @@ fn inspector(
     path: &Path,
     d: &doc::Document,
 ) {
-    ui.horizontal(|ui| {
+    // Wrapped, so the tabs never widen the panel (and squeeze the canvas).
+    ui.horizontal_wrapped(|ui| {
         // Effects and Adjust open from the toolbars (side panels with a Back button).
         ui.selectable_value(&mut st.edit.tab, Tab::Text, "Text");
         ui.selectable_value(&mut st.edit.tab, Tab::Image, "Image");
         ui.selectable_value(&mut st.edit.tab, Tab::Position, "Position");
         ui.selectable_value(&mut st.edit.tab, Tab::Layers, "Layers");
         ui.selectable_value(&mut st.edit.tab, Tab::Slide, "Slide");
+        ui.selectable_value(&mut st.edit.tab, Tab::Video, "Video");
     });
     ui.separator();
     let Some((g, s)) = st.edit.sel else {
@@ -1480,6 +1500,7 @@ fn inspector(
         Tab::Position => arrange::position_tab(ui, st, actions, path, d, (g, s)),
         Tab::Layers => arrange::layers_tab(ui, st, actions, path, d, (g, s)),
         Tab::Slide => slide_tab(ui, st, actions, path, d, g, s),
+        Tab::Video => video::video_tab(ui, st, actions, path, d, (g, s)),
     }
 }
 
@@ -2120,6 +2141,15 @@ fn canvas(
         _ => d.clone(),
     };
     painter.rect_filled(rect, 0.0, Color32::BLACK);
+    // A video slide: the video's poster under the slide (which draws no colour).
+    if let Some(t) = video_poster(st, path, d, g, s) {
+        painter.image(
+            t.id(),
+            rect,
+            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+            Color32::WHITE,
+        );
+    }
     if let Some(c) = &mut st.canvas {
         c.request(
             &shown,
@@ -2956,6 +2986,19 @@ fn rulers(
     }
 }
 
+/// The poster (first frame) of slide `(g, s)`'s video, once it's made.
+fn video_poster(
+    st: &mut UiState,
+    path: &Path,
+    d: &doc::Document,
+    g: usize,
+    s: usize,
+) -> Option<egui::TextureHandle> {
+    let v = d.groups.get(g)?.slides.get(s)?.video.as_ref()?;
+    let f = v.media.resolve(path);
+    st.media_thumbs.as_mut()?.get(&f)?.as_ref().ok().cloned()
+}
+
 /// `(group, slide)` exists in `d`.
 fn sel_valid(d: &doc::Document, (g, s): (usize, usize)) -> bool {
     d.groups.get(g).is_some_and(|gr| s < gr.slides.len())
@@ -3134,6 +3177,32 @@ mod tests {
             out.extend(self.frame(vec![button(false)]));
             out
         }
+    }
+
+    #[test]
+    fn the_video_tab_shows_a_slides_video_and_offers_one_otherwise() {
+        let mut h = Harness::new();
+        h.st.edit.tab = Tab::Video;
+        h.frame(vec![]);
+        // With a video: drawn without trouble, and removing it is one edit.
+        let mut d = (*h.doc).clone();
+        let mut v = doc::SlideVideo::new(doc::MediaRef {
+            path: "/videos/missing.mp4".into(),
+            sha256: None,
+        });
+        v.start = doc::VideoStart::OnClick;
+        Op::SetSlideVideo {
+            group: 0,
+            slide: 0,
+            video: Some(v),
+        }
+        .apply(&mut d)
+        .unwrap();
+        h.doc = Arc::new(d);
+        Arc::make_mut(&mut h.show.docs).insert(h.path.clone(), h.doc.clone());
+        h.frame(vec![]);
+        h.frame(vec![]);
+        assert_eq!(h.st.edit.tab, Tab::Video);
     }
 
     #[test]

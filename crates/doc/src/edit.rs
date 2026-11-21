@@ -139,6 +139,12 @@ pub enum Edit {
         all: bool,
         link: bool,
     },
+    /// The slide's video (`None` = none).
+    SetSlideVideo {
+        group: usize,
+        slide: usize,
+        video: Option<SlideVideo>,
+    },
     /// Slide background image (`None` = none).
     SetBackgroundImage {
         group: usize,
@@ -303,6 +309,8 @@ impl Edit {
             Edit::SetHidden { hidden: false, .. } => "Show".into(),
             Edit::RenameElement { .. } => "Rename".into(),
             Edit::ApplyTheme { theme, .. } => format!("Apply theme {}", theme.name),
+            Edit::SetSlideVideo { video: Some(_), .. } => "Set video".into(),
+            Edit::SetSlideVideo { video: None, .. } => "Remove video".into(),
             Edit::SetBackgroundImage { image: Some(_), .. } => "Set background image".into(),
             Edit::SetBackgroundImage { image: None, .. } => "Remove background image".into(),
             Edit::SetSlideEnabled { enabled: true, .. } => "Enable slide".into(),
@@ -410,6 +418,8 @@ impl Edit {
                 v
             }
             Edit::SetBackgroundImage { image: None, .. } => vec![Feature::SlideStructure],
+            Edit::SetSlideVideo { video: Some(_), .. } => vec![Feature::SlideVideo],
+            Edit::SetSlideVideo { video: None, .. } => vec![Feature::SlideStructure],
             Edit::SetSlideBackground { .. } => vec![Feature::BackgroundColor],
             Edit::Batch { edits, .. } => {
                 let mut v: Vec<Feature> = edits.iter().flat_map(Edit::features).collect();
@@ -688,6 +698,42 @@ impl Edit {
                 }
                 Ok(())
             }
+            Edit::SetSlideVideo {
+                group,
+                slide,
+                video,
+            } => {
+                let video = match video {
+                    Some(v) => {
+                        let ok = |x: f64| x.is_finite();
+                        let a = v.adjust;
+                        if !ok(v.volume)
+                            || ![a.brightness, a.contrast, a.saturation, a.gamma, a.hue]
+                                .into_iter()
+                                .all(ok)
+                        {
+                            return Err(EditError::NotFound {
+                                what: "valid video setting".into(),
+                            });
+                        }
+                        let c = |x: f64| x.clamp(-1.0, 1.0);
+                        Some(SlideVideo {
+                            volume: v.volume.clamp(0.0, 1.0),
+                            adjust: VideoAdjust {
+                                brightness: c(a.brightness),
+                                contrast: c(a.contrast),
+                                saturation: c(a.saturation),
+                                gamma: c(a.gamma),
+                                hue: c(a.hue),
+                            },
+                            ..v.clone()
+                        })
+                    }
+                    None => None,
+                };
+                slide_mut(doc, *group, *slide)?.video = video;
+                Ok(())
+            }
             Edit::SetBackgroundImage {
                 group,
                 slide,
@@ -912,6 +958,7 @@ impl Edit {
             | Edit::SetHidden { group, slide, .. }
             | Edit::RenameElement { group, slide, .. }
             | Edit::SetBackgroundImage { group, slide, .. }
+            | Edit::SetSlideVideo { group, slide, .. }
             | Edit::SetSlideBackground { group, slide, .. }
             | Edit::DuplicateSlide { group, slide } => at(*group, *slide).into_iter().collect(),
             Edit::Batch { edits, .. } => edits.iter().flat_map(|e| e.slides_touched(doc)).collect(),

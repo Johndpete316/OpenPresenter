@@ -53,6 +53,8 @@ pub enum Feature {
     Vignette,
     LayerLock,
     LayerHide,
+    /// A video on a slide (a media cue in ProPresenter).
+    SlideVideo,
 }
 
 impl Feature {
@@ -84,6 +86,7 @@ impl Feature {
             Feature::Vignette => "Vignette",
             Feature::LayerLock => "Lock",
             Feature::LayerHide => "Hide",
+            Feature::SlideVideo => "Video on a slide",
         }
     }
 }
@@ -96,7 +99,9 @@ pub fn pro6_support(feature: Feature) -> Support {
         | HorizontalAlign | VerticalAlign | ElementFrame | ElementRotation | ElementOpacity
         | BackgroundColor => Support::Supported,
         LineSpacing | LetterSpacing | TextShadow | TextOutline | NewTextBox | ImageElement
-        | ImageBackground | ImageAdjustColor | LayerLock | LayerHide => Support::Unverified,
+        | ImageBackground | ImageAdjustColor | LayerLock | LayerHide | SlideVideo => {
+            Support::Unverified
+        }
         Vignette => Support::NativeOnly,
     }
 }

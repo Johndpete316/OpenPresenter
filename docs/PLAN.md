@@ -259,6 +259,23 @@ and every new feature works on both kinds of file unless a `.pro6` truly can't h
   ("Show an example"), and the parser accepts lyric-site headings (`Verse 1:`, `CHORUS`,
   `(Bridge)`, `Pre-Chorus 2`) as well as `[Name]`.
 
+## Slide videos (2026-11-21)
+
+- [x] A slide can have a video (`Slide::video`, `.opres`): plays full screen under the
+  slide's elements (the background layer) when the slide goes live; a slide without one
+  leaves the background as it is (as ProPresenter does). Settings: start when shown or wait
+  for Play; at the end stop / hold the last frame / loop / next slide; volume; fit; picture
+  (brightness, contrast, saturation, gamma, hue, applied by mpv).
+- [x] Editor: Insert → Video, and a Video tab. Operator: grid tiles show the poster and a
+  badge; the Preview panel has Play/Pause, Restart and the time.
+- [ ] **`.pro6` slide videos.** Not read or written yet: no real `.pro6` with a video has been
+  seen (expected: an `RVMediaCue` holding an `RVVideoElement` in the slide's `cues`). Adding a
+  video to a `.pro6` slide asks to save as `.opres` (Unverified). Needs a real file from the
+  church library to map `source`, `playbackBehavior`, `audioVolume`, `inPoint`/`outPoint`,
+  scaling and the end behaviour, then read and write it.
+- [ ] Videos aren't pre-loaded for the next slide yet (the media panel's standby player only
+  pre-loads panel backgrounds); a video slide starts a few frames after it goes live.
+
 ## Unknowns to Verify
 Track findings here as real files arrive. "M0:" notes say how the parser currently handles each one. None are verified against a real file yet.
 - [x] Canvas size attribute names on `RVPresentationDocument`. **Verified (real files):** `width`/`height`.

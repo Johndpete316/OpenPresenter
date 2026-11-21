@@ -73,6 +73,21 @@ impl SlideFrame {
         self.composite_layers(true, true)
     }
 
+    /// The slide over nothing: transparent where it draws nothing (a slide whose video
+    /// shows through, drawn over the video's poster in the operator's views).
+    pub fn transparent(&self) -> image::RgbaImage {
+        let mut img = image::RgbaImage::new(self.width, self.height);
+        for (px, src) in img.pixels_mut().zip(self.text.as_chunks::<4>().0) {
+            let a = src[3];
+            if a > 0 {
+                let un =
+                    |v: u8| ((u32::from(v) * 255 + u32::from(a) / 2) / u32::from(a)).min(255) as u8;
+                px.0 = [un(src[0]), un(src[1]), un(src[2]), a];
+            }
+        }
+        img
+    }
+
     /// Flatten with layers switched on/off (mirrors Clear Text / Clear Background).
     pub fn composite_layers(&self, background: bool, text: bool) -> image::RgbaImage {
         let mut img =

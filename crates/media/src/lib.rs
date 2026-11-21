@@ -318,6 +318,69 @@ impl Player {
         self.set("panscan", panscan)
     }
 
+    /// Volume, 0 … 1 (mpv's 0 … 100).
+    pub fn set_volume(&self, volume: f64) -> Result<(), MediaError> {
+        self.set("volume", &format!("{:.1}", volume.clamp(0.0, 1.0) * 100.0))
+    }
+
+    /// Loop the file forever, or stop on its last frame at the end.
+    pub fn set_looping(&self, looping: bool) -> Result<(), MediaError> {
+        self.set("loop-file", if looping { "inf" } else { "no" })
+    }
+
+    /// Picture settings, each −1 … 1 (mpv's −100 … 100; 0 = unchanged).
+    pub fn set_picture(
+        &self,
+        brightness: f64,
+        contrast: f64,
+        saturation: f64,
+        gamma: f64,
+        hue: f64,
+    ) -> Result<(), MediaError> {
+        for (name, v) in [
+            ("brightness", brightness),
+            ("contrast", contrast),
+            ("saturation", saturation),
+            ("gamma", gamma),
+            ("hue", hue),
+        ] {
+            self.set(name, &format!("{:.0}", v.clamp(-1.0, 1.0) * 100.0))?;
+        }
+        Ok(())
+    }
+
+    /// Back to the start of the file.
+    pub fn restart(&self) -> Result<(), MediaError> {
+        self.command(&["seek", "0", "absolute"])
+    }
+
+    /// A property as text (`None` if mpv has no value for it now).
+    pub fn get(&self, name: &str) -> Option<String> {
+        let n = cstr(name);
+        // SAFETY: valid handle and C string; the result is freed with mpv_free.
+        let p = unsafe { (self.api.get_property_string)(self.handle, n.as_ptr()) };
+        if p.is_null() {
+            return None;
+        }
+        // SAFETY: mpv returns a NUL-terminated string it allocated.
+        let s = unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned();
+        // SAFETY: allocated by mpv, not used afterwards.
+        unsafe { (self.api.free)(p.cast()) };
+        Some(s)
+    }
+
+    /// Playback position and length in seconds, when known.
+    pub fn progress(&self) -> Option<(f64, f64)> {
+        let pos = self.get("time-pos")?.parse().ok()?;
+        let dur = self.get("duration")?.parse().ok()?;
+        Some((pos, dur))
+    }
+
+    /// The file played to its end (and stopped there: not looping).
+    pub fn at_end(&self) -> bool {
+        self.get("eof-reached").as_deref() == Some("yes")
+    }
+
     pub fn set_mute(&self, mute: bool) -> Result<(), MediaError> {
         self.set("mute", if mute { "yes" } else { "no" })
     }

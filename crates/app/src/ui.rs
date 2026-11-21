@@ -131,6 +131,8 @@ pub struct UiState {
     pub open_arrangements_at_start: bool,
     /// The presentation a library refresh was last asked for (see `draw`).
     pub library_refresh_for: Option<PathBuf>,
+    /// Background video position and length in seconds, from the output.
+    pub media_progress: Option<(f64, f64)>,
     /// The arrangement editor window.
     pub arrange: Option<crate::arrangements::ArrangeWindow>,
     /// Exports running in the background (Import/Export menu).
@@ -733,6 +735,13 @@ fn preview(
     });
     let (rect, _) = ui.allocate_exact_size(Vec2::new(w, (w * aspect).round()), Sense::hover());
     ui.painter().rect_filled(rect, 0.0, Color32::BLACK);
+    // The background video's poster under the slide (a video slide draws no colour).
+    if show.background_visible
+        && let Some(m) = &show.background_media
+        && let Some(Ok(t)) = st.media_thumbs.as_mut().and_then(|th| th.get(m))
+    {
+        egui::Image::new(t).paint_at(ui, rect);
+    }
     match &show.live {
         Some(l) if show.text_visible => {
             let (_, tex) = st.thumb(thumbs, &l.doc, l.slide.flat);
@@ -791,8 +800,95 @@ fn preview(
             }
         }
     });
+    video_panel(ui, st, show, actions);
     loop_panel(ui, show, actions);
     ui.add_space(4.0);
+}
+
+/// `m:ss`.
+fn clock(secs: f64) -> String {
+    let s = secs.max(0.0).round() as u64;
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// Play / Pause / Restart and the time, while a video is the background.
+fn video_panel(ui: &mut egui::Ui, st: &UiState, show: &ShowState, actions: &mut Vec<UiAction>) {
+    let Some(m) = &show.background_media else {
+        return;
+    };
+    if !crate::media_thumbs::is_video(m) {
+        return;
+    }
+    egui::Frame::new()
+        .fill(color::HEADER)
+        .inner_margin(egui::Margin::symmetric(8, 4))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let paused = show.media_paused;
+                let (glyph, hover) = if paused {
+                    (icon::PLAY, "Play the video")
+                } else {
+                    (icon::PAUSE, "Pause the video")
+                };
+                let b = egui::Button::new(theme::icon_text(glyph, 15.0).color(if paused {
+                    theme::brand::ACCENT
+                } else {
+                    Color32::WHITE
+                }))
+                .min_size(Vec2::new(30.0, 24.0));
+                if ui.add(b).on_hover_text(hover).clicked() {
+                    actions.push(UiAction::Core(if paused {
+                        Command::MediaPlay
+                    } else {
+                        Command::MediaPause
+                    }));
+                }
+                if small_icon(ui, icon::ARROW_COUNTER_CLOCKWISE, "Start the video again").clicked()
+                {
+                    actions.push(UiAction::Core(Command::MediaRestart));
+                }
+                let name = m
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                match st.media_progress {
+                    Some((pos, dur)) if dur > 0.0 => {
+                        ui.label(
+                            RichText::new(format!("{} / {}", clock(pos), clock(dur)))
+                                .monospace()
+                                .size(11.5),
+                        );
+                        let w = ui.available_width().max(20.0);
+                        let (r, _) = ui.allocate_exact_size(Vec2::new(w, 6.0), Sense::hover());
+                        ui.painter().rect_filled(r, 3.0, Color32::from_gray(60));
+                        let f = (pos / dur).clamp(0.0, 1.0) as f32;
+                        let done = Rect::from_min_size(r.min, Vec2::new(r.width() * f, r.height()));
+                        ui.painter().rect_filled(done, 3.0, theme::brand::ACCENT);
+                        ui.interact(r, ui.scope_id().with("video-progress"), Sense::hover())
+                            .on_hover_text(name);
+                    }
+                    _ => {
+                        ui.add(egui::Label::new(RichText::new(name).small().weak()).truncate());
+                    }
+                }
+            });
+            if paused_waiting(show) {
+                ui.label(
+                    RichText::new("Waiting for Play")
+                        .small()
+                        .color(color::LIVE_TEXT),
+                );
+            }
+        });
+}
+
+/// A slide's video is waiting for the operator to press Play.
+fn paused_waiting(show: &ShowState) -> bool {
+    show.media_paused
+        && show
+            .background_cue
+            .as_ref()
+            .is_some_and(|c| c.video.start == doc::VideoStart::OnClick)
 }
 
 pub(crate) fn paint_error(ui: &egui::Ui, rect: Rect, message: &str) {
@@ -1592,6 +1688,19 @@ fn presentation(
                             l.position == Some(pos)
                                 || (l.position.is_none() && l.slide.flat == r.flat)
                         });
+                        // A video slide: its poster under the (transparent) slide.
+                        let video = doc.groups()[r.group].slides()[r.slide].video.as_ref();
+                        let poster = video.and_then(|v| {
+                            let f = v.media.resolve(&path);
+                            st.media_thumbs
+                                .as_mut()
+                                .and_then(|t| t.get(&f))
+                                .and_then(|t| t.as_ref().ok().cloned())
+                        });
+                        let badge = video.map(|v| match v.start {
+                            doc::VideoStart::OnShow => "Video",
+                            doc::VideoStart::OnClick => "Video (Play)",
+                        });
                         let (_, tex) = st.thumb(thumbs, &doc, r.flat);
                         let resp = slide_tile(
                             ui,
@@ -1601,6 +1710,8 @@ fn presentation(
                             color32(group.color),
                             is_live,
                             r.enabled,
+                            poster.as_ref(),
+                            badge,
                         );
                         if resp.clicked() {
                             actions.push(UiAction::Core(Command::GoTo {
@@ -1620,7 +1731,9 @@ fn presentation(
         });
 }
 
-/// A slide tile: the thumbnail with a label bar in the group colour under it.
+/// A slide tile: the thumbnail with a label bar in the group colour under it. A video
+/// slide shows the video's `poster` under the slide and a `badge`.
+#[allow(clippy::too_many_arguments)]
 fn slide_tile(
     ui: &mut egui::Ui,
     tex: Option<&Result<TextureHandle, String>>,
@@ -1629,6 +1742,8 @@ fn slide_tile(
     group: Color32,
     live: bool,
     enabled: bool,
+    poster: Option<&TextureHandle>,
+    badge: Option<&str>,
 ) -> egui::Response {
     let bar_h = 18.0;
     let (rect, resp) = ui.allocate_exact_size(img + Vec2::new(0.0, bar_h), Sense::click());
@@ -1637,7 +1752,28 @@ fn slide_tile(
     }
     let img_rect = Rect::from_min_size(rect.min, img);
     let bar = Rect::from_min_max(Pos2::new(rect.min.x, img_rect.max.y), rect.max);
+    if badge.is_some() {
+        ui.painter().rect_filled(img_rect, 0.0, Color32::BLACK);
+    }
+    if let Some(p) = poster {
+        egui::Image::new(p).paint_at(ui, img_rect);
+    }
     paint_thumb(ui, img_rect, tex);
+    if let Some(b) = badge {
+        let galley = ui.painter().layout_no_wrap(
+            format!("{} {b}", icon::VIDEO_CAMERA),
+            FontId::proportional(11.0),
+            Color32::WHITE,
+        );
+        let r = Rect::from_min_size(
+            img_rect.left_top() + Vec2::new(4.0, 4.0),
+            galley.size() + Vec2::new(8.0, 4.0),
+        );
+        ui.painter()
+            .rect_filled(r, 3.0, Color32::from_black_alpha(170));
+        ui.painter()
+            .galley(r.min + Vec2::new(4.0, 2.0), galley, Color32::WHITE);
+    }
     let p = ui.painter();
     p.rect_filled(bar, 0.0, group);
     p.with_clip_rect(bar.shrink2(Vec2::new(4.0, 0.0))).text(

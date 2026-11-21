@@ -61,6 +61,14 @@ pub struct Notice {
     pub at: Instant,
 }
 
+/// A slide's video playing as the background.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediaCue {
+    /// The slide it belongs to (UUID).
+    pub slide: String,
+    pub video: doc::SlideVideo,
+}
+
 #[derive(Debug, Clone)]
 pub struct ShowState {
     /// Increments on every change.
@@ -75,6 +83,14 @@ pub struct ShowState {
     pub background_media: Option<PathBuf>,
     /// Media to pre-load for an instant switch.
     pub background_next: Option<PathBuf>,
+    /// How `background_media` plays when it's a slide's video (`None` = from the
+    /// Video/Image panel: loops at full volume).
+    pub background_cue: Option<MediaCue>,
+    /// The background video is paused (a video that waits for Play, or paused by the
+    /// operator).
+    pub media_paused: bool,
+    /// Bumped to start the background video again from the beginning.
+    pub media_restart: u64,
     /// Presentation shown in the operator's grid (selected in library or playlist).
     pub selected: Option<PathBuf>,
     /// All playlists (each saved in its own file), in display order.
@@ -104,6 +120,9 @@ impl Default for ShowState {
             output_enabled: true,
             background_media: None,
             background_next: None,
+            background_cue: None,
+            media_paused: false,
+            media_restart: 0,
             selected: None,
             playlists: Arc::default(),
             playlist_item: None,

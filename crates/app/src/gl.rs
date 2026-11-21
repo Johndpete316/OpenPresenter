@@ -132,6 +132,17 @@ fn run_inner(
                 }
                 Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             }
+        } else if media.watching() {
+            // A video is on: check its position and end now and then (frames stop
+            // arriving when it's paused or has ended).
+            match rx.recv_timeout(std::time::Duration::from_millis(250)) {
+                Ok(c) => c,
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                    media.poll(true);
+                    continue;
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+            }
         } else {
             match rx.recv() {
                 Ok(c) => c,
@@ -174,8 +185,15 @@ fn run_inner(
                 present(&r, &media, width, height)?;
                 presented(events, None, requested_at, Default::default());
             }
-            RenderCmd::Media { current, next } => {
-                media.apply(current, next);
+            RenderCmd::Media {
+                current,
+                next,
+                cue,
+                paused,
+                restart,
+            } => {
+                let loaded = media.apply(current, next);
+                media.apply_cue(cue, paused, restart, loaded);
                 media.render(&gl, r.media_rect(width, height), true);
                 present(&r, &media, width, height)?;
             }
@@ -195,6 +213,7 @@ fn run_inner(
                 if media.render(&gl, r.media_rect(width, height), false) {
                     present(&r, &media, width, height)?;
                 }
+                media.poll(false);
             }
             RenderCmd::AudioDevice(d) => media.set_audio_device(d),
             RenderCmd::MediaScaling(sc) => {
@@ -507,6 +526,14 @@ struct MediaLayer {
     has_frame: bool,
     unavailable_reported: bool,
     warm_up_tried: bool,
+    /// How the active background plays (a slide's video), and the restart counter
+    /// last applied.
+    cue: Option<doc::SlideVideo>,
+    restart: u64,
+    /// The end of the current video was reported (once per play-through).
+    end_reported: bool,
+    last_poll: Option<Instant>,
+    progress_sent: bool,
 }
 
 impl MediaLayer {
@@ -530,6 +557,108 @@ impl MediaLayer {
             has_frame: false,
             unavailable_reported: false,
             warm_up_tried: false,
+            cue: None,
+            restart: 0,
+            end_reported: false,
+            last_poll: None,
+            progress_sent: false,
+        }
+    }
+
+    /// Settings for the active background: a slide's video (volume, looping, fit,
+    /// picture, paused) or the Video/Image panel's defaults.
+    /// `loaded`: a different file just became the active one (it starts at the
+    /// beginning anyway, and can't be seeked before it has loaded).
+    fn apply_cue(
+        &mut self,
+        cue: Option<doc::SlideVideo>,
+        paused: bool,
+        restart: u64,
+        loaded: bool,
+    ) {
+        let a = self.active;
+        if self.players.len() != 2 || self.paths[a].is_none() {
+            self.cue = cue;
+            self.restart = restart;
+            return;
+        }
+        let p = &self.players[a];
+        let result = (|| -> Result<(), media::MediaError> {
+            match &cue {
+                Some(v) => {
+                    p.set_looping(v.end == doc::VideoEnd::Loop)?;
+                    p.set_volume(v.volume)?;
+                    let j = v.adjust;
+                    p.set_picture(j.brightness, j.contrast, j.saturation, j.gamma, j.hue)?;
+                    p.set_scaling(match v.fit {
+                        doc::Fit::Fill => media::Scaling::Fill,
+                        doc::Fit::Fit => media::Scaling::Fit,
+                        doc::Fit::Stretch => media::Scaling::Stretch,
+                    })?;
+                }
+                None => {
+                    p.set_looping(true)?;
+                    p.set_volume(1.0)?;
+                    p.set_picture(0.0, 0.0, 0.0, 0.0, 0.0)?;
+                    p.set_scaling(self.scaling)?;
+                }
+            }
+            if loaded {
+                self.end_reported = false;
+            } else if restart != self.restart {
+                p.restart()?;
+                self.end_reported = false;
+            }
+            if paused { p.pause() } else { p.play() }
+        })();
+        if let Err(e) = result {
+            self.report(&e);
+        }
+        self.cue = cue;
+        self.restart = restart;
+    }
+
+    /// A video is showing whose position or end matters.
+    fn watching(&self) -> bool {
+        self.players.len() == 2 && self.paths[self.active].is_some() && self.cue.is_some()
+            || self.progress_sent
+    }
+
+    /// Report the video's position (for the operator) and its end (once), at most
+    /// four times a second unless `now`.
+    fn poll(&mut self, now: bool) {
+        if !now
+            && self
+                .last_poll
+                .is_some_and(|t| t.elapsed().as_millis() < 250)
+        {
+            return;
+        }
+        self.last_poll = Some(Instant::now());
+        let a = self.active;
+        let playing = self.players.len() == 2 && self.paths[a].is_some() && self.cue.is_some();
+        if !playing {
+            if self.progress_sent {
+                let _ = self.events.send_event(UserEvent::MediaProgress(None));
+                self.progress_sent = false;
+            }
+            return;
+        }
+        let p = &self.players[a];
+        let _ = self
+            .events
+            .send_event(UserEvent::MediaProgress(p.progress()));
+        self.progress_sent = true;
+        let looping = self
+            .cue
+            .as_ref()
+            .is_some_and(|c| c.end == doc::VideoEnd::Loop);
+        if !looping && !self.end_reported && p.at_end() {
+            self.end_reported = true;
+            if let Some(path) = self.paths[a].clone() {
+                tracing::info!(path = %path.display(), "slide video ended");
+                let _ = self.events.send_event(UserEvent::MediaEnded(path));
+            }
         }
     }
 
@@ -602,13 +731,15 @@ impl MediaLayer {
         }
     }
 
-    fn apply(&mut self, current: Option<PathBuf>, next: Option<PathBuf>) {
+    /// Returns whether a different file became the active one.
+    fn apply(&mut self, current: Option<PathBuf>, next: Option<PathBuf>) -> bool {
         if current.is_none() && next.is_none() && self.players.is_empty() {
-            return;
+            return false;
         }
         if !self.ensure_players() {
-            return;
+            return false;
         }
+        let before = (self.active, self.paths[self.active].clone());
         let a = self.active;
         let sb = 1 - a;
         tracing::debug!(?current, ?next, active = ?self.paths[a], standby = ?self.paths[sb], "media apply");
@@ -653,6 +784,8 @@ impl MediaLayer {
         if let Err(e) = result {
             self.report(&e);
         }
+        (self.active, self.paths[self.active].clone()) != before
+            && self.paths[self.active].is_some()
     }
 
     fn set_scaling(&mut self, sc: media::Scaling) {

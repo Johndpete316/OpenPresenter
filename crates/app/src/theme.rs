@@ -35,6 +35,10 @@ pub mod icon {
     pub const STOP: char = '\u{E46C}';
     pub const SQUARES_FOUR: char = '\u{E464}';
     pub const LIST: char = '\u{E2F0}';
+    pub const PLAY: char = '\u{E3D0}';
+    pub const PAUSE: char = '\u{E39E}';
+    pub const ARROW_COUNTER_CLOCKWISE: char = '\u{E038}';
+    pub const VIDEO_CAMERA: char = '\u{E4DA}';
 }
 
 /// The brand palette (docs/branding/ICON.md, Colours). New UI uses these: dark neutral

@@ -327,6 +327,7 @@ impl Theme {
                     background_image: self.background_image.clone(),
                     elements: vec![Element::Text(Box::new(text_box))],
                     timer: None,
+                    video: None,
                     pro6_incompatible: false,
                     theme: None,
                     src: None,

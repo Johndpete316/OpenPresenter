@@ -93,6 +93,9 @@ pub struct Slide {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_image: Option<BackgroundImage>,
     pub elements: Vec<Element>,
+    /// Video shown full screen under the slide's elements while the slide is live.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<SlideVideo>,
     /// Auto-advance timer.
     pub timer: Option<SlideTimer>,
     /// Uses something a `.pro6` file can't hold (the user accepted that).
@@ -104,6 +107,80 @@ pub struct Slide {
     pub theme: Option<crate::theme::ThemeLink>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub src: Option<String>,
+}
+
+/// A slide's video: plays full screen under the slide's elements (the background
+/// layer), as a media cue does in ProPresenter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SlideVideo {
+    pub media: MediaRef,
+    #[serde(default)]
+    pub start: VideoStart,
+    #[serde(default)]
+    pub end: VideoEnd,
+    /// 0 … 1.
+    #[serde(default = "one")]
+    pub volume: f64,
+    #[serde(default)]
+    pub fit: Fit,
+    #[serde(default, skip_serializing_if = "VideoAdjust::is_default")]
+    pub adjust: VideoAdjust,
+}
+
+impl SlideVideo {
+    pub fn new(media: MediaRef) -> SlideVideo {
+        SlideVideo {
+            media,
+            start: VideoStart::default(),
+            end: VideoEnd::default(),
+            volume: 1.0,
+            fit: Fit::default(),
+            adjust: VideoAdjust::default(),
+        }
+    }
+}
+
+/// When a slide's video starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoStart {
+    /// As soon as the slide is shown.
+    #[default]
+    OnShow,
+    /// Shown paused on its first frame until the operator presses Play.
+    OnClick,
+}
+
+/// What happens when a slide's video reaches its end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoEnd {
+    /// The video goes away (back to black / nothing under the slide).
+    #[default]
+    Stop,
+    /// The last frame stays on screen.
+    Hold,
+    /// Starts again from the beginning.
+    Loop,
+    /// The next slide is shown.
+    Next,
+}
+
+/// Picture settings for a video, each −1 … 1 (0 = unchanged).
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VideoAdjust {
+    pub brightness: f64,
+    pub contrast: f64,
+    pub saturation: f64,
+    pub gamma: f64,
+    pub hue: f64,
+}
+
+impl VideoAdjust {
+    pub fn is_default(&self) -> bool {
+        *self == VideoAdjust::default()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

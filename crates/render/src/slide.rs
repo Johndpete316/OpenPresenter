@@ -36,7 +36,12 @@ pub fn render_slide(
         width,
         height,
         placement,
-        background: slide.background.or(doc.background).map(to_rgba8),
+        // A slide's video plays under the elements: no colour may cover it.
+        background: if slide.video.is_some() {
+            None
+        } else {
+            slide.background.or(doc.background).map(to_rgba8)
+        },
         text: vec![0; width as usize * height as usize * 4],
         warnings: Vec::new(),
         render_time: Default::default(),

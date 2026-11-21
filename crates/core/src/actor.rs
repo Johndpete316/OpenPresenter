@@ -437,14 +437,12 @@ impl Core {
                 self.stop_loop_by_operator("Loop stopped (cleared).");
             }
             Command::ClearBackground => {
-                self.s.background_media = None;
-                self.s.background_next = None;
+                self.clear_media();
                 self.stop_loop_by_operator("Loop stopped (cleared).");
             }
             Command::ClearAll => {
                 self.s.text_visible = false;
-                self.s.background_media = None;
-                self.s.background_next = None;
+                self.clear_media();
                 self.stop_loop_by_operator("Loop stopped (cleared).");
             }
             Command::SetBackground { media, next } => {
@@ -453,7 +451,22 @@ impl Core {
                 }
                 self.s.background_media = media;
                 self.s.background_next = next;
+                self.s.background_cue = None;
+                self.s.media_paused = false;
             }
+            Command::MediaPlay => self.s.media_paused = false,
+            Command::MediaPause => {
+                if self.s.background_media.is_some() {
+                    self.s.media_paused = true;
+                }
+            }
+            Command::MediaRestart => {
+                if self.s.background_media.is_some() {
+                    self.s.media_restart += 1;
+                    self.s.media_paused = false;
+                }
+            }
+            Command::MediaEnded(path) => self.media_ended(&path, at),
             Command::GoTo {
                 presentation,
                 position,
@@ -1007,6 +1020,60 @@ impl Core {
         }
     }
 
+    fn clear_media(&mut self) {
+        self.s.background_media = None;
+        self.s.background_next = None;
+        self.s.background_cue = None;
+        self.s.media_paused = false;
+    }
+
+    /// The live slide has a video: it becomes the background, from the beginning.
+    /// (A slide without one leaves the background as it is, as in ProPresenter.)
+    fn start_slide_video(&mut self, path: &std::path::Path) {
+        let Some(l) = &self.s.live else { return };
+        let Some(slide) = l.doc.slides().nth(l.slide.flat) else {
+            return;
+        };
+        let Some(v) = &slide.video else { return };
+        let file = v.media.resolve(path);
+        tracing::info!(file = %file.display(), start = ?v.start, end = ?v.end, "slide video");
+        self.s.background_media = Some(file);
+        self.s.background_next = None;
+        self.s.background_cue = Some(crate::state::MediaCue {
+            slide: slide.uuid.clone(),
+            video: v.clone(),
+        });
+        self.s.background_visible = true;
+        self.s.media_paused = v.start == doc::VideoStart::OnClick;
+        self.s.media_restart += 1;
+    }
+
+    /// A slide's video finished: apply its "at the end" setting.
+    fn media_ended(&mut self, path: &std::path::Path, at: Instant) {
+        if self.s.background_media.as_deref() != Some(path) {
+            return; // something else is playing by now
+        }
+        let Some(cue) = &self.s.background_cue else {
+            return;
+        };
+        match cue.video.end {
+            doc::VideoEnd::Stop => self.clear_media(),
+            doc::VideoEnd::Hold | doc::VideoEnd::Loop => {}
+            doc::VideoEnd::Next => {
+                // Only while its slide is still the live one.
+                let still = self.s.live.as_ref().is_some_and(|l| {
+                    l.doc
+                        .slides()
+                        .nth(l.slide.flat)
+                        .is_some_and(|s| s.uuid == cue.slide)
+                });
+                if still {
+                    self.step(true, at);
+                }
+            }
+        }
+    }
+
     fn go_live(&mut self, path: &PathBuf, position: usize, at: Option<Instant>) {
         let Some(doc) = self.s.docs.get(path).cloned() else {
             return;
@@ -1039,6 +1106,7 @@ impl Core {
             slide,
         });
         self.s.text_visible = true;
+        self.start_slide_video(path);
         // Timed presentations loop on their own (unless the operator stopped it).
         if self.s.looping.is_none()
             && self.loop_suppressed.as_ref() != Some(path)

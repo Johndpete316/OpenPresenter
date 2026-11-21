@@ -187,10 +187,13 @@ fn make_rgba(
     Ok(img)
 }
 
-fn is_video(p: &Path) -> bool {
-    p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-        ["mp4", "mov", "m4v", "mkv", "avi", "wmv", "webm"]
-            .iter()
-            .any(|x| e.eq_ignore_ascii_case(x))
-    })
+/// Video file extensions (thumbnails, the editor's video picker).
+pub const VIDEO_EXTS: &[&str] = &[
+    "mp4", "mov", "m4v", "mkv", "avi", "wmv", "webm", "mpg", "mpeg",
+];
+
+pub fn is_video(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| VIDEO_EXTS.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }

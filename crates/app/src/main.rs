@@ -144,6 +144,10 @@ pub enum UserEvent {
     AudioDevices(Result<Vec<media::AudioDevice>, String>),
     /// The output thread has loaded libmpv and set up its players (start-up, idle).
     MediaWarm,
+    /// A slide's video played to its end (it doesn't loop).
+    MediaEnded(PathBuf),
+    /// Background video position and length in seconds (`None` = nothing playing).
+    MediaProgress(Option<(f64, f64)>),
 }
 
 fn parse_size(s: &str) -> Result<(u32, u32), String> {
@@ -1185,6 +1189,13 @@ impl ApplicationHandler<UserEvent> for App {
                 // With no output window there's no media warm-up to wait for.
                 if self.output.is_none() {
                     self.list_audio_devices();
+                }
+            }
+            UserEvent::MediaEnded(p) => self.send(Command::MediaEnded(p)),
+            UserEvent::MediaProgress(p) => {
+                if self.ui.media_progress != p {
+                    self.ui.media_progress = p;
+                    self.request_redraw();
                 }
             }
             UserEvent::MediaWarm => {

@@ -106,6 +106,14 @@ pub enum Command {
         targets: ThemeTargets,
         save: bool,
     },
+    /// Play the background video (one waiting for Play, or paused).
+    MediaPlay,
+    MediaPause,
+    /// Start the background video again from the beginning (and play it).
+    MediaRestart,
+    /// The output finished playing `path` (a video that doesn't loop): the slide's
+    /// "at the end" setting applies.
+    MediaEnded(PathBuf),
     /// Auto-advance the live (or selected) presentation using its stored slide timing.
     StartLoop,
     StopLoop,

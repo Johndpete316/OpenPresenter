@@ -22,7 +22,7 @@ pub use settings::{
     EditorSettings, GroupColor, KeyBindings, MediaScaling, OutputSettings, Resolution, Settings,
     SettingsError, WebSettings,
 };
-pub use state::{Editing, Live, LoopState, Notice, NoticeLevel, ShowState};
+pub use state::{Editing, Live, LoopState, MediaCue, Notice, NoticeLevel, ShowState};
 
 /// Write a file atomically: temp file in the same folder, flush to disk, rename.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
