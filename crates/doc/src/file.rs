@@ -37,11 +37,11 @@ impl LoadError {
                 format!("'{}' couldn't be opened ({source}).", path.display())
             }
             LoadError::Json { path, message } => format!(
-                "'{}' is damaged or isn't an OpenPresent presentation ({message}). It wasn't opened.",
+                "'{}' is damaged or isn't an OpenPresenter presentation ({message}). It wasn't opened.",
                 path.display()
             ),
             LoadError::Newer { path, .. } => format!(
-                "'{}' was saved by a newer version of OpenPresent. Update this program to open it.",
+                "'{}' was saved by a newer version of OpenPresenter. Update this program to open it.",
                 path.display()
             ),
         }

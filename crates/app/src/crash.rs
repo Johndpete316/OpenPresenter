@@ -111,14 +111,14 @@ pub fn init_logging(logs_dir: PathBuf, verbose: bool) -> CrashContext {
     let ours = |level: LevelFilter| {
         Targets::new()
             .with_default(LevelFilter::INFO)
-            .with_target("pp6", level)
-            .with_target("pp6core", level)
+            .with_target("openpresenter", level)
+            .with_target("opcore", level)
             .with_target("pro6", level)
             .with_target("render", level)
     };
     let file_layer = match std::fs::create_dir_all(&logs_dir) {
         Ok(()) => {
-            let appender = tracing_appender::rolling::daily(&logs_dir, "pp6.log");
+            let appender = tracing_appender::rolling::daily(&logs_dir, "openpresenter.log");
             let (writer, guard) = tracing_appender::non_blocking(appender);
             let _ = FILE_GUARD.set(Mutex::new(Some(guard)));
             Some(
@@ -197,14 +197,14 @@ pub fn install_panic_hook(ctx: CrashContext) {
             |p| p.display().to_string(),
         );
         eprintln!(
-            "\nPP6 hit an unrecoverable error and must close: {message}\nCrash report: {where_}"
+            "\nOpenPresenter hit an unrecoverable error and must close: {message}\nCrash report: {where_}"
         );
-        if std::env::var_os("PP6_NO_CRASH_DIALOG").is_none() {
+        if std::env::var_os("OPENPRESENTER_NO_CRASH_DIALOG").is_none() {
             let _ = rfd::MessageDialog::new()
                 .set_level(rfd::MessageLevel::Error)
-                .set_title("PP6 has to close")
+                .set_title("OpenPresenter has to close")
                 .set_description(format!(
-                    "PP6 hit an unrecoverable error and must close.\n\n{message}\n\nA crash report was saved to:\n{where_}\n\nRestart PP6; it will return to where you were."
+                    "OpenPresenter hit an unrecoverable error and must close.\n\n{message}\n\nA crash report was saved to:\n{where_}\n\nRestart OpenPresenter; it will return to where you were."
                 ))
                 .set_buttons(rfd::MessageButtons::Ok)
                 .show();
@@ -221,7 +221,7 @@ fn build_report(
     backtrace: &str,
 ) -> String {
     let mut r = String::new();
-    let _ = writeln!(r, "PP6 crash report");
+    let _ = writeln!(r, "OpenPresenter crash report");
     let _ = writeln!(r, "version: {}", crate::VERSION);
     let _ = writeln!(r, "os: {} {}", std::env::consts::OS, std::env::consts::ARCH);
     let _ = writeln!(r, "time (unix): {}", unix_now());

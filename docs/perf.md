@@ -2,7 +2,7 @@
 
 Record cold start and slide-change latency here whenever they change.
 
-**How to measure:** `pp6 <file> --bench N [--windowed --window-size WxH] [--fonts DIR]` prints
+**How to measure:** `openpresenter <file> --bench N [--windowed --window-size WxH] [--fonts DIR]` prints
 cold start and slide-change latency statistics. `-v` adds per-slide raster times to the log.
 
 - **Cold start** = process start (`main`) → first slide frame presented (buffer swap returned).
@@ -30,7 +30,7 @@ font) with `--fonts fixtures/fonts`. **Windowed** (not fullscreen), 3 runs of `-
 
 ## M3 (2026-11-20): through the core, with the operator UI
 
-Same machine and fixture; `pp6 --open … --windowed-output --bench 30 --bench-interval-ms 100`,
+Same machine and fixture; `openpresenter --open … --windowed-output --bench 30 --bench-interval-ms 100`,
 3 runs. Commands now go key/UI → core actor → raster worker (subscribed to the core directly) →
 output render thread. The operator window (egui) runs on the event-loop thread at the same time.
 

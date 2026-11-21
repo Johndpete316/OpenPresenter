@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn scan_follows_the_folder_structure() {
-        let tmp = std::env::temp_dir().join(format!("pp6-media-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("openpresenter-media-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let root = tmp.join("Media");
         for f in [
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn missing_folder_is_reported_not_fatal() {
-        let s = scan(&[PathBuf::from("/definitely/not/here/pp6")]);
+        let s = scan(&[PathBuf::from("/definitely/not/here/openpresenter")]);
         assert!(s.files.is_empty() && s.roots.is_empty());
         assert_eq!(s.unreadable.len(), 1);
     }

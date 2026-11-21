@@ -1,7 +1,7 @@
 //! Operator UI (egui). Renders from the latest `ShowState` snapshot and returns
 //! actions; it never mutates show state directly.
 //!
-//! Layout follows ProPresenter 6, which the team knows:
+//! Layout (familiar to operators moving from other presentation software):
 //!
 //! ```text
 //! ┌──────────────────────── toolbar (icons) ─────────────────────────┐
@@ -23,8 +23,8 @@ use egui::{
     Align, Align2, Color32, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke, StrokeKind,
     TextureHandle, Vec2,
 };
-use pp6core::library::LibraryIndex;
-use pp6core::{Command, ItemRef, NoticeLevel, Settings, ShowState, SlideRef};
+use opcore::library::LibraryIndex;
+use opcore::{Command, ItemRef, NoticeLevel, Settings, ShowState, SlideRef};
 
 use crate::theme::{self, color, icon, section_header, small_icon, tool_button};
 use crate::thumbs::{ThumbKey, ThumbRequest, ThumbResult};
@@ -49,11 +49,11 @@ pub enum UiAction {
     /// Output display chosen by description index (see `UiState::monitors`).
     ChooseMonitor(usize),
     /// Output display mode (`None` = the display's current one).
-    SetResolution(Option<pp6core::Resolution>),
+    SetResolution(Option<opcore::Resolution>),
     /// How background media fills the output.
-    SetMediaScaling(pp6core::MediaScaling),
+    SetMediaScaling(opcore::MediaScaling),
     SetFitMinSize(f64),
-    SetGroupColors(Vec<pp6core::GroupColor>),
+    SetGroupColors(Vec<opcore::GroupColor>),
     /// Re-read the library folders (a presentation was added).
     RefreshLibrary,
     /// mpv audio device name; `None` = system default.
@@ -856,7 +856,7 @@ fn library(
                     Vec2::new(ui.available_width(), row_h),
                     Sense::click_and_drag(),
                 );
-                // Drag into the playlist, as in PP6.
+                // Drag into the playlist.
                 if e.error.is_none() {
                     resp.dnd_set_drag_payload(PlaylistDrag::Library(e.path.clone()));
                 }
@@ -1032,7 +1032,7 @@ fn playlist_node(
     st: &mut UiState,
     show: &ShowState,
     pi: usize,
-    p: &pp6core::PlaylistFile,
+    p: &opcore::PlaylistFile,
     actions: &mut Vec<UiAction>,
 ) {
     let items = &p.playlist.items;
@@ -1429,7 +1429,7 @@ fn presentation(
         }
     });
 
-    // Tile size slider, bottom right (as in PP6).
+    // Tile size slider, bottom right.
     egui::Panel::bottom("grid-footer")
         .exact_size(26.0)
         .frame(
@@ -1450,13 +1450,13 @@ fn presentation(
                 }
                 ui.label(theme::icon_text(icon::SQUARES_FOUR, 13.0).color(Color32::GRAY));
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    let n = pp6core::slide_order(&doc, arrangement.as_deref()).len();
+                    let n = opcore::slide_order(&doc, arrangement.as_deref()).len();
                     ui.label(RichText::new(format!("{n} slides")).small().weak());
                 });
             });
         });
 
-    let order: Vec<SlideRef> = pp6core::slide_order(&doc, arrangement.as_deref());
+    let order: Vec<SlideRef> = opcore::slide_order(&doc, arrangement.as_deref());
     let live = show.live.as_ref().filter(|l| l.path == path);
     let tile_w = st.tile_width();
     let img_h = (tile_w * doc.canvas.height as f32 / doc.canvas.width as f32).round();
@@ -1475,7 +1475,7 @@ fn presentation(
                     for (j, r) in row.iter().enumerate() {
                         let pos = row_i * per_row + j;
                         let group = &doc.groups()[r.group];
-                        // Group name on the first slide of each run, as in PP6.
+                        // Group name on the first slide of each run.
                         let first_of_group = pos == 0 || order[pos - 1].group != r.group;
                         let mut label = format!("{}.", pos + 1);
                         if first_of_group && !group.name.is_empty() {
@@ -1511,7 +1511,7 @@ fn presentation(
         });
 }
 
-/// A PP6-style slide tile: the thumbnail with a label bar in the group colour under it.
+/// A slide tile: the thumbnail with a label bar in the group colour under it.
 fn slide_tile(
     ui: &mut egui::Ui,
     tex: Option<&Result<TextureHandle, String>>,
@@ -1885,7 +1885,8 @@ fn settings_general(
     settings: &Settings,
     actions: &mut Vec<UiAction>,
 ) {
-    ui.weak(format!("PP6 {}", crate::VERSION));
+    crate::theme::brand_header(ui, crate::VERSION);
+    ui.separator();
     ui.heading("Output");
     let mut on = show.output_enabled;
     if ui.checkbox(&mut on, "Output enabled").changed() {
@@ -1906,7 +1907,7 @@ fn settings_general(
                 }
             }
         });
-    let res_label = |r: Option<pp6core::Resolution>| match r {
+    let res_label = |r: Option<opcore::Resolution>| match r {
         Some(r) => format!("{} × {}", r.width, r.height),
         None => "Display's current setting".into(),
     };
@@ -1916,11 +1917,11 @@ fn settings_general(
             .selected_text(res_label(settings.output.resolution))
             .width(300.0)
             .show_ui(ui, |ui| {
-                let mut choices: Vec<Option<pp6core::Resolution>> = vec![None];
+                let mut choices: Vec<Option<opcore::Resolution>> = vec![None];
                 choices.extend(
                     st.output_resolutions
                         .iter()
-                        .map(|&(width, height)| Some(pp6core::Resolution { width, height })),
+                        .map(|&(width, height)| Some(opcore::Resolution { width, height })),
                 );
                 // Keep a saved choice listed even if this display doesn't offer it.
                 if settings.output.resolution.is_some()
@@ -1947,7 +1948,7 @@ fn settings_general(
         );
     }
     ui.horizontal(|ui| {
-        use pp6core::MediaScaling as M;
+        use opcore::MediaScaling as M;
         ui.label("Backgrounds");
         for (m, label, tip) in [
             (
@@ -2020,7 +2021,7 @@ fn settings_general(
                 changed = true;
             }
             if ui.button("Add a name").clicked() {
-                list.push(pp6core::GroupColor {
+                list.push(opcore::GroupColor {
                     name: "New".into(),
                     color: [128, 128, 128],
                 });
@@ -2290,7 +2291,7 @@ mod st_probe {
 mod interaction_tests {
     use super::*;
     use egui::{Event, PointerButton, Pos2, RawInput};
-    use pp6core::library::IndexEntry;
+    use opcore::library::IndexEntry;
 
     struct Harness {
         ctx: egui::Context,
@@ -2366,13 +2367,13 @@ mod interaction_tests {
 
     /// "AM" with A, B and "PM" with C.
     fn two_playlists() -> ShowState {
-        let pl = |name: &str, items: &[&str]| pp6core::PlaylistFile {
+        let pl = |name: &str, items: &[&str]| opcore::PlaylistFile {
             file: None,
-            playlist: pp6core::Playlist {
+            playlist: opcore::Playlist {
                 name: name.into(),
                 items: items
                     .iter()
-                    .map(|t| pp6core::PlaylistItem {
+                    .map(|t| opcore::PlaylistItem {
                         path: PathBuf::from(format!("/lib/{t}.pro6")),
                         arrangement: None,
                     })

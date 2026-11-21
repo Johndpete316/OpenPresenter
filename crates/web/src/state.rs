@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
 use doc::Document;
-use pp6core::ShowState;
+use opcore::ShowState;
 use serde::{Deserialize, Serialize};
 
 /// Live / next state (JSON).
@@ -239,7 +239,7 @@ impl RemoteState {
 /// The parts of a show state [`ShowInfo`] is made from; it's only rebuilt when one
 /// of them changes (holding the `Arc`s keeps the pointer comparison sound).
 pub(crate) struct ShowInputs {
-    playlists: Arc<Vec<pp6core::PlaylistFile>>,
+    playlists: Arc<Vec<opcore::PlaylistFile>>,
     docs: Arc<HashMap<PathBuf, Arc<Document>>>,
     errors: Arc<HashMap<PathBuf, String>>,
     arrangements: Arc<HashMap<PathBuf, Option<String>>>,

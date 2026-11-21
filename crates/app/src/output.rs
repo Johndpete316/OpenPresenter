@@ -167,7 +167,7 @@ impl OutputWindow {
             event_loop.primary_monitor().as_ref() == Some(&monitor),
         );
         let mut attrs = crate::with_icon(Window::default_attributes())
-            .with_title("PP6 Output")
+            .with_title("OpenPresenter Output")
             .with_decorations(windowed.is_some());
         attrs = if let Some((w, h)) = windowed {
             attrs

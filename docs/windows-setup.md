@@ -11,32 +11,40 @@ put the shinchiro `libmpv-2.dll` in `packaging/vendor/`, which is gitignored):
 
 ```sh
 packaging/build-installer.sh
-# → target/installer/PP6-Setup-<version>-<commit>.exe  (≈40 MB, sha256 printed)
+# → target/installer/OpenPresenter-Setup-<version>-<commit>.exe  (≈40 MB, sha256 printed)
 ```
 
 Commit first: a build with uncommitted changes is stamped `-dirty`. Bump `version` in the
 root `Cargo.toml` for each release that goes to the church. The version and commit show in
-**Settings → General**, at the top of the log, in crash reports and in `pp6.exe --version`.
+**Settings → General**, at the top of the log, in crash reports and in `openpresenter.exe --version`.
 
 For a quick test build without the installer:
 `cargo xwin build --release --target x86_64-pc-windows-msvc -p app -p pp6tool`.
 
 ## Install on the show PC
 
-1. Copy `PP6-Setup-….exe` over (Google Drive works; Gmail blocks `.exe` attachments) and run
-   it. It installs `pp6.exe`, `pp6tool.exe` and `libmpv-2.dll` to `C:\Program Files\PP6`,
-   adds a Start-menu shortcut (a desktop one is optional), and registers in *Installed apps*.
+**Moving from the old PP6 builds:** OpenPresenter is a new install (new name, folder and
+installer ID), not an upgrade. Uninstall **PP6** first (Settings → Apps → Installed apps),
+then run the OpenPresenter installer. It starts with fresh settings: the old
+`%APPDATA%\PP6` and `%LOCALAPPDATA%\PP6` folders aren't read, and can be deleted. Set the
+library folders again in **Settings → Folders**. Your `.pro6` files aren't touched.
+
+
+1. Copy `OpenPresenter-Setup-….exe` over (Google Drive works; Gmail blocks `.exe` attachments) and run
+   it. It installs `openpresenter.exe`, `pp6tool.exe`, `libmpv-2.dll`, `LICENSE.txt` and `THIRD-PARTY.txt` to
+   `C:\Program Files\OpenPresenter`,
+   adds an **OpenPresenter** Start-menu shortcut (a desktop one is optional), and registers in *Installed apps*.
    **Updating = running a newer installer**: it replaces the old version in place and offers
-   to close pp6 if it's running. Uninstalling or upgrading never touches settings, playlists
-   or logs. Silent install: `PP6-Setup-….exe /VERYSILENT /SUPPRESSMSGBOXES`.
+   to close OpenPresenter if it's running. Uninstalling or upgrading never touches settings, playlists
+   or logs. Silent install: `OpenPresenter-Setup-….exe /VERYSILENT /SUPPRESSMSGBOXES`.
 2. The installer isn't code-signed yet. With SmartScreen: *More info → Run anyway*. With
    **Smart App Control on, unsigned apps can't run at all** (see Code signing in PLAN.md).
 3. Install every font the slides use. Find them with:
    `pp6tool.exe report "D:\ProPresenter\Library"` (see the FONTS section).
 4. GPU driver with OpenGL 3.3.
 
-Data locations: settings `%APPDATA%\PP6\config\settings.toml`; logs, crash reports and
-playlists under `%LOCALAPPDATA%\PP6\data\`; caches under `%LOCALAPPDATA%\PP6\cache\`.
+Data locations: settings `%APPDATA%\OpenPresenter\config\settings.toml`; logs, crash reports and
+playlists under `%LOCALAPPDATA%\OpenPresenter\data\`; caches under `%LOCALAPPDATA%\OpenPresenter\cache\`.
 (Exact folders are printed on startup in the log.) `--data-dir DIR` puts everything in one
 folder instead. In the app, messages and the recent log are under **Settings → Log**; new
 problems show a toast in the bottom-right corner and a warning badge in the toolbar.
@@ -44,18 +52,18 @@ problems show a toast in the bottom-right corner and a warning badge in the tool
 ## M2: output on a second display
 
 ```bat
-pp6.exe --open "C:\path\to\song.pro6" --monitor 1
+openpresenter.exe --open "C:\path\to\song.pro6" --monitor 1
 ```
 
 - The output opens borderless fullscreen on display 1. The toolbar's Display list shows the
   numbering.
 - Try the arrow keys and PageUp/PageDown in either window; toggle **Output** in the toolbar
   (off must release the display; on re-opens it). **Display** picks the screen.
-- Timing: `pp6.exe --open song.pro6 --monitor 1 --bench 30` prints cold start and slide-change
+- Timing: `openpresenter.exe --open song.pro6 --monitor 1 --bench 30` prints cold start and slide-change
   latency. Add the numbers to `docs/perf.md` (Windows row).
-- Pixel check: `pp6.exe --open song.pro6 --monitor 1 --capture out.png`, then compare with
+- Pixel check: `openpresenter.exe --open song.pro6 --monitor 1 --capture out.png`, then compare with
   `pp6tool.exe render song.pro6 --out pngs --size <display size>`. They should be identical.
-- Side-by-side with PP6: same slide, same display. Compare font, size and position. This answers
+- Side-by-side with ProPresenter 6: same slide, same display. Compare font, size and position. This answers
   the `\fs` → pixel and vertical-alignment unknowns.
 
 ## M3: run a service with a clicker
@@ -91,11 +99,11 @@ pp6.exe --open "C:\path\to\song.pro6" --monitor 1
 
 ## M6: phone remote
 
-1. Start `pp6.exe`. Click **Remote** in the toolbar: it shows the address
+1. Start `openpresenter.exe`. Click **Remote** in the toolbar: it shows the address
    (http://192.168.x.y:8686) and the PIN.
-2. **Windows Firewall** asks on first start whether PP6 may use the network. Allow it on
+2. **Windows Firewall** asks on first start whether OpenPresenter may use the network. Allow it on
    **private** networks. If you missed the prompt: Windows Security → Firewall → Allow an app →
-   PP6 (private), or open TCP port 8686.
+   OpenPresenter (private), or open TCP port 8686.
 3. On a phone on the same Wi-Fi, open that address and enter the PIN. Next / Prev / Clear
    control the slides (Clear = Clear All). The page shows the current and next slide text and
    updates live.
@@ -104,7 +112,7 @@ pp6.exe --open "C:\path\to\song.pro6" --monitor 1
 6. Settings: `[web]` in `settings.toml` (`enabled`, `port`, `bind`, `pin_length` 4–6). The server
    listens on the PC's LAN address only (not all interfaces) unless `bind` says otherwise.
 
-## M7: edited files open in PP6
+## M7: edited files open in ProPresenter 6
 
 Work on **copies** of real presentations.
 
@@ -112,7 +120,7 @@ Work on **copies** of real presentations.
 2. Change a slide's text (Apply), add a slide, duplicate one, move one to another group,
    rename and recolour a group, add a group, and build a new arrangement.
 3. **Save** (the previous version is kept as `<name>.pro6.bak`).
-4. Open the saved file in **PP6 on Windows** and check:
+4. Open the saved file in **ProPresenter 6 on Windows** and check:
    - the new text shows (not the old text: this verifies dropping WinFlowData/WinFontData);
    - fonts and sizes match the neighbouring slides;
    - group names and colours are right, and the new arrangement appears and plays in order.
@@ -122,8 +130,8 @@ Work on **copies** of real presentations.
 
 1. Install **Bookman Old Style** (all three sample files use it).
 2. Put `AA001 Welcome.pro6` live (click its first slide). The loop starts on its own, as in
-   PP6, and the Preview pane shows **LOOP RUNNING · next slide in N s**.
-3. Check the timing against PP6: 10 s per slide (one slide 7 s), the disabled slide skipped, and
+   ProPresenter 6, and the Preview pane shows **LOOP RUNNING · next slide in N s**.
+3. Check the timing against ProPresenter 6: 10 s per slide (one slide 7 s), the disabled slide skipped, and
    after the last slide it goes back to the first.
 4. Next/Prev during the loop: step, and the countdown restarts for that slide.
 5. Clear (any): the loop stops and stays stopped (Next won't restart it); **Start loop** resumes.

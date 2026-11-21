@@ -28,7 +28,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-- `pp6.svg`: the program icon (original, part of this project). `pp6.ico` (16–256 px) and
-  `pp6-64.png` are rendered from it:
-  `rsvg-convert -w N -h N pp6.svg` per size, then packed into the `.ico` with Pillow.
-  `pp6.rc` embeds the `.ico` in `pp6.exe` (see `build.rs`); the installer uses it too.
+- `openpresenter.ico` (16–256 px), `openpresenter-64.png`: the program
+  icon (original, part of this project; GPL-3.0 like the rest). Copied from the brand pack in
+  `docs/branding/` (see `docs/branding/ICON.md`); regenerate there from the SVGs, then copy.
+  `openpresenter.rc` embeds the `.ico` in `openpresenter.exe` (see `build.rs`).

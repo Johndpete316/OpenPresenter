@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crossbeam_channel::Receiver;
-use pp6core::{Command, CoreConfig, ItemRef, ShowState};
+use opcore::{Command, CoreConfig, ItemRef, ShowState};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -30,8 +30,8 @@ fn wait(
     }
 }
 
-fn start(config: CoreConfig) -> (pp6core::CoreHandle, Receiver<Arc<ShowState>>) {
-    let (core, _join) = pp6core::spawn(config).unwrap();
+fn start(config: CoreConfig) -> (opcore::CoreHandle, Receiver<Arc<ShowState>>) {
+    let (core, _join) = opcore::spawn(config).unwrap();
     let rx = core.subscribe(None);
     (core, rx)
 }
@@ -219,7 +219,7 @@ fn playlist_editing_and_preparse() {
 
 #[test]
 fn playlists_are_saved_reloaded_and_deleted_to_a_folder() {
-    let dir = std::env::temp_dir().join(format!("pp6core-playlists-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("opcore-playlists-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let song = fixture("song_1024x768.pro6");
     let render = fixture("render_1024x768.pro6");
@@ -492,7 +492,7 @@ fn next_slide_looks_into_the_next_playlist_item() {
 #[test]
 fn edits_work_on_a_copy_until_saved_with_undo_and_revert() {
     use doc::Edit;
-    let dir = std::env::temp_dir().join(format!("pp6core-edit-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("opcore-edit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("song.pro6");
     std::fs::copy(fixture("song_1024x768.pro6"), &file).unwrap();
@@ -617,7 +617,7 @@ fn edits_work_on_a_copy_until_saved_with_undo_and_revert() {
 
 #[test]
 fn native_only_edits_need_consent_and_save_opres() {
-    let dir = std::env::temp_dir().join(format!("pp6core-native-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("opcore-native-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("song.pro6");
@@ -666,11 +666,11 @@ fn fast_announcements(dir: &std::path::Path, loops_back: bool) -> PathBuf {
 
 #[test]
 fn timed_presentation_loops_on_its_own_skips_disabled_and_loops_back() {
-    let dir = std::env::temp_dir().join(format!("pp6core-loop-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("opcore-loop-{}", std::process::id()));
     let ann = fast_announcements(&dir, true);
     let (core, rx) = start(CoreConfig::default());
     let t0 = std::time::Instant::now();
-    // Going live is enough: slide timers start the loop, like PP6.
+    // Going live is enough: slide timers start the loop.
     core.send(Command::GoTo {
         presentation: ann.clone(),
         position: 0,
@@ -708,7 +708,7 @@ fn timed_presentation_loops_on_its_own_skips_disabled_and_loops_back() {
 
 #[test]
 fn loop_rules_next_restarts_clear_stops_other_live_stops_select_keeps() {
-    let dir = std::env::temp_dir().join(format!("pp6core-loop-rules-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("opcore-loop-rules-{}", std::process::id()));
     let ann = fast_announcements(&dir, true);
     let song = fixture("song_1024x768.pro6");
     let (core, rx) = start(CoreConfig::default());
@@ -790,7 +790,7 @@ fn loop_rules_next_restarts_clear_stops_other_live_stops_select_keeps() {
 
 #[test]
 fn start_loop_waits_for_loading_and_stops_at_end_without_loop_back() {
-    let dir = std::env::temp_dir().join(format!("pp6core-loop-once-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("opcore-loop-once-{}", std::process::id()));
     let ann = fast_announcements(&dir, false);
     let (core, rx) = start(CoreConfig::default());
     // Start Loop before the file is loaded: starts once it is.
@@ -836,7 +836,7 @@ fn stepping_past_a_presentation_outside_the_playlist_says_why() {
 /// John's report: after Clear during the Welcome loop, the cleared slide kept coming back.
 #[test]
 fn clear_during_a_loop_keeps_everything_off_until_the_operator_shows_a_slide() {
-    let dir = std::env::temp_dir().join(format!("pp6core-loop-clear-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("opcore-loop-clear-{}", std::process::id()));
     let ann = fast_announcements(&dir, true);
     let song = fixture("song_1024x768.pro6");
     let (core, rx) = start(CoreConfig::default());
@@ -900,7 +900,7 @@ fn clear_during_a_loop_keeps_everything_off_until_the_operator_shows_a_slide() {
 /// the theme; one undo per presentation reverts it.
 #[test]
 fn theme_applies_to_ten_presentations_with_one_undo_each() {
-    let dir = std::env::temp_dir().join(format!("pp6core-theme-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("opcore-theme-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let sources = [
@@ -945,7 +945,7 @@ fn theme_applies_to_ten_presentations_with_one_undo_each() {
     core.send(Command::ApplyTheme {
         presentations: files.clone(),
         theme: Arc::new(theme.clone()),
-        targets: pp6core::ThemeTargets::All,
+        targets: opcore::ThemeTargets::All,
         save: false,
     });
     let s = wait(&rx, "themed", |s| {
@@ -996,7 +996,7 @@ fn theme_applies_to_ten_presentations_with_one_undo_each() {
 
 #[test]
 fn editing_a_theme_restyles_linked_slides_in_native_presentations() {
-    let dir = std::env::temp_dir().join(format!("pp6core-themelink-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("opcore-themelink-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("song.pro6");
@@ -1032,7 +1032,7 @@ fn editing_a_theme_restyles_linked_slides_in_native_presentations() {
     core.send(Command::ApplyTheme {
         presentations: vec![saved.path.clone()],
         theme: Arc::new(edited),
-        targets: pp6core::ThemeTargets::Linked,
+        targets: opcore::ThemeTargets::Linked,
         save: true,
     });
     wait(&rx, "saved", |s| {

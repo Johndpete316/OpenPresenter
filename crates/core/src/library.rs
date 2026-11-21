@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn opres_replaces_the_pro6_it_was_saved_next_to() {
-        let dir = std::env::temp_dir().join(format!("pp6core-lib-opres-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("opcore-lib-opres-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let pro6 = dir.join("song.pro6");
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn cache_round_trip() {
         let (idx, _) = LibraryIndex::default().revalidate(&[fixtures()]);
-        let path = std::env::temp_dir().join(format!("pp6core-lib-{}.json", std::process::id()));
+        let path = std::env::temp_dir().join(format!("opcore-lib-{}.json", std::process::id()));
         idx.save_cache(&path).unwrap();
         assert_eq!(LibraryIndex::load_cache(&path), Some(idx));
         std::fs::remove_file(&path).unwrap();

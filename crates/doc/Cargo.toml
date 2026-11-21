@@ -1,6 +1,6 @@
 [package]
 name = "doc"
-description = "OpenPresent native presentation model (.opres), .pro6 conversion, compatibility rules, edits and undo"
+description = "OpenPresenter native presentation model (.opres), .pro6 conversion, compatibility rules, edits and undo"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

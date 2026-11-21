@@ -38,7 +38,7 @@ Written 2026-11-21, before E0 of the Slide Editor Redesign plan. It covers what 
 - **Arrangements** (`arrangement.rs`): read through the raw tree. The writes use the assumed `RVSongArrangement`/`groupIDs` structure, which has since been verified against real files.
 - **Rescale** (`rescale.rs`): canvas resize with font scaling. E7 reuses it for themes with a different canvas size.
 
-### `pp6core` crate: where edits are applied
+### `opcore` crate: where edits are applied
 - `Command::Edit { presentation, op }`:
   - The actor clones the open `Document`, applies the op and swaps the `Arc` in `ShowState.docs`.
   - The path is marked in `unsaved`.
@@ -125,4 +125,4 @@ The audit found four conflicts with the plan. John decided each one:
   - To decide at E3.
 - **Shadow, outline and rotation aren't drawn by `render` yet.** E2's acceptance ("renders the same in editor, output and `pp6tool render`") needs them drawn first.
 - **WinFlowData/WinFontData drop on text edits** is still unverified in PP6 (PLAN.md M7). It matters for every `Pro6`-mode save.
-- **Name.** The plan calls the app OpenPresent (`.opres`, `.optheme`). The crates, binary and installer are still `pp6`. The extensions can be added without renaming anything; a rename is a separate decision.
+- **Name.** Done (2026-11-21): the app, binary (`openpresenter.exe`), core crate (`opcore`), installer and data folders are OpenPresenter. `pro6` and `pp6tool` keep their names: they are the `.pro6` format support and conversion tool.

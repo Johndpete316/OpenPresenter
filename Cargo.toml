@@ -5,14 +5,14 @@ members = ["crates/pro6", "crates/doc", "crates/core", "crates/render", "crates/
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "GPL-3.0-only"
 publish = false
 
 [workspace.dependencies]
 pro6 = { path = "crates/pro6" }
 doc = { path = "crates/doc" }
 render = { path = "crates/render" }
-pp6core = { path = "crates/core" }
+opcore = { path = "crates/core" }
 media = { path = "crates/media" }
 web = { path = "crates/web" }
 

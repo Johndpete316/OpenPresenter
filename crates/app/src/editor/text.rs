@@ -112,7 +112,7 @@ pub(super) struct PendingNative {
 }
 
 /// Send an edit after checking it against `.pro6` (asks first when it would make the
-/// presentation OpenPresent-only).
+/// presentation OpenPresenter-only).
 pub(super) fn send_checked(
     st: &mut UiState,
     actions: &mut Vec<UiAction>,
@@ -169,7 +169,7 @@ pub(super) fn native_prompt(
             many => format!("slides “{}”", many.join("”, “")),
         };
         ui.label(format!(
-            "{what} can't be saved in a .pro6 file. If you continue, {slides} will only open correctly in OpenPresent."
+            "{what} can't be saved in a .pro6 file. If you continue, {slides} will only open correctly in OpenPresenter."
         ));
         ui.label(
             RichText::new("The original .pro6 file is kept; this presentation will be saved as a .opres file next to it.")
@@ -980,7 +980,7 @@ pub(super) fn toolbar(
             apply(st, actions, path, d, at, Change::LetterSpacing(lt), key("letter-spacing"));
         }
         ui.label(
-            RichText::new("Spacing isn't checked against ProPresenter 6 yet; using it makes the presentation OpenPresent-only.")
+            RichText::new("Spacing isn't checked against ProPresenter 6 yet; using it makes the presentation OpenPresenter-only.")
                 .small()
                 .weak(),
         );
@@ -1264,7 +1264,7 @@ pub(super) fn effects_tab(
     }
     ui.add_space(10.0);
     ui.label(
-        RichText::new("Outline and shadow aren't checked against ProPresenter 6 yet; using them makes the presentation OpenPresent-only.")
+        RichText::new("Outline and shadow aren't checked against ProPresenter 6 yet; using them makes the presentation OpenPresenter-only.")
             .small()
             .weak(),
     );

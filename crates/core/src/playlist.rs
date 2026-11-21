@@ -1,5 +1,5 @@
 //! Native playlists: a TOML file of presentation paths + optional arrangement IDs.
-//! (No PP6 playlist import, by design.)
+//! (No ProPresenter 6 playlist import, by design.)
 
 use std::path::{Path, PathBuf};
 
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn round_trip_and_relative_paths() {
-        let dir = std::env::temp_dir().join(format!("pp6core-pl-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("opcore-pl-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("sunday.toml"),

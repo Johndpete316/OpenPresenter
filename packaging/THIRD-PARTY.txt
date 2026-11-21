@@ -1,4 +1,7 @@
-PP6 includes the following third-party components.
+OpenPresenter is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License version 3 (see LICENSE.txt). It includes the
+following third-party components, each under its own licence. All are compatible
+with GPL-3.0.
 
 libmpv-2.dll
   mpv media player library (https://mpv.io), Windows build by shinchiro
@@ -7,5 +10,14 @@ libmpv-2.dll
   and other libraries under their own licences. Source code is available from the
   projects above.
 
-Phosphor Icons (built into pp6.exe)
+Phosphor Icons (built into openpresenter.exe)
   https://phosphoricons.com, MIT licence, Copyright (c) 2023 Phosphor Icons.
+
+egui default fonts (built into openpresenter.exe)
+  Ubuntu-Light (Ubuntu Font Licence 1.0), Hack (MIT / Bitstream Vera licence),
+  Noto Emoji (SIL Open Font Licence 1.1), emoji-icon-font (MIT / OFL 1.1).
+
+Rust libraries (built into openpresenter.exe and pp6tool.exe)
+  Several hundred crates from https://crates.io, under the MIT, Apache-2.0,
+  BSD-2-Clause, BSD-3-Clause, ISC, Zlib, BSL-1.0, MPL-2.0, Unicode-3.0 and
+  Unlicense licences. Run `cargo metadata` in the source tree for the full list.

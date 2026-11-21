@@ -36,7 +36,7 @@ impl OperatorWindow {
         proxy: EventLoopProxy<UserEvent>,
     ) -> Result<OperatorWindow, OutputError> {
         let attrs = crate::with_icon(Window::default_attributes())
-            .with_title("PP6")
+            .with_title("OpenPresenter")
             .with_inner_size(winit::dpi::LogicalSize::new(1400.0, 900.0));
         let (window, config) = DisplayBuilder::new()
             .with_window_attributes(Some(attrs.clone()))

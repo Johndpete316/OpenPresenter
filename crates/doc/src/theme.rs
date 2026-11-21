@@ -134,7 +134,7 @@ impl ThemeError {
                 format!("The theme '{}' couldn't be read or written ({source}).", path.display())
             }
             ThemeError::Json { path, message } => format!(
-                "'{}' is damaged or isn't an OpenPresent theme ({message}).",
+                "'{}' is damaged or isn't an OpenPresenter theme ({message}).",
                 path.display()
             ),
             ThemeError::NoText => "A theme takes its text style from a text box, and this slide has none with styled text. Nothing was made.".to_owned(),

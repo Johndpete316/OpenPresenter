@@ -1,13 +1,13 @@
 [package]
 name = "app"
-description = "PP6 replacement: output window (M2 spike); operator UI arrives in M3"
+description = "OpenPresenter: the operator app (operator window, output window, editor, phone remote)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "pp6"
+name = "openpresenter"
 path = "src/main.rs"
 
 [build-dependencies]
@@ -32,7 +32,7 @@ image = { version = "0.25", default-features = false, features = [
     "tiff",
 ] }
 media.workspace = true
-pp6core.workspace = true
+opcore.workspace = true
 pro6.workspace = true
 doc.workspace = true
 raw-window-handle = "0.6"

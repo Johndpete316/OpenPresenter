@@ -429,7 +429,7 @@ impl Core {
         match cmd {
             Command::Next => self.step(true, at),
             Command::Prev => self.step(false, at),
-            // Clears are one-shot actions (as in PP6), not toggled states: Clear Text
+            // Clears are one-shot actions, not toggled states: Clear Text
             // takes the slide off until the next slide is shown; Clear Background stops
             // the background (choosing one again brings it back).
             Command::ClearText => {
@@ -1039,7 +1039,7 @@ impl Core {
             slide,
         });
         self.s.text_visible = true;
-        // Timed presentations loop on their own, like PP6 (unless the operator stopped it).
+        // Timed presentations loop on their own (unless the operator stopped it).
         if self.s.looping.is_none()
             && self.loop_suppressed.as_ref() != Some(path)
             && let Some(timings) = self.s.live.as_ref().and_then(|l| l.doc.slide_timings())

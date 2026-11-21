@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Build the Windows installer from Linux: cross-compile, stage, run Inno Setup under Wine.
+# Build the OpenPresenter Windows installer from Linux: cross-compile, stage, run Inno Setup under Wine.
 #
 #   packaging/build-installer.sh [path/to/libmpv-2.dll]
 #
 # Needs: cargo-xwin, wine, and Inno Setup 6 installed in a Wine prefix (ISCC.exe).
 # Env: MPV_DLL (default packaging/vendor/libmpv-2.dll), WINEPREFIX, ISCC (path inside
-# the prefix, default C:\inno\ISCC.exe). Output: target/installer/PP6-Setup-<ver>-<commit>.exe
+# the prefix, default C:\inno\ISCC.exe). Output: target/installer/OpenPresenter-Setup-<ver>-<commit>.exe
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -28,14 +28,16 @@ cargo xwin build --release --target "$target" -p app -p pp6tool
 stage=target/installer/stage
 rm -rf "$stage"
 mkdir -p "$stage"
-cp "target/$target/release/pp6.exe" "target/$target/release/pp6tool.exe" "$stage/"
+cp "target/$target/release/openpresenter.exe" "target/$target/release/pp6tool.exe" "$stage/"
 cp "$mpv_dll" "$stage/libmpv-2.dll"
 cp packaging/THIRD-PARTY.txt "$stage/"
+# CRLF so Notepad and the installer's licence page show it properly.
+sed 's/$/\r/' LICENSE > "$stage/LICENSE.txt"
 
 WINEDEBUG=-all wine "$iscc" /Q \
   "/DStage=$(winepath -w "$stage")" "/DVersion=$version" "/DBuild=$build" \
-  "$(winepath -w packaging/pp6.iss)"
+  "$(winepath -w packaging/openpresenter.iss)"
 
-out="target/installer/PP6-Setup-$version-$build.exe"
+out="target/installer/OpenPresenter-Setup-$version-$build.exe"
 [[ -f "$out" ]] || { echo "Inno Setup didn't produce $out" >&2; exit 1; }
 sha256sum "$out"

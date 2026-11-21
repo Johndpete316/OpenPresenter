@@ -7,7 +7,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use pp6core::{Command, CoreConfig};
+use opcore::{Command, CoreConfig};
 use web::{Images, WebConfig, WebRemote};
 
 fn main() {
@@ -16,7 +16,7 @@ fn main() {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8686);
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
-    let (core, _) = pp6core::spawn(CoreConfig::default()).unwrap();
+    let (core, _) = opcore::spawn(CoreConfig::default()).unwrap();
     let poster: web::PosterFn = std::sync::Arc::new(|path: &std::path::Path, w: u32| {
         let img = image::open(path).map_err(|e| e.to_string())?;
         Ok(img.thumbnail(w, w * 9 / 16).to_rgba8())

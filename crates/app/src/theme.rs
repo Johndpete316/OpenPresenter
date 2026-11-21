@@ -1,4 +1,4 @@
-//! Look of the operator window: a dark, ProPresenter 6-like theme and the round
+//! Look of the operator window: the dark OpenPresenter theme (docs/branding/ICON.md) and the round
 //! coloured toolbar icons (Phosphor Bold, bundled; see `assets/README.md`).
 
 use egui::{
@@ -37,16 +37,32 @@ pub mod icon {
     pub const LIST: char = '\u{E2F0}';
 }
 
+/// The brand palette (docs/branding/ICON.md, Colours). New UI uses these: dark neutral
+/// ground, white ink, one orange accent for what's live or what advances.
+pub mod brand {
+    use egui::Color32;
+    /// Tile gradient, top and bottom.
+    pub const BG_TOP: Color32 = Color32::from_rgb(0x2A, 0x2A, 0x31);
+    pub const BG_BOTTOM: Color32 = Color32::from_rgb(0x12, 0x12, 0x15);
+    /// Accent gradient start (also the live text colour), and the flat midpoint for
+    /// ordinary UI. (The gradient end, `#F06A1D`, is only used in the logo.)
+    pub const ACCENT_START: Color32 = Color32::from_rgb(0xFF, 0xA8, 0x45);
+    pub const ACCENT: Color32 = Color32::from_rgb(0xF8, 0x8A, 0x31);
+    pub const INK: Color32 = Color32::WHITE;
+}
+
 /// Colours shared by the panels.
 pub mod color {
+    use super::brand;
     use egui::Color32;
-    /// Live slide / live item (PP6 uses orange for what's on screen).
-    pub const LIVE: Color32 = Color32::from_rgb(255, 150, 30);
-    pub const LIVE_TEXT: Color32 = Color32::from_rgb(255, 175, 70);
+    /// Live slide / live item: the brand orange marks what's on screen.
+    pub const LIVE: Color32 = brand::ACCENT;
+    pub const LIVE_TEXT: Color32 = brand::ACCENT_START;
     /// Section header bars.
-    pub const HEADER: Color32 = Color32::from_rgb(30, 30, 32);
-    pub const PANEL: Color32 = Color32::from_rgb(42, 42, 45);
-    pub const LIST: Color32 = Color32::from_rgb(34, 34, 36);
+    pub const HEADER: Color32 = Color32::from_rgb(26, 26, 31);
+    pub const PANEL: Color32 = brand::BG_TOP;
+    pub const LIST: Color32 = Color32::from_rgb(34, 34, 40);
+    /// Selection (kept blue so "selected" never reads as "live").
     pub const ACCENT: Color32 = Color32::from_rgb(46, 112, 204);
 }
 
@@ -69,9 +85,9 @@ pub fn install(ctx: &egui::Context) {
     ctx.set_theme(egui::Theme::Dark);
     let mut v = egui::Visuals::dark();
     v.panel_fill = color::PANEL;
-    v.window_fill = Color32::from_rgb(48, 48, 51);
-    v.extreme_bg_color = Color32::from_rgb(24, 24, 26);
-    v.faint_bg_color = Color32::from_rgb(40, 40, 43);
+    v.window_fill = Color32::from_rgb(48, 48, 55);
+    v.extreme_bg_color = brand::BG_BOTTOM;
+    v.faint_bg_color = Color32::from_rgb(38, 38, 45);
     v.selection.bg_fill = color::ACCENT;
     v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
     v.window_corner_radius = CornerRadius::same(6);
@@ -83,10 +99,10 @@ pub fn install(ctx: &egui::Context) {
     ] {
         w.corner_radius = CornerRadius::same(3);
     }
-    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(58, 58, 62);
-    v.widgets.inactive.bg_fill = Color32::from_rgb(58, 58, 62);
-    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(72, 72, 78);
-    v.widgets.hovered.bg_fill = Color32::from_rgb(72, 72, 78);
+    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(58, 58, 66);
+    v.widgets.inactive.bg_fill = Color32::from_rgb(58, 58, 66);
+    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(72, 72, 82);
+    v.widgets.hovered.bg_fill = Color32::from_rgb(72, 72, 82);
     ctx.set_visuals_of(egui::Theme::Dark, v);
     ctx.all_styles_mut(|s| {
         s.spacing.item_spacing = Vec2::new(6.0, 4.0);
@@ -113,7 +129,7 @@ pub fn small_icon(ui: &mut Ui, c: char, hover: &str) -> Response {
     .on_hover_text(hover)
 }
 
-/// A PP6-style toolbar button: a coloured disc with a white glyph and a caption under it.
+/// A toolbar button: a coloured disc with a white glyph and a caption under it.
 /// `active` draws a highlight (e.g. a layer is cleared, output is on).
 pub fn tool_button(
     ui: &mut Ui,
@@ -191,4 +207,56 @@ pub fn section_header<R>(ui: &mut Ui, title: &str, right: impl FnOnce(&mut Ui) -
     child
         .with_layout(egui::Layout::right_to_left(egui::Align::Center), right)
         .inner
+}
+
+const LOGO_PNG: &[u8] = include_bytes!("../assets/openpresenter-64.png");
+/// The full GPL-3.0 text, shown from Settings (GPL section 0, "Appropriate Legal Notices").
+pub const LICENSE_TEXT: &str = include_str!("../../../LICENSE");
+
+/// The program's logo as a texture, decoded once per context.
+fn logo(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let id = egui::Id::unique("openpresenter-logo");
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return Some(t);
+    }
+    let img = image::load_from_memory(LOGO_PNG).ok()?.into_rgba8();
+    let size = [img.width() as usize, img.height() as usize];
+    let tex = ctx.load_texture(
+        "openpresenter-logo",
+        egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()),
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|d| d.insert_temp(id, tex.clone()));
+    Some(tex)
+}
+
+/// Logo, name, version and the licence notice (Settings → General).
+pub fn brand_header(ui: &mut Ui, version: &str) {
+    ui.horizontal(|ui| {
+        if let Some(tex) = logo(ui.ctx()) {
+            ui.add(egui::Image::new((tex.id(), Vec2::splat(48.0))));
+        }
+        ui.vertical(|ui| {
+            ui.label(RichText::new("OpenPresenter").size(20.0).strong().color(brand::INK));
+            ui.weak(format!("Version {version}"));
+        });
+    });
+    ui.label(
+        RichText::new(
+            "Copyright (C) 2026 John Peterson. Free software under the GNU General Public \
+             License v3.0: you may share and change it under its terms. It comes with \
+             NO WARRANTY.",
+        )
+        .small(),
+    );
+    egui::CollapsingHeader::new("GNU General Public License v3.0")
+        .id_salt("settings-license")
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .max_height(260.0)
+                .id_salt("settings-license-text")
+                .show(ui, |ui| {
+                    ui.label(RichText::new(LICENSE_TEXT).monospace().small());
+                });
+        });
 }

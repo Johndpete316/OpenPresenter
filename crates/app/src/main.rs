@@ -1,4 +1,4 @@
-//! `pp6` — the operator app: egui operator window + output window, both on one
+//! `openpresenter` — the operator app: egui operator window + output window, both on one
 //! winit event loop; the output's GL runs on its own thread, and the show state
 //! lives in the core actor.
 
@@ -24,8 +24,8 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use crossbeam_channel::{Receiver, Sender};
-use pp6core::library::LibraryIndex;
-use pp6core::{Command, CoreHandle, Settings, ShowState};
+use opcore::library::LibraryIndex;
+use opcore::{Command, CoreHandle, Settings, ShowState};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
@@ -39,7 +39,7 @@ use crate::thumbs::{ThumbRequest, ThumbResult};
 use crate::ui::{UiAction, UiState};
 
 #[derive(Parser)]
-#[command(name = "pp6", version = VERSION, about = "PP6 replacement")]
+#[command(name = "openpresenter", version = VERSION, about = "OpenPresenter: worship presentation software")]
 struct Args {
     /// Put this presentation's first slide live at startup.
     #[arg(long)]
@@ -146,9 +146,9 @@ fn parse_size(s: &str) -> Result<(u32, u32), String> {
 }
 
 /// Version and the git commit it was built from, e.g. "0.1.0 (851e7e5)".
-pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("PP6_BUILD"), ")");
+pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("OPENPRESENTER_BUILD"), ")");
 
-/// Give a window the PP6 icon (title bar, taskbar, Alt-Tab). A missing icon is cosmetic:
+/// Give a window the OpenPresenter icon (title bar, taskbar, Alt-Tab). A missing icon is cosmetic:
 /// logged, never fatal.
 pub fn with_icon(attrs: winit::window::WindowAttributes) -> winit::window::WindowAttributes {
     #[cfg(windows)]
@@ -170,7 +170,7 @@ pub fn with_icon(attrs: winit::window::WindowAttributes) -> winit::window::Windo
     }
     #[cfg(not(windows))]
     {
-        let icon = image::load_from_memory(include_bytes!("../assets/pp6-64.png"))
+        let icon = image::load_from_memory(include_bytes!("../assets/openpresenter-64.png"))
             .map_err(|e| e.to_string())
             .and_then(|img| {
                 let img = img.into_rgba8();
@@ -198,14 +198,14 @@ struct Paths {
 fn paths(data_dir: Option<PathBuf>) -> Paths {
     let (config, data, cache) = match data_dir {
         Some(d) => (d.clone(), d.clone(), d.join("cache")),
-        None => match directories::ProjectDirs::from("", "", "PP6") {
+        None => match directories::ProjectDirs::from("", "", "OpenPresenter") {
             Some(p) => (
                 p.config_dir().to_path_buf(),
                 p.data_local_dir().to_path_buf(),
                 p.cache_dir().to_path_buf(),
             ),
             None => {
-                let d = PathBuf::from("pp6-data");
+                let d = PathBuf::from("openpresenter-data");
                 (d.clone(), d.clone(), d.join("cache"))
             }
         },
@@ -246,7 +246,7 @@ fn main() -> ExitCode {
 
     // Start blank (John, 2026-11-20): nothing live, nothing on the output.
     let _ = args.no_restore;
-    let (core, _core_thread) = match pp6core::spawn(pp6core::CoreConfig {
+    let (core, _core_thread) = match opcore::spawn(opcore::CoreConfig {
         playlists_dir: Some(paths.playlists.clone()),
         output_enabled: settings.output.enabled,
     }) {
@@ -273,7 +273,7 @@ fn main() -> ExitCode {
     // Library: cached index now, background revalidation after.
     let cached = LibraryIndex::load_cache(&paths.library_cache).unwrap_or_default();
     let lib_proxy = proxy.clone();
-    let _ = pp6core::library::spawn_revalidate(
+    let _ = opcore::library::spawn_revalidate(
         cached.clone(),
         settings.library_dirs.clone(),
         Some(paths.library_cache.clone()),
@@ -564,11 +564,11 @@ struct App {
     exit_code: ExitCode,
 }
 
-fn media_scaling(s: pp6core::MediaScaling) -> media::Scaling {
+fn media_scaling(s: opcore::MediaScaling) -> media::Scaling {
     match s {
-        pp6core::MediaScaling::Fill => media::Scaling::Fill,
-        pp6core::MediaScaling::Fit => media::Scaling::Fit,
-        pp6core::MediaScaling::Stretch => media::Scaling::Stretch,
+        opcore::MediaScaling::Fill => media::Scaling::Fill,
+        opcore::MediaScaling::Fit => media::Scaling::Fit,
+        opcore::MediaScaling::Stretch => media::Scaling::Stretch,
     }
 }
 
@@ -792,7 +792,7 @@ impl App {
     fn revalidate_library(&mut self) {
         self.ui.library_status = "Checking library…".into();
         let proxy = self.proxy.clone();
-        let _ = pp6core::library::spawn_revalidate(
+        let _ = opcore::library::spawn_revalidate(
             self.ui.library.clone(),
             self.settings.library_dirs.clone(),
             Some(self.paths.library_cache.clone()),
@@ -1272,9 +1272,9 @@ impl ApplicationHandler<UserEvent> for App {
                 .show
                 .live
                 .as_ref()
-                .is_some_and(|l| pp6core::next_enabled(&l.order, l.position).is_none());
+                .is_some_and(|l| opcore::next_enabled(&l.order, l.position).is_none());
             if at_end && let Some(l) = &self.show.live {
-                let first = pp6core::next_enabled(&l.order, None).unwrap_or(0);
+                let first = opcore::next_enabled(&l.order, None).unwrap_or(0);
                 self.send(Command::GoTo {
                     presentation: l.path.clone(),
                     position: first,

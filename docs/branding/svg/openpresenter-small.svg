@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>OpenPresenter (16–24 px)</title>
+  <defs>
+    <linearGradient id="op-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2A2A31"/><stop offset="1" stop-color="#121215"/></linearGradient>
+    <linearGradient id="op-accent" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFA845"/><stop offset="1" stop-color="#F06A1D"/></linearGradient>
+  </defs>
+  <rect x="0" y="0" width="512" height="512" rx="96" fill="url(#op-bg)"/>
+  <g transform="translate(0 6)">
+    <rect x="226" y="320" width="60" height="70" fill="url(#op-accent)"/>
+    <rect x="150" y="364" width="212" height="56" rx="28" fill="url(#op-accent)"/>
+    <path d="M 280 110 H 180 A 72 72 0 0 0 108 182 V 252 A 72 72 0 0 0 180 324 H 332 A 72 72 0 0 0 404 252 V 246"
+          fill="none" stroke="#FFFFFF" stroke-width="60" stroke-linecap="round"/>
+    <rect x="168" y="196" width="124" height="48" rx="24" fill="#FFFFFF"/>
+    <path d="M 358 88 L 424 154 L 358 220" fill="none" stroke="url(#op-accent)" stroke-width="56" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

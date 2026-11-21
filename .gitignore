@@ -2,5 +2,6 @@
 *.pro6.bak
 *.pending-snap
 *.snap.new
+*.zip
 /pp6-examples/
 /packaging/vendor/

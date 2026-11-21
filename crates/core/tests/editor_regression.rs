@@ -82,7 +82,7 @@ fn summary(doc: &doc::Document) -> Summary {
 
 #[test]
 fn open_edit_reorder_arrange_save_reopen() {
-    let dir = std::env::temp_dir().join(format!("pp6-editor-regression-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("openpresenter-editor-regression-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("song.pro6");
     std::fs::copy(fixture("song_1024x768.pro6"), &file).unwrap();
@@ -171,14 +171,14 @@ fn e1_rearrange_move_save_reopen_identical() {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use pp6core::{Command, CoreConfig, ShowState};
+    use opcore::{Command, CoreConfig, ShowState};
 
-    let dir = std::env::temp_dir().join(format!("pp6-e1-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("openpresenter-e1-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("song.pro6");
     std::fs::copy(fixture("song_1024x768.pro6"), &file).unwrap();
-    let (core, _join) = pp6core::spawn(CoreConfig::default()).unwrap();
+    let (core, _join) = opcore::spawn(CoreConfig::default()).unwrap();
     let rx = core.subscribe(None);
     let wait = |what: &str, pred: &dyn Fn(&ShowState) -> bool| -> Arc<ShowState> {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);

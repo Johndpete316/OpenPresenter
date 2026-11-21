@@ -22,7 +22,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use futures_util::{SinkExt as _, StreamExt as _};
-use pp6core::{Command, CoreHandle, ShowState};
+use opcore::{Command, CoreHandle, ShowState};
 use serde::Deserialize;
 use tokio::sync::{oneshot, watch};
 
@@ -33,7 +33,7 @@ pub use state::{
     slide_text,
 };
 
-const COOKIE: &str = "pp6_session";
+const COOKIE: &str = "openpresenter_session";
 
 #[derive(Debug, thiserror::Error)]
 pub enum WebError {

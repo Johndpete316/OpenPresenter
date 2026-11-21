@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt as _;
-use pp6core::{Command, CoreConfig, ShowState};
+use opcore::{Command, CoreConfig, ShowState};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use web::{Images, RemoteState, ShowInfo, WebConfig, WebRemote};
 
@@ -18,11 +18,11 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn start() -> (
-    pp6core::CoreHandle,
+    opcore::CoreHandle,
     crossbeam_channel::Receiver<Arc<ShowState>>,
     WebRemote,
 ) {
-    let (core, _) = pp6core::spawn(CoreConfig::default()).unwrap();
+    let (core, _) = opcore::spawn(CoreConfig::default()).unwrap();
     let watch = core.subscribe(None);
     let remote = WebRemote::start(
         core.clone(),
@@ -157,7 +157,7 @@ async fn pin_login_lockout_commands_and_logout_on_new_pin() {
     assert_eq!(r.status, 303);
     let cookie = cookie_from(&r);
     let r = http(&url, "GET", "/", Some(&cookie), None).await;
-    assert!(r.body.contains("Next ▶"));
+    assert!(r.body.contains("<button id=\"nextbtn\">Next"));
 
     // State and commands go through the real core.
     let song = fixture("song_1024x768.pro6");
@@ -216,7 +216,7 @@ async fn pin_login_lockout_commands_and_logout_on_new_pin() {
         401
     );
     assert_eq!(
-        http(&url, "GET", "/api/state", Some("pp6_session=forged"), None)
+        http(&url, "GET", "/api/state", Some("openpresenter_session=forged"), None)
             .await
             .status,
         401
@@ -407,7 +407,7 @@ async fn slide_images_are_rendered_and_cached() {
 
 #[tokio::test]
 async fn images_wait_for_fonts() {
-    let (core, _) = pp6core::spawn(CoreConfig::default()).unwrap();
+    let (core, _) = opcore::spawn(CoreConfig::default()).unwrap();
     let watch = core.subscribe(None);
     let remote = WebRemote::start(
         core.clone(),

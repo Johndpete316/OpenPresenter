@@ -1,4 +1,4 @@
-//! The slide editor (docs/EDITOR-PLAN.md E1). Layout modelled on ProPresenter:
+//! The slide editor (docs/EDITOR-PLAN.md E1). Layout:
 //!
 //! ```text
 //! ┌ top bar: title • | Undo Redo | Save Revert |              Close editor ┐
@@ -21,7 +21,7 @@ use doc::{Edit as Op, Element, new_uuid};
 use egui::{
     Align2, Color32, CursorIcon, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2,
 };
-use pp6core::{Command, ShowState};
+use opcore::{Command, ShowState};
 
 use crate::thumbs::ThumbRequest;
 use crate::ui::{UiAction, UiState, color32, paint_error};
@@ -127,7 +127,7 @@ pub struct EditState {
     lyrics: lyrics::Lyrics,
     lyrics_new: Option<crossbeam_channel::Receiver<Result<PathBuf, String>>>,
     /// Default group colours (from the settings).
-    pub group_colors: Vec<pp6core::GroupColor>,
+    pub group_colors: Vec<opcore::GroupColor>,
     /// Turn the editor back on after theme editing ends (Done).
     reopen_after_theme: bool,
     /// Copied style (Copy Style), for pasting.
@@ -668,7 +668,7 @@ fn top_bar(
                 if d.mode == doc::Mode::Native && d.theme.is_none() {
                     ui.label(
                         RichText::new(format!(
-                            "saves as {}.{} (OpenPresent only)",
+                            "saves as {}.{} (OpenPresenter only)",
                             crate::ui::title(path),
                             doc::NATIVE_EXT
                         ))
@@ -1041,7 +1041,7 @@ fn strip(
                         p.text(
                             b.center(),
                             Align2::CENTER_CENTER,
-                            "not PP6",
+                            "not .pro6",
                             FontId::proportional(10.0),
                             Color32::WHITE,
                         );
@@ -1241,7 +1241,7 @@ fn slide_menu(
     }
 }
 
-/// Group name with its PP6 colour and a menu. Returns the header's rect.
+/// Group name with its group colour and a menu. Returns the header's rect.
 fn group_header(
     ui: &mut egui::Ui,
     st: &mut UiState,
@@ -1673,7 +1673,7 @@ fn slide_tab(
     image::background_section(ui, st, actions, path, d, (g, s));
     if slide.pro6_incompatible {
         ui.add_space(6.0);
-        ui.label(RichText::new("This slide uses something a ProPresenter 6 file can't hold; it only opens correctly in OpenPresent.").color(Color32::from_rgb(255, 130, 130)));
+        ui.label(RichText::new("This slide uses something a ProPresenter 6 file can't hold; it only opens correctly in OpenPresenter.").color(Color32::from_rgb(255, 130, 130)));
     }
 }
 
@@ -3462,7 +3462,7 @@ mod tests {
 
     #[test]
     fn imported_files_are_copied_once_by_content() {
-        let dir = std::env::temp_dir().join(format!("pp6-import-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("openpresenter-import-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("My Logo.png");

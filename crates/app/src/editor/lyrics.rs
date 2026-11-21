@@ -501,7 +501,7 @@ pub fn poll(st: &mut UiState, actions: &mut Vec<UiAction>) {
             st.edit.sel = None;
             st.edit.element = None;
             actions.push(UiAction::RefreshLibrary);
-            actions.push(UiAction::Core(pp6core::Command::Open(p)));
+            actions.push(UiAction::Core(opcore::Command::Open(p)));
         }
         Err(e) => st.toast(e),
     }
@@ -517,7 +517,7 @@ mod tests {
         let src =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/song_1024x768.pro6");
         let d = doc::load(&src).unwrap();
-        let dir = std::env::temp_dir().join(format!("pp6-lyrics-new-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("openpresenter-lyrics-new-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("New Song.opres");

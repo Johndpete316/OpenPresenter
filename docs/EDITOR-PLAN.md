@@ -1,4 +1,4 @@
-# OpenPresent — Slide Editor Redesign — Implementation Plan
+# OpenPresenter — Slide Editor Redesign — Implementation Plan
 
 The basic editor from **M7** in `PLAN.md` is already built. This plan **redesigns and expands** that editor; it does not start a new one.
 
@@ -66,7 +66,7 @@ The basic editor from **M7** in `PLAN.md` is already built. This plan **redesign
 
 ### Native Format
 - Extensions:
-  - **`.opres`** (OpenPresent presentation)
+  - **`.opres`** (OpenPresenter presentation)
   - **`.optheme`** (themes)
 
   Each extension is defined in one constant.
@@ -88,7 +88,7 @@ Each document has a mode:
 
 - Every editor feature declares its compatibility in one place: `fn pro6_support(feature) -> Supported | NativeOnly | Unverified`.
 - In `Pro6` mode, an edit that would use a `NativeOnly` feature shows a modal **before** it applies:
-  > **This won't work in ProPresenter 6.** _Vignette_ can't be saved in a `.pro6` file. If you continue, slide "Chorus 2" will only open correctly in OpenPresent. [ Don't do it ] [ Continue anyway ]
+  > **This won't work in ProPresenter 6.** _Vignette_ can't be saved in a `.pro6` file. If you continue, slide "Chorus 2" will only open correctly in OpenPresenter. [ Don't do it ] [ Continue anyway ]
 - **Don't do it:** the edit is discarded and nothing changes.
 - **Continue anyway:**
   - the edit applies

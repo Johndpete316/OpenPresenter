@@ -1,30 +1,33 @@
 //! The two pages served to phones, embedded in the program (nothing to deploy).
+//! Styled after the brand (docs/branding/ICON.md): dark neutral ground, white ink, the
+//! orange accent for what's live and what advances; the logo and arrow are inlined.
 
 pub fn login(message: Option<&str>) -> String {
     let msg = message
         .map(|m| format!("<p class=\"err\">{}</p>", escape(m)))
         .unwrap_or_default();
     format!(
-        r#"<!doctype html>
+        r##"<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>PP6 Remote</title>
+<title>OpenPresenter Remote</title>
 <style>
-body {{ font-family: system-ui, sans-serif; background: #111; color: #eee; margin: 0; display: flex; min-height: 100vh; align-items: center; justify-content: center; }}
-form {{ background: #1d1d1d; padding: 24px; border-radius: 12px; width: min(90vw, 320px); }}
-h1 {{ font-size: 1.3rem; margin: 0 0 16px; }}
-input {{ width: 100%; box-sizing: border-box; font-size: 2rem; letter-spacing: .4em; text-align: center; padding: 10px; border-radius: 8px; border: 1px solid #444; background: #000; color: #fff; }}
-button {{ width: 100%; margin-top: 16px; font-size: 1.2rem; padding: 14px; border: 0; border-radius: 8px; background: #2a6df4; color: #fff; }}
+body {{ font-family: system-ui, sans-serif; background: linear-gradient(#2A2A31, #121215); background-color: #121215; color: #eee; margin: 0; display: flex; min-height: 100vh; align-items: center; justify-content: center; }}
+form {{ background: #1e1e24; padding: 24px; border-radius: 12px; width: min(90vw, 320px); }}
+h1 {{ font-size: 1.3rem; margin: 0 0 16px; display: flex; align-items: center; gap: 10px; }}
+.logo {{ width: 36px; height: 36px; flex: none; }}
+input {{ width: 100%; box-sizing: border-box; font-size: 2rem; letter-spacing: .4em; text-align: center; padding: 10px; border-radius: 8px; border: 1px solid #3a3a44; background: #121215; color: #fff; }}
+button {{ width: 100%; margin-top: 16px; font-size: 1.2rem; padding: 14px; border: 0; border-radius: 8px; background: linear-gradient(135deg, #FFA845, #F06A1D); color: #fff; font-weight: 600; }}
 .err {{ color: #ff7b7b; }}
 p {{ color: #aaa; font-size: .9rem; }}
 </style></head>
 <body><form method="post" action="/login">
-<h1>PP6 Remote</h1>
+<h1><svg class="logo" viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="op-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2A2A31"/><stop offset="1" stop-color="#121215"/></linearGradient><linearGradient id="op-accent" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFA845"/><stop offset="1" stop-color="#F06A1D"/></linearGradient></defs><rect width="512" height="512" rx="96" fill="url(#op-bg)"/><g transform="translate(0 6)"><rect x="226" y="320" width="60" height="70" fill="url(#op-accent)"/><rect x="150" y="364" width="212" height="56" rx="28" fill="url(#op-accent)"/><path d="M 280 110 H 180 A 72 72 0 0 0 108 182 V 252 A 72 72 0 0 0 180 324 H 332 A 72 72 0 0 0 404 252 V 246" fill="none" stroke="#FFFFFF" stroke-width="60" stroke-linecap="round"/><rect x="168" y="196" width="124" height="48" rx="24" fill="#FFFFFF"/><path d="M 358 88 L 424 154 L 358 220" fill="none" stroke="url(#op-accent)" stroke-width="56" stroke-linecap="round" stroke-linejoin="round"/></g></svg>OpenPresenter Remote</h1>
 <p>Enter the PIN shown on the operator screen.</p>
 {msg}
 <input name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" autofocus required>
 <button type="submit">Connect</button>
-</form></body></html>"#
+</form></body></html>"##
     )
 }
 
@@ -33,14 +36,16 @@ p {{ color: #aaa; font-size: .9rem; }}
 pub const REMOTE: &str = r##"<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<meta name="theme-color" content="#111111">
-<title>PP6 Remote</title>
+<meta name="theme-color" content="#121215">
+<title>OpenPresenter Remote</title>
 <style>
-:root { --bg: #111; --panel: #1b1b1b; --line: #2c2c2c; --text: #eee; --dim: #999; --live: #f39a2b; --next: #2a6df4; --danger: #8a2626; }
+:root { --bg: #121215; --panel: #1e1e24; --line: #2e2e36; --text: #eee; --dim: #9a9aa6; --live: #F88A31; --accent-start: #FFA845; --accent-end: #F06A1D; --next: #2a6df4; --danger: #8a2626; }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; }
 body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; height: 100vh; height: 100dvh; touch-action: manipulation; overflow: hidden; }
 header { padding: 8px 16px; font-size: .9rem; color: var(--dim); display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.logo { width: 20px; height: 20px; flex: none; }
 #title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 #status { white-space: nowrap; }
 #status.off { color: #ff7b7b; }
@@ -65,7 +70,10 @@ nav { display: grid; grid-template-columns: 1fr 2fr; gap: 10px; padding: 12px 16
 button { font: inherit; color: #fff; border: 0; border-radius: 12px; cursor: pointer; }
 nav button { font-size: 1.4rem; padding: 22px 0; }
 #prev { background: #333; }
-#nextbtn { background: var(--next); }
+#nextbtn { background: linear-gradient(135deg, var(--accent-start), var(--accent-end)); font-weight: 600; }
+nav button { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.arrow { height: .9em; width: auto; }
+.arrow.back { transform: scaleX(-1); }
 #clear { grid-column: 1 / 3; background: var(--danger); padding: 14px 0; font-size: 1.1rem; }
 button:active { filter: brightness(1.3); }
 button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
@@ -127,7 +135,7 @@ details[open] > summary::before { content: "▾"; }
 .cap span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style></head>
 <body>
-<header><span id="title">–</span><span id="status" class="off">connecting…</span></header>
+<header><span class="brand"><svg class="logo" viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="op-bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2A2A31"/><stop offset="1" stop-color="#121215"/></linearGradient><linearGradient id="op-accent" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFA845"/><stop offset="1" stop-color="#F06A1D"/></linearGradient></defs><rect width="512" height="512" rx="96" fill="url(#op-bg)"/><g transform="translate(0 6)"><rect x="226" y="320" width="60" height="70" fill="url(#op-accent)"/><rect x="150" y="364" width="212" height="56" rx="28" fill="url(#op-accent)"/><path d="M 280 110 H 180 A 72 72 0 0 0 108 182 V 252 A 72 72 0 0 0 180 324 H 332 A 72 72 0 0 0 404 252 V 246" fill="none" stroke="#FFFFFF" stroke-width="60" stroke-linecap="round"/><rect x="168" y="196" width="124" height="48" rx="24" fill="#FFFFFF"/><path d="M 358 88 L 424 154 L 358 220" fill="none" stroke="url(#op-accent)" stroke-width="56" stroke-linecap="round" stroke-linejoin="round"/></g></svg><span id="title">–</span></span><span id="status" class="off">connecting…</span></header>
 <div id="app">
   <aside id="lists" aria-label="Playlists"></aside>
   <section id="browser">
@@ -153,8 +161,8 @@ details[open] > summary::before { content: "▾"; }
     </div>
   </section>
   <nav>
-    <button id="prev">◀ Prev</button>
-    <button id="nextbtn">Next ▶</button>
+    <button id="prev"><svg class="arrow back" viewBox="0 0 84 134" aria-hidden="true"><path d="M 17 17 L 67 67 L 17 117" fill="none" stroke="currentColor" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/></svg>Prev</button>
+    <button id="nextbtn">Next<svg class="arrow" viewBox="0 0 84 134" aria-hidden="true"><path d="M 17 17 L 67 67 L 17 117" fill="none" stroke="currentColor" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     <button id="clear">Clear</button>
   </nav>
 </div>

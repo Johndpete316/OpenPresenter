@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, select};
-use pp6core::{ShowState, prev_enabled};
+use opcore::{ShowState, prev_enabled};
 use render::{Fonts, SlideFrame, render_slide};
 
 use crate::UserEvent;

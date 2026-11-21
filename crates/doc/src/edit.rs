@@ -1076,7 +1076,7 @@ pub enum Check {
     /// first ("This won't work in ProPresenter 6").
     NeedsNative {
         features: Vec<Feature>,
-        /// UUIDs of the slides that would only open correctly in OpenPresent.
+        /// UUIDs of the slides that would only open correctly in OpenPresenter.
         slides: Vec<String>,
     },
 }

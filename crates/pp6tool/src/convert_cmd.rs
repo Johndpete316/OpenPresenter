@@ -63,7 +63,7 @@ pub fn run(opts: &Options) -> anyhow::Result<String> {
             let what = if opts.skip_incompatible {
                 "left out"
             } else {
-                "written without its OpenPresent-only parts"
+                "written without its OpenPresenter-only parts"
             };
             s.push_str(&format!("  {l}: {what}\n"));
         }

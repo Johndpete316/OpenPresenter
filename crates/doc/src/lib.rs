@@ -1,4 +1,4 @@
-//! OpenPresent's native presentation model, used app-wide (John, 2026-11-21):
+//! OpenPresenter's native presentation model, used app-wide (John, 2026-11-21):
 //! core, render, thumbnails and the phone remote all work on [`Document`].
 //!
 //! - `.pro6` files are converted on load and written back by [`save`] in `Pro6`

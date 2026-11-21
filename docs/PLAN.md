@@ -1,9 +1,9 @@
-# ProPresenter 6 Rewrite — Implementation Plan
+# OpenPresenter — Implementation Plan
 > [!info] For Claude Code
 > Read this whole file before starting. Work one milestone at a time, in order. Each task is a small, reviewable change. Do not start the next milestone until the current one's acceptance criteria pass. When something in the `.pro6` format is unknown, **do not guess silently** — add it to [[#Unknowns to Verify]] and preserve the raw data.
 
 ## Goal
-Replacement for ProPresenter 6 for church use. Reads and writes existing `.pro6` files (backward compatible with PP6). Dev machine is Linux (CachyOS); production host is **Windows**.
+**OpenPresenter** (GPL-3.0; see `docs/LICENSING.md`): a replacement for ProPresenter 6 for church use. Reads and writes existing `.pro6` files (backward compatible with ProPresenter 6). Dev machine is Linux (CachyOS); production host is **Windows**.
 
 ## Priorities (in order)
 1. **Speed** — fast cold start, snappy input. The slide operator is the primary user. Show-critical paths (operator UI, output render, clicker input) never block on disk, network, or decoding.
@@ -46,17 +46,17 @@ Spec: https://gist.github.com/gooderist/ae3054f25390b3befabcc623b0c6c184 (unoffi
 
 ### Workspace Layout
 ```
-pp6/
+ProPresenter-Replacement/   # repo folder (the program is OpenPresenter)
 ├─ Cargo.toml            # workspace
 ├─ crates/
 │  ├─ pro6/              # .pro6 model, parser, writer, RTF handling (no GUI deps)
 │  ├─ doc/               # native model used app-wide, .opres, .pro6 conversion, edits, undo
-│  ├─ core/              # ShowState, Command, playlist model, settings
+│  ├─ core/              # (crate `opcore`) ShowState, Command, playlist model, settings
 │  ├─ render/            # slide → GPU: text layout (cosmic-text), canvas scaling, compositing
 │  ├─ media/             # libmpv wrapper, audio device list
 │  ├─ web/               # axum server, PIN auth, WebSocket, static page
-│  ├─ app/               # egui operator UI + output window, wires everything together
-│  └─ pp6tool/           # CLI: corpus report, round-trip check, bulk rescale, render-to-PNG
+│  ├─ app/               # (binary `openpresenter`) egui operator UI + output window, wires everything together
+│  └─ pp6tool/           # .pro6 conversion/diagnostics CLI: corpus report, round-trip check, bulk rescale, render-to-PNG
 ├─ fixtures/             # hand-written .pro6 files from the spec
 └─ docs/
 ```
@@ -103,7 +103,7 @@ pp6/
 - [x] Missing-font detection → typed error
 - [x] Measure cold start and slide-change latency; log them
 - **Accept:** fixture slides render correctly to PNG and to a second monitor on Windows.
-- **Status (2026-11-20):** everything is built and verified on Linux. PNGs are checked visually. The GL output, captured with `pp6 --capture`, matches `pp6tool render` pixel-for-pixel at 4:3, 16:9 and 1:1, including black bars and background. Disable/enable and the missing-display error were exercised. `pp6.exe` cross-builds. **Still to do for acceptance:** run on the Windows host with a second display. Suggested commands: `pp6.exe --list-monitors`, then `pp6.exe <file> --monitor N`; arrow keys and D, stdin `e` to re-enable; `--bench 30`; `--capture out.png`. Record the numbers in perf.md.
+- **Status (2026-11-20):** everything is built and verified on Linux. PNGs are checked visually. The GL output, captured with `openpresenter --capture`, matches `pp6tool render` pixel-for-pixel at 4:3, 16:9 and 1:1, including black bars and background. Disable/enable and the missing-display error were exercised. `pp6.exe` cross-builds. **Still to do for acceptance:** run on the Windows host with a second display. Suggested commands: `pp6.exe --list-monitors`, then `pp6.exe <file> --monitor N`; arrow keys and D, stdin `e` to re-enable; `--bench 30`; `--capture out.png`. Record the numbers in perf.md.
 - **Windows (2026-11-20):** fixture and real slides render to PNG on Windows (Bookman Old Style hymn checked), and the output runs **fullscreen on a real second display** (DISPLAY2 1024×768) next to the operator window. Round-trip is byte-identical on Windows. Windows-only bugs found and fixed: operator window crash ("Unable to create Texture object": creating the output's WGL context left the operator context not current); startup stall from loading libmpv during startup (6.5 s → 1.3–2.2 s). **Still to do:** a visual comparison against PP6 (not installed on the test laptop).
 - **Several playlists (John, 2026-11-20):** the team runs two a week, so the Playlists panel is a tree: each playlist collapsible with its items under it. Playlists save automatically (one TOML file each in `<data>/playlists`; deleting moves the file to `deleted/`); Import copies a file in. Next/Prev cross items only inside the live presentation's playlist. Library double-click / + adds to the playlist last used.
 - **Clear is one-shot (John, 2026-11-20):** Clear All / Slides / BkGrds act once and show no lasting "cleared" state. Clear Background stops the background media (choose one to bring it back); Clear Text takes the slide off until a slide is shown. The toolbar no longer highlights them and the preview has no "All cleared" label.
@@ -129,7 +129,7 @@ pp6/
 - **Accept:** can run a service from fixtures on Windows with a clicker.
 - **Status (2026-11-20):** everything is built; core behaviour is covered by tests, and the UI was checked with `--capture-ui` screenshots on Linux. **Still to do for acceptance:** a Windows run with a real clicker. Notes:
   - Operator UI uses `egui-winit` + `egui_glow` (not `eframe`), as agreed.
-  - Core crate is `crates/core`, package `pp6core` (`core` clashes with Rust's built-in crate).
+  - Core crate is `crates/core`, package `opcore` (`core` clashes with Rust's built-in crate).
   - The library index cache is JSON, not bincode: `bincode` 3.0.0 is a deprecation release.
   - Key bindings are configured in `settings.toml` (`[keys]`); there's no in-app editor.
   - Next at the last slide moves to the first enabled slide of the **next playlist item**, using its stored arrangement (decided by John, 2026-11-20). It loads first if needed, without blocking. Prev at the first slide stays put. The raster worker and the "Next" preview look ahead into the next item, so the change is instant.
@@ -263,9 +263,9 @@ Track findings here as real files arrive. "M0:" notes say how the parser current
 - [ ] Group colours are written with 15 decimals (`0.498039215686275`); preserved exactly.
 
 ## Deployment requirements (found on Windows, 2026-11-20)
-- [ ] **Code signing.** Windows 11 **Smart App Control** blocks unsigned `pp6.exe`/`pp6tool.exe` (and would block `libmpv-2.dll`); a Defender exclusion doesn't help. Before deploying to the church PC: check whether Smart App Control is on there, and plan to sign the executables and DLL with a trusted code-signing certificate (e.g. Microsoft Trusted Signing or a commercial OV/EV certificate; self-signed won't satisfy Smart App Control).
-  - Decision (2026-11-20): ship unsigned for now. Signing must happen before the church PC if Smart App Control is on there (it can't be bypassed per app). Recommended: Azure Artifact Signing (formerly Trusted Signing), ideally in the church's name; the installer, `pp6.exe`, `pp6tool.exe` and `libmpv-2.dll` all get signed.
-- [x] **Installer.** Inno Setup (built under Wine by `packaging/build-installer.sh`), per-machine install to `C:\Program Files\PP6`. Updates are a new installer sent over (Google Drive), not an auto-updater; same AppId = in-place upgrade. User data stays in AppData. Version + commit shown in Settings → General.
+- [ ] **Code signing.** Windows 11 **Smart App Control** blocks unsigned `openpresenter.exe`/`pp6tool.exe` (and would block `libmpv-2.dll`); a Defender exclusion doesn't help. Before deploying to the church PC: check whether Smart App Control is on there, and plan to sign the executables and DLL with a trusted code-signing certificate (e.g. Microsoft Trusted Signing or a commercial OV/EV certificate; self-signed won't satisfy Smart App Control).
+  - Decision (2026-11-20): ship unsigned for now. Signing must happen before the church PC if Smart App Control is on there (it can't be bypassed per app). Recommended: Azure Artifact Signing (formerly Trusted Signing), ideally in the church's name; the installer, `openpresenter.exe`, `pp6tool.exe` and `libmpv-2.dll` all get signed.
+- [x] **Installer.** Inno Setup (built under Wine by `packaging/build-installer.sh`), per-machine install to `C:\Program Files\OpenPresenter` (Start-menu shortcut **OpenPresenter**; renamed from PP6 on 2026-11-21 with a new AppId, so it installs fresh rather than upgrading a PP6 install). Updates are a new installer sent over (Google Drive), not an auto-updater; same AppId = in-place upgrade. User data stays in AppData. Version + commit shown in Settings → General.
 
 ## Required Tooling
 ### Dev Machine (CachyOS / Arch)

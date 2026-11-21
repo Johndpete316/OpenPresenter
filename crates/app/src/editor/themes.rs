@@ -14,7 +14,7 @@ use std::sync::Arc;
 use crossbeam_channel::{Receiver, Sender};
 use doc::{Edit as Op, Theme};
 use egui::{Color32, RichText};
-use pp6core::{Command, ShowState, ThemeTargets};
+use opcore::{Command, ShowState, ThemeTargets};
 
 use super::text::send_checked;
 use crate::ui::{UiAction, UiState};
@@ -389,7 +389,7 @@ fn theme_actions(
     if !native.is_empty() {
         ui.label(
             RichText::new(format!(
-                "Uses {} — ProPresenter 6 presentations it's applied to will be saved as OpenPresent files (.opres).",
+                "Uses {} — ProPresenter 6 presentations it's applied to will be saved as OpenPresenter files (.opres).",
                 native.join(", ")
             ))
             .small()
@@ -589,7 +589,7 @@ mod tests {
 
     #[test]
     fn linked_presentations_are_found_by_theme() {
-        let dir = std::env::temp_dir().join(format!("pp6-themes-linked-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("openpresenter-themes-linked-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         let mut d = doc::load(&fixture("song_1024x768.pro6")).unwrap();
@@ -619,7 +619,7 @@ mod tests {
 
     #[test]
     fn themes_in_a_folder_are_listed_by_name() {
-        let dir = std::env::temp_dir().join(format!("pp6-themes-list-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("openpresenter-themes-list-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let d = doc::load(&fixture("song_1024x768.pro6")).unwrap();
