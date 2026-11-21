@@ -27,6 +27,7 @@ use crate::thumbs::ThumbRequest;
 use crate::ui::{UiAction, UiState, color32, paint_error};
 
 mod arrange;
+mod copy_style;
 mod image;
 mod snap;
 mod text;
@@ -111,6 +112,8 @@ pub struct EditState {
     grid: bool,
     /// Tab (`false`) / Shift+Tab (`true`) pressed with nothing focused this frame.
     tab_pressed: Option<bool>,
+    /// Copied style (Copy Style), for pasting.
+    style_clip: Option<doc::Style>,
     /// Layer being dragged in the Layers tab.
     layer_drag: Option<usize>,
     /// Layer being renamed: element index and the name typed so far.
@@ -436,6 +439,26 @@ pub fn editor(
     }
     text::check_session(st, actions, path, d);
     image::poll(ui, st, actions, path, d);
+    // Ctrl+Alt+C / Ctrl+Alt+V: copy / paste style (not while typing).
+    if let Some((g, s)) = st.edit.sel
+        && st.edit.session.is_none()
+        && ui.memory(|m| m.focused().is_none())
+    {
+        let (copy, paste) = ui.input(|i| {
+            let m = i.modifiers.command && i.modifiers.alt;
+            (
+                m && i.key_pressed(egui::Key::C),
+                m && i.key_pressed(egui::Key::V),
+            )
+        });
+        if copy {
+            copy_style::copy(st, d, (g, s));
+        }
+        if paste && st.edit.element.is_some() {
+            let scope = doc::Scope::Elements(g, s, st.edit.selection());
+            copy_style::paste(st, actions, path, d, &scope);
+        }
+    }
     top_bar(ui, st, show, actions, path, d);
     context_bar(ui, st, actions, path, d);
     bottom_bar(ui, st, actions, path, d);
@@ -650,6 +673,7 @@ fn context_bar(
                     {
                         st.edit.tab = Tab::Position;
                     }
+                    copy_style::buttons(ui, st, actions, path, d, (g, s));
                     ui.label(
                         RichText::new("Drag to move them together; Shift-click to add or remove one.")
                             .weak(),
@@ -662,6 +686,8 @@ fn context_bar(
                     Element::Image(_) => image::toolbar(ui, st, actions, path, d, (g, s, e)),
                     Element::Pro6(_) => return,
                 }
+                ui.separator();
+                copy_style::buttons(ui, st, actions, path, d, (g, s));
                 let rotation = el.rotation().rem_euclid(360.0);
                 if rotation != 0.0
                     && ui
@@ -3337,6 +3363,38 @@ mod tests {
             h.ctx.memory(|m| m.focused().is_none()),
             "no button took focus"
         );
+    }
+
+    #[test]
+    fn copy_and_paste_style_by_keyboard() {
+        let mut h = Harness::new();
+        h.frame(vec![]);
+        // Copy slide 1's box style; paste it onto slide 2's box (two fonts there).
+        h.st.edit.element = Some(0);
+        h.frame(vec![]);
+        let key = |k| egui::Event::Key {
+            key: k,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND | egui::Modifiers::ALT,
+        };
+        h.mods = egui::Modifiers::COMMAND | egui::Modifiers::ALT;
+        h.frame(vec![key(egui::Key::C)]);
+        assert!(h.st.edit.style_clip.is_some());
+        h.st.edit.select_slide(0, 1);
+        h.st.edit.element = Some(0);
+        let edits = h.frame(vec![key(egui::Key::V)]);
+        h.mods = egui::Modifiers::NONE;
+        match edits.as_slice() {
+            [Op::Batch { edits, .. }] => assert!(
+                edits
+                    .iter()
+                    .any(|e| matches!(e, Op::SetRichText { element: 0, .. })),
+                "{edits:?}"
+            ),
+            other => panic!("expected one paste, got {other:?}"),
+        }
     }
 
     #[test]

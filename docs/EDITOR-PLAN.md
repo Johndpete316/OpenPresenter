@@ -332,9 +332,15 @@ Filled in from real files and testing in PP6. Starting state:
   - The inspector tabs are now Text / Image / Position / Layers / Slide; Effects and Adjust open from the toolbars as side panels.
 
 ### E5 — Copy Style / Apply to All
-- [ ] Copy Style button and shortcuts; paste to selection / slide / group / presentation
-- [ ] A single undo step for any scope
+- [x] Copy Style button and shortcuts; paste to selection / slide / group / presentation
+- [x] A single undo step for any scope
 - **Accept:** apply a style to a 30-slide presentation in one action; one undo reverts all of it.
+- **Status (2026-11-21):** done. Acceptance test: `paste_to_a_thirty_slide_presentation_is_one_undo_step` in `crates/doc/tests/style.rs`.
+  - **What's copied** (`doc::style`): for text, the first run's font, size, colour, bold, italic, underline and letter spacing, the first paragraph's alignment and line spacing, vertical alignment, outline and shadow; for images, the adjustments and opacity. Pasting text style restyles every run and paragraph of the target box; the text itself is untouched.
+  - **Toolbar:** Copy Style (one element selected) and Paste Style ▾ (once something is copied) with Selected / All on this slide / All slides in this group / All slides in this presentation, each showing how many elements it would change. Text styles go on text boxes, image styles on images. Also in the bar when several are selected.
+  - **Shortcuts:** Ctrl+Alt+C copies, Ctrl+Alt+V pastes onto the selection (not while typing).
+  - **One step:** a paste is one `Batch` edit whatever the scope, so it's one undo; elements that already have the style aren't touched. A style with native-only parts (outline, shadow, spacing) asks first, like the toolbar does.
+  - The plan mentions a paint-roller icon; the button is labelled "Copy Style" (no icon set has been added for the editor yet).
 
 ### E6 — Fit Text (Button)
 - [ ] **Fit Text** button in the text toolbar. It shrinks the font size until the text fits the box, uniformly across runs so relative sizes are kept. It never runs automatically.
