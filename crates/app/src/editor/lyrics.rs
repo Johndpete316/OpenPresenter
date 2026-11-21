@@ -489,7 +489,7 @@ fn name_row(ui: &mut egui::Ui, st: &mut UiState) {
         match &st.edit.new_dir {
             Some(dir) => ui.label(
                 RichText::new(format!(
-                    "saved as {}.opres in {} (Settings → Folders)",
+                    "saved as {}.opres in {} (change it in Settings, Folders)",
                     file_stem(st.edit.lyrics.new_name.trim()),
                     dir.display()
                 ))
@@ -497,7 +497,7 @@ fn name_row(ui: &mut egui::Ui, st: &mut UiState) {
                 .weak(),
             ),
             None => ui.label(
-                RichText::new("Choose a folder for new presentations in Settings → Folders first.")
+                RichText::new("Choose a folder for new presentations in Settings, Folders first.")
                     .color(Color32::YELLOW),
             ),
         };
@@ -516,22 +516,29 @@ fn format_help(ui: &mut egui::Ui, st: &mut UiState, standalone: bool) {
         .id_salt("lyrics-help")
         .default_open(standalone)
         .show(ui, |ui| {
-            let row = |ui: &mut egui::Ui, code: &str, what: &str| {
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        Vec2::new(170.0, 16.0),
-                        egui::Label::new(RichText::new(code).monospace().color(crate::theme::brand::ACCENT_START)),
-                    );
-                    ui.label(what);
+            let rows: [(&str, &str); 5] = [
+                ("[Verse 1]", "A name in square brackets, on its own line, starts a group."),
+                ("Amazing grace how sweet…", "The lines under it are the slide's lines."),
+                ("(empty line)", "Starts the next slide in the same group."),
+                ("[Chorus]  (again)", "A name used again repeats that group: no need to type it twice. The order of the names is the arrangement."),
+                ("Verse 1:   Chorus   (Bridge)", "Headings as lyric websites write them work too."),
+            ];
+            egui::Grid::new("lyrics-help-grid")
+                .num_columns(2)
+                .spacing(Vec2::new(16.0, 4.0))
+                .show(ui, |ui| {
+                    for (code, what) in rows {
+                        ui.label(
+                            RichText::new(code)
+                                .monospace()
+                                .color(crate::theme::brand::ACCENT_START),
+                        );
+                        ui.label(what);
+                        ui.end_row();
+                    }
                 });
-            };
-            row(ui, "[Verse 1]", "A name in square brackets, on its own line, starts a group.");
-            row(ui, "Amazing grace how sweet…", "The lines under it are the slide's lines.");
-            row(ui, "(empty line)", "Starts the next slide in the same group.");
-            row(ui, "[Chorus]  (again)", "A name used again repeats that group: no need to type it twice. The order of the names is the arrangement.");
-            row(ui, "Verse 1:  Chorus  (Bridge)", "Headings as lyric websites write them work too.");
             ui.label(
-                RichText::new("Text before the first name goes in a group called \"Lyrics\". Group colours come from Settings → General. Leave the text empty for a blank presentation.")
+                RichText::new("Text before the first name goes in a group called \"Lyrics\". Group colours come from Settings, General. Leave the text empty for a blank presentation.")
                     .small()
                     .weak(),
             );
@@ -586,7 +593,7 @@ fn body_main(
                 "{} group(s), {} slide(s). Order: {}",
                 parsed.groups.len(),
                 parsed.slide_count(),
-                if order.is_empty() { "—".to_owned() } else { order.join(" → ") }
+                if order.is_empty() { "—".to_owned() } else { order.join(", ") }
             ));
             if parsed.ignored_lines > 0 {
                 ui.label(
@@ -750,7 +757,7 @@ fn apply(
                             let r = match std::fs::create_dir_all(&dir) {
                                 Ok(()) => doc::save(&n).map(|s| s.path).map_err(|e| e.user_message()),
                                 Err(e) => Err(format!(
-                                    "The folder for new presentations, {}, couldn't be made ({e}). Choose another in Settings → Folders.",
+                                    "The folder for new presentations, {}, couldn't be made ({e}). Choose another in Settings, Folders.",
                                     dir.display()
                                 )),
                             };

@@ -370,9 +370,123 @@ pub fn text_between(paras: &[Paragraph], a: Pos, b: Pos) -> String {
     s
 }
 
+/// Position of byte `o` in the plain text of `paras` (paragraphs joined with `'\n'`,
+/// as [`crate::TextBox::plain_text`] makes it).
+fn plain_pos(paras: &[Paragraph], mut o: usize) -> Pos {
+    for (i, p) in paras.iter().enumerate() {
+        let l = len(p);
+        if o <= l {
+            return Pos::new(i, o);
+        }
+        o -= l + 1;
+    }
+    end(paras)
+}
+
+/// `paras` with its plain text changed from `old` to `new`, keeping the styles: only
+/// the part that differs is replaced, in the style of the text before it (quick edit,
+/// spelling fixes). `'\n'` in `new` is a new line the way this box already makes them:
+/// a line break inside the paragraph if it uses those, else a new paragraph.
+pub fn replace_plain(paras: &[Paragraph], old: &str, new: &str) -> Vec<Paragraph> {
+    let mut out = paras.to_vec();
+    let line_breaks = out
+        .iter()
+        .any(|p| p.runs.iter().any(|r| r.text.contains('\n')));
+    // Changed regions as (start, end in `old`, replacement), applied last first so the
+    // earlier offsets stay valid. Same number of lines: each changed line on its own
+    // (a fix in the first line and another in the last keep the styles between).
+    let mut regions: Vec<(usize, usize, &str)> = Vec::new();
+    let (ol, nl): (Vec<&str>, Vec<&str>) = (old.split('\n').collect(), new.split('\n').collect());
+    if ol.len() == nl.len() {
+        let mut at = 0;
+        for (o, n) in ol.iter().zip(&nl) {
+            if o != n {
+                let (a, b, m) = diff(o, n);
+                regions.push((at + a, at + b, m));
+            }
+            at += o.len() + 1;
+        }
+    } else {
+        let (a, b, m) = diff(old, new);
+        regions.push((a, b, m));
+    }
+    for (a, b, mid) in regions.into_iter().rev() {
+        let (pa, pb) = (plain_pos(&out, a), plain_pos(&out, b));
+        let style =
+            style_at(&out, pa).or_else(|| out.iter().flat_map(|p| &p.runs).next().map(styled));
+        let mid = if line_breaks {
+            mid.replace('\n', &LINE_BREAK.to_string())
+        } else {
+            mid.to_owned()
+        };
+        let at = delete(&mut out, pa, pb);
+        if let Some(style) = style
+            && !mid.is_empty()
+        {
+            insert(&mut out, at, &mid, &style);
+        }
+    }
+    out
+}
+
+/// The part of `old` that differs from `new`: `(start, end)` in `old` and what
+/// replaces it, after taking off the common start and end.
+fn diff<'a>(old: &str, new: &'a str) -> (usize, usize, &'a str) {
+    let pre = old
+        .char_indices()
+        .zip(new.chars())
+        .take_while(|((_, a), b)| a == b)
+        .last()
+        .map_or(0, |((i, a), _)| i + a.len_utf8());
+    let suf: usize = old[pre..]
+        .chars()
+        .rev()
+        .zip(new[pre..].chars().rev())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum();
+    (pre, old.len() - suf, &new[pre..new.len() - suf])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plain(paras: &[Paragraph]) -> String {
+        paras.iter().map(text).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn replace_plain_keeps_the_styles_around_the_change() {
+        let paras = vec![
+            para(vec![run("Amazing ", false), run("grase", true)]),
+            para(vec![run("how sweet", false)]),
+        ];
+        let old = plain(&paras);
+        let out = replace_plain(&paras, &old, "Amazing grace\nhow sweet the sound");
+        assert_eq!(
+            texts(&out),
+            vec![
+                vec![("Amazing ".into(), false), ("grace".into(), true)],
+                vec![("how sweet the sound".into(), false)],
+            ]
+        );
+        // A new line where the box uses paragraphs: a new paragraph.
+        let out = replace_plain(&paras, &old, "Amazing grase\nhow\nsweet");
+        assert_eq!(out.len(), 3);
+        assert_eq!(plain(&out), "Amazing grase\nhow\nsweet");
+        // A box with line breaks inside one paragraph keeps using them.
+        let lb = vec![para(vec![run("one\ntwo", false)])];
+        let out = replace_plain(&lb, "one\ntwo", "one\ntwo\nthree");
+        assert_eq!(out.len(), 1);
+        assert_eq!(text(&out[0]), "one\ntwo\nthree");
+        // Unchanged, emptied, and multi-byte text.
+        assert_eq!(replace_plain(&paras, &old, &old), paras);
+        let out = replace_plain(&paras, &old, "");
+        assert_eq!(plain(&out), "");
+        let out = replace_plain(&lb, "one\ntwo", "ône\ntwo");
+        assert_eq!(text(&out[0]), "ône\ntwo");
+    }
 
     fn run(text: &str, bold: bool) -> Run {
         Run {

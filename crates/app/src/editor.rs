@@ -180,6 +180,12 @@ impl EditState {
         self.sel = Some((group, slide));
     }
 
+    /// Open the editor on slide `(group, slide)` (grid menu, Edit in editor).
+    pub fn open_at(&mut self, group: usize, slide: usize) {
+        self.on = true;
+        self.select_slide(group, slide);
+    }
+
     /// Select an element too; again to add more (development / screenshots).
     pub fn select_element(&mut self, element: usize) {
         if self.element.is_none() {

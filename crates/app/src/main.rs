@@ -7,6 +7,7 @@ mod crash;
 mod editor;
 mod error;
 mod gl;
+mod grid_menu;
 mod keys;
 mod media_scan;
 mod media_thumbs;
@@ -96,6 +97,9 @@ struct Args {
     /// Open the Settings window at startup.
     #[arg(long)]
     open_settings: bool,
+    /// Open the New presentation window at startup (development / screenshots).
+    #[arg(long)]
+    open_new: bool,
     /// Save the operator window as PNG 3 s after it opens, then exit.
     #[arg(long)]
     capture_ui: Option<PathBuf>,
@@ -383,6 +387,7 @@ fn main() -> ExitCode {
             settings_path: paths.settings.display().to_string(),
             playlists_path: paths.playlists.display().to_string(),
             settings_open: args.open_settings,
+            open_new_at_start: args.open_new,
             tile_w: settings.view.tile_width,
             edit: ui_state_edit,
             media_thumbs,

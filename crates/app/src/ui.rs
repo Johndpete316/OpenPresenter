@@ -122,6 +122,12 @@ pub struct UiState {
     pub media_bin: Option<PathBuf>,
     /// Slide tile width in the grid (0 = default).
     pub tile_w: f32,
+    /// Grid menu: the quick edit window, and a group name being typed (presentation,
+    /// group UUID).
+    pub quick: Option<crate::grid_menu::QuickEdit>,
+    pub grid_rename: Option<((PathBuf, String), String)>,
+    /// Open the New presentation window on the first frame (`--open-new`).
+    pub open_new_at_start: bool,
     /// Problems up to this time have been seen in Settings → Log.
     pub seen_notices_at: Option<Instant>,
     pub seen_app_notices: usize,
@@ -316,11 +322,16 @@ pub fn draw(
         toast(ui.ctx(), st, show);
         return actions;
     }
+    if st.open_new_at_start {
+        st.open_new_at_start = false;
+        crate::editor::lyrics::open_new(st, ui.ctx(), show.selected.is_some());
+    }
     {
         let selected = show
             .selected
             .as_ref()
             .and_then(|p| show.docs.get(p).map(|d| (p.clone(), d.clone())));
+        crate::grid_menu::quick_edit_window(ui.ctx(), st, show, &mut actions);
         crate::editor::lyrics::new_window(
             ui.ctx(),
             st,
@@ -1386,7 +1397,7 @@ pub(crate) fn color32(c: Option<doc::Rgba>) -> Color32 {
 }
 
 /// Black or white, whichever reads better on `bg`.
-fn text_on(bg: Color32) -> Color32 {
+pub(crate) fn text_on(bg: Color32) -> Color32 {
     let l = 0.299 * f32::from(bg.r()) + 0.587 * f32::from(bg.g()) + 0.114 * f32::from(bg.b());
     if l > 150.0 {
         Color32::BLACK
@@ -1548,6 +1559,11 @@ fn presentation(
                                 position: pos,
                             }));
                         }
+                        resp.context_menu(|ui| {
+                            crate::grid_menu::slide_menu(
+                                ui, st, show, &path, &doc, *r, pos, actions,
+                            );
+                        });
                     }
                 });
                 ui.add_space(gap);
