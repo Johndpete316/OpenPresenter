@@ -289,6 +289,7 @@ fn main() -> ExitCode {
 
     let link: OutputLink = Arc::new(Mutex::new(None));
     let (fonts_tx, fonts_rx) = crossbeam_channel::bounded(1);
+    let (web_fonts_tx, web_fonts_rx) = crossbeam_channel::bounded::<render::Fonts>(1);
     let mut font_dirs = settings.font_dirs.clone();
     font_dirs.extend(args.font_dirs.iter().cloned());
     let raster = match raster::spawn(
@@ -296,7 +297,7 @@ fn main() -> ExitCode {
         font_dirs,
         link.clone(),
         proxy.clone(),
-        fonts_tx,
+        vec![fonts_tx, web_fonts_tx],
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -342,9 +343,10 @@ fn main() -> ExitCode {
         core.send(Command::StartLoop);
     }
 
+    let remote_images = remote_images(web_fonts_rx, paths.thumbs.join("media"), &mpv_ready);
     let mut remote = None;
     if settings.web.enabled {
-        match start_remote(&core, &settings) {
+        match start_remote(&core, &settings, &remote_images) {
             Ok(r) => remote = Some(r),
             Err(msg) => app_notices.push(msg),
         }
@@ -389,6 +391,7 @@ fn main() -> ExitCode {
         operator: None,
         output: None,
         remote,
+        remote_images,
         sent_size: None,
         monitor_override: args.monitor,
         windowed_output: args.windowed_output,
@@ -437,7 +440,38 @@ fn scan_media(dirs: Vec<PathBuf>, proxy: EventLoopProxy<UserEvent>) {
     }
 }
 
-fn start_remote(core: &CoreHandle, settings: &Settings) -> Result<web::WebRemote, String> {
+/// The phone remote's own copy of the fonts (filled once the renderer has scanned
+/// them) and poster frames of background media.
+fn remote_images(
+    fonts: crossbeam_channel::Receiver<render::Fonts>,
+    media_cache: std::path::PathBuf,
+    mpv_ready: &Arc<std::sync::atomic::AtomicBool>,
+) -> web::Images {
+    let images = web::Images::default();
+    let slot = images.fonts.clone();
+    let _ = std::thread::Builder::new()
+        .name("remote-fonts".into())
+        .spawn(move || {
+            if let Ok(f) = fonts.recv() {
+                let _ = slot.set(Mutex::new(f));
+            }
+        });
+    let mpv_ready = mpv_ready.clone();
+    let started = Instant::now();
+    let poster: web::PosterFn = Arc::new(move |path, width| {
+        media_thumbs::poster(&media_cache, path, width, &mpv_ready, started)
+    });
+    web::Images {
+        poster: Some(poster),
+        ..images
+    }
+}
+
+fn start_remote(
+    core: &CoreHandle,
+    settings: &Settings,
+    images: &web::Images,
+) -> Result<web::WebRemote, String> {
     let bind = match settings
         .web
         .bind
@@ -458,10 +492,12 @@ fn start_remote(core: &CoreHandle, settings: &Settings) -> Result<web::WebRemote
         port: settings.web.port,
         pin_length: settings.web.pin_length,
     };
-    web::WebRemote::start(core.clone(), core.subscribe(None), &config).map_err(|e| {
-        tracing::error!(error = %e, "phone remote");
-        e.user_message()
-    })
+    web::WebRemote::start(core.clone(), core.subscribe(None), &config, images.clone()).map_err(
+        |e| {
+            tracing::error!(error = %e, "phone remote");
+            e.user_message()
+        },
+    )
 }
 
 struct Bench {
@@ -490,6 +526,8 @@ struct App {
     operator: Option<OperatorWindow>,
     output: Option<OutputWindow>,
     remote: Option<web::WebRemote>,
+    /// Fonts and poster frames for the phone remote (kept across restarts of it).
+    remote_images: web::Images,
     sent_size: Option<(u32, u32)>,
     monitor_override: Option<usize>,
     windowed_output: bool,
@@ -812,7 +850,7 @@ impl App {
                 self.save_settings();
                 self.remote = None; // stops a running server
                 if on {
-                    match start_remote(&self.core, &self.settings) {
+                    match start_remote(&self.core, &self.settings, &self.remote_images) {
                         Ok(r) => self.remote = Some(r),
                         Err(msg) => self.ui.app_notices.push(msg),
                     }

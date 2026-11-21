@@ -111,7 +111,7 @@ pub fn spawn(
     })
 }
 
-fn disk_name(path: &Path) -> Option<String> {
+fn disk_name(path: &Path, box_w: u32, box_h: u32) -> Option<String> {
     let meta = std::fs::metadata(path).ok()?;
     let mtime = meta
         .modified()
@@ -120,7 +120,7 @@ fn disk_name(path: &Path) -> Option<String> {
         .ok()?
         .as_millis();
     let mut h = DefaultHasher::new();
-    (VERSION, path, mtime, meta.len(), BOX_W, BOX_H).hash(&mut h);
+    (VERSION, path, mtime, meta.len(), box_w, box_h).hash(&mut h);
     Some(format!("m{:016x}.png", h.finish()))
 }
 
@@ -132,17 +132,44 @@ fn to_color(img: &image::RgbaImage) -> egui::ColorImage {
 }
 
 fn make(cache: &Path, path: &Path, wait_for_mpv: impl Fn()) -> Result<egui::ColorImage, String> {
-    let disk = disk_name(path)
+    make_rgba(cache, path, BOX_W, BOX_H, wait_for_mpv).map(|img| to_color(&img))
+}
+
+/// A poster frame for the phone remote, `width` wide (16:9 box), cached with the
+/// panel's thumbnails.
+pub fn poster(
+    cache: &Path,
+    path: &Path,
+    width: u32,
+    mpv_ready: &AtomicBool,
+    started: Instant,
+) -> Result<image::RgbaImage, String> {
+    let _ = std::fs::create_dir_all(cache);
+    make_rgba(cache, path, width, width * 9 / 16, || {
+        while !mpv_ready.load(Ordering::Relaxed) && started.elapsed() < MPV_WAIT {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    })
+}
+
+fn make_rgba(
+    cache: &Path,
+    path: &Path,
+    box_w: u32,
+    box_h: u32,
+    wait_for_mpv: impl Fn(),
+) -> Result<image::RgbaImage, String> {
+    let disk = disk_name(path, box_w, box_h)
         .map(|n| cache.join(n))
         .ok_or("file not found")?;
     if let Ok(img) = image::open(&disk) {
-        return Ok(to_color(&img.to_rgba8()));
+        return Ok(img.to_rgba8());
     }
     let img = match image::open(path) {
-        Ok(img) => img.thumbnail(BOX_W, BOX_H).to_rgba8(),
+        Ok(img) => img.thumbnail(box_w, box_h).to_rgba8(),
         Err(decode_err) => {
             wait_for_mpv();
-            media::thumbnail(path, &disk, BOX_W).map_err(|e| {
+            media::thumbnail(path, &disk, box_w).map_err(|e| {
                 if is_video(path) {
                     e.user_message()
                 } else {
@@ -151,13 +178,13 @@ fn make(cache: &Path, path: &Path, wait_for_mpv: impl Fn()) -> Result<egui::Colo
             })?;
             let img = image::open(&disk).map_err(|e| e.to_string())?;
             // mpv scaled to the width; a tall video still has to fit the box.
-            img.thumbnail(BOX_W, BOX_H).to_rgba8()
+            img.thumbnail(box_w, box_h).to_rgba8()
         }
     };
     if let Err(e) = img.save(&disk) {
         tracing::debug!(path = %disk.display(), error = %e, "couldn't cache media thumbnail");
     }
-    Ok(to_color(&img))
+    Ok(img)
 }
 
 fn is_video(p: &Path) -> bool {

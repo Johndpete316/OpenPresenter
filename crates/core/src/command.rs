@@ -25,6 +25,9 @@ pub enum Command {
     },
     /// Load a presentation (for display in the grid) without changing the output.
     Open(PathBuf),
+    /// Load a presentation into memory only: the operator's grid and the output are
+    /// untouched (the phone remote uses this to browse).
+    Preload(PathBuf),
     OutputEnable(bool),
     /// Background media (image or video, looping) under the slide text; `None` clears
     /// it. `next` is pre-loaded so triggering it later is instant.

@@ -1,10 +1,13 @@
 //! Phone remote. An axum server on its own thread (own tokio runtime), bound to the
 //! PC's LAN address. A PIN shown on the operator screen logs a phone in (session
-//! cookie); the page shows the current and next slide text and sends the same
-//! `Command`s as the clicker. State changes are pushed over a WebSocket.
+//! cookie); the page shows the current and next slide (rendered images) and sends
+//! the same `Command`s as the clicker. On a wide screen it also shows the playlists
+//! and a slide grid. State changes are pushed over a WebSocket.
 
 mod auth;
+mod images;
 mod page;
+mod state;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,16 +17,21 @@ use std::time::Instant;
 
 use axum::Router;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, Form, Path, State};
+use axum::extract::{ConnectInfo, Form, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use futures_util::{SinkExt as _, StreamExt as _};
 use pp6core::{Command, CoreHandle, ShowState};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::sync::{oneshot, watch};
 
 pub use auth::{Auth, LoginResult, new_pin};
+pub use images::{Images, PosterFn};
+pub use state::{
+    ItemInfo, LiveInfo, NextInfo, PlaylistInfo, PresentationInfo, RemoteState, ShowInfo, SlideInfo,
+    slide_text,
+};
 
 const COOKIE: &str = "pp6_session";
 
@@ -64,94 +72,16 @@ pub struct WebConfig {
     pub pin_length: u8,
 }
 
-/// What phones see (JSON).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RemoteState {
-    pub live: Option<LiveInfo>,
-    pub next: Option<NextInfo>,
-    pub text_visible: bool,
-    pub background_visible: bool,
-    pub output_enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LiveInfo {
-    pub title: String,
-    pub group: String,
-    /// 1-based position in play order.
-    pub position: usize,
-    pub total: usize,
-    pub text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct NextInfo {
-    pub title: String,
-    pub text: String,
-    pub same_presentation: bool,
-}
-
-fn title(path: &std::path::Path) -> String {
-    path.file_stem().map_or_else(
-        || path.display().to_string(),
-        |s| s.to_string_lossy().into_owned(),
-    )
-}
-
-/// Plain text of a slide: each text element's RTF text (PlainText as fallback).
-pub fn slide_text(doc: &pro6::Document, flat: usize) -> String {
-    let Some(slide) = doc.slides().nth(flat) else {
-        return String::new();
-    };
-    slide
-        .text_elements()
-        .filter(|t| !t.is_placeholder(&doc.path))
-        .map(|t| match t.rtf_doc(&doc.path) {
-            Ok(Some(r)) => r.plain_text(),
-            _ => t
-                .plain_text
-                .as_ref()
-                .map(|p| p.value.text())
-                .unwrap_or_default(),
-        })
-        .filter(|s| !s.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-impl RemoteState {
-    pub fn from_show(s: &ShowState) -> RemoteState {
-        let live = s.live.as_ref().map(|l| LiveInfo {
-            title: title(&l.path),
-            group: l
-                .doc
-                .groups()
-                .get(l.slide.group)
-                .map(|g| g.name.clone())
-                .unwrap_or_default(),
-            position: l.position.map_or(0, |p| p + 1),
-            total: l.order.len(),
-            text: slide_text(&l.doc, l.slide.flat),
-        });
-        let next = s.next_slide().map(|(path, doc, _, flat)| NextInfo {
-            same_presentation: s.live.as_ref().is_some_and(|l| l.path == path),
-            title: title(&path),
-            text: slide_text(&doc, flat),
-        });
-        RemoteState {
-            live,
-            next,
-            text_visible: s.text_visible,
-            background_visible: s.background_visible,
-            output_enabled: s.output_enabled,
-        }
-    }
-}
-
 struct Shared {
     core: CoreHandle,
     auth: Mutex<Auth>,
+    /// Live/next JSON ([`RemoteState`]).
     state: watch::Receiver<Arc<String>>,
+    /// Playlists JSON ([`ShowInfo`]).
+    show: watch::Receiver<Arc<String>>,
+    registry: Arc<Mutex<state::Registry>>,
+    images: Images,
+    cache: Mutex<images::Cache>,
     clients: AtomicUsize,
 }
 
@@ -177,6 +107,7 @@ impl WebRemote {
         core: CoreHandle,
         snapshots: crossbeam_channel::Receiver<Arc<ShowState>>,
         config: &WebConfig,
+        images: Images,
     ) -> Result<WebRemote, WebError> {
         let ip = config
             .bind
@@ -194,10 +125,18 @@ impl WebRemote {
         let url = format!("http://{local}");
 
         let (state_tx, state_rx) = watch::channel(Arc::new(String::from("{}")));
+        let (show_tx, show_rx) = watch::channel(Arc::new(String::from(
+            r#"{"playlists":[],"presentations":{}}"#,
+        )));
+        let registry = Arc::new(Mutex::new(state::Registry::new()));
         let shared = Arc::new(Shared {
             core,
             auth: Mutex::new(Auth::new(config.pin_length)),
             state: state_rx,
+            show: show_rx,
+            registry: registry.clone(),
+            images,
+            cache: Mutex::new(images::Cache::default()),
             clients: AtomicUsize::new(0),
         });
         // Bridge core snapshots (crossbeam) into the async world, sending only real changes.
@@ -205,12 +144,35 @@ impl WebRemote {
             .name("web-state".into())
             .spawn(move || {
                 let mut last = String::new();
+                let mut last_show = String::new();
+                let mut inputs: Option<state::ShowInputs> = None;
                 while let Ok(mut s) = snapshots.recv() {
                     while let Ok(newer) = snapshots.try_recv() {
                         s = newer;
                     }
-                    let json =
-                        serde_json::to_string(&RemoteState::from_show(&s)).unwrap_or_default();
+                    let Ok(mut reg) = registry.lock() else { return };
+                    let json = serde_json::to_string(&RemoteState::build(&s, &mut reg))
+                        .unwrap_or_default();
+                    let now = state::ShowInputs::of(&s);
+                    let show = if inputs.as_ref().is_some_and(|i| i.same(&now)) {
+                        None
+                    } else {
+                        inputs = Some(now);
+                        Some(
+                            serde_json::to_string(&ShowInfo::build(&s, &mut reg))
+                                .unwrap_or_default(),
+                        )
+                    };
+                    reg.prune();
+                    drop(reg);
+                    if let Some(show) = show
+                        && show != last_show
+                    {
+                        last_show.clone_from(&show);
+                        if show_tx.send(Arc::new(show)).is_err() {
+                            return;
+                        }
+                    }
                     if json != last {
                         last.clone_from(&json);
                         if state_tx.send(Arc::new(json)).is_err() {
@@ -309,7 +271,12 @@ fn router(shared: Arc<Shared>) -> Router {
         .route("/login", post(login))
         .route("/logout", post(logout))
         .route("/api/state", get(api_state))
+        .route("/api/show", get(api_show))
         .route("/api/cmd/{name}", post(api_cmd))
+        .route("/api/goto/{id}/{position}", post(api_goto))
+        .route("/api/load/{id}", post(api_load))
+        .route("/img/s/{key}/{flat}", get(slide_image))
+        .route("/img/bg/{key}", get(background_image))
         .route("/ws", get(ws))
         .with_state(shared)
 }
@@ -409,6 +376,180 @@ async fn api_state(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Res
     )
 }
 
+async fn api_show(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    if !authed(&shared, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let json = shared.show.borrow().clone();
+    no_store(
+        (
+            [(header::CONTENT_TYPE, "application/json")],
+            (*json).clone(),
+        )
+            .into_response(),
+    )
+}
+
+/// A presentation the page may name: one in a playlist, or the live one.
+fn presentation_path(shared: &Shared, id: &str) -> Option<std::path::PathBuf> {
+    shared
+        .registry
+        .lock()
+        .ok()
+        .and_then(|r| r.presentations.get(id).cloned())
+}
+
+/// Put slide `position` (1-based, play order) of a presentation live.
+async fn api_goto(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path((id, position)): Path<(String, usize)>,
+) -> Response {
+    if !authed(&shared, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let Some(path) = presentation_path(&shared, &id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(position) = position.checked_sub(1) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    tracing::info!(path = %path.display(), position, "phone remote: go to slide");
+    shared.core.send(Command::GoTo {
+        presentation: path,
+        position,
+    });
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// Load a presentation so its slides can be shown (the operator's screen is untouched).
+async fn api_load(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if !authed(&shared, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let Some(path) = presentation_path(&shared, &id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    shared.core.send(Command::Preload(path));
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Deserialize)]
+struct ImageQuery {
+    w: Option<u32>,
+}
+
+fn image_response(content_type: &'static str, cache: &'static str, data: &[u8]) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, cache),
+        ],
+        data.to_vec(),
+    )
+        .into_response()
+}
+
+fn not_ready() -> Response {
+    let mut r = (StatusCode::SERVICE_UNAVAILABLE, "fonts are still loading").into_response();
+    r.headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+    no_store(r)
+}
+
+/// Slide image. Keys are unique per loaded document, so the browser may keep it.
+async fn slide_image(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path((key, flat)): Path<(String, usize)>,
+    Query(q): Query<ImageQuery>,
+) -> Response {
+    const CACHE: &str = "private, max-age=31536000, immutable";
+    if !authed(&shared, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let w = images::width(q.w);
+    let cache_key = format!("s/{key}/{flat}");
+    if let Some(d) = shared.cache.lock().ok().and_then(|c| c.get(&cache_key, w)) {
+        return image_response("image/png", CACHE, &d);
+    }
+    let doc = shared
+        .registry
+        .lock()
+        .ok()
+        .and_then(|r| r.docs.get(&key).and_then(std::sync::Weak::upgrade));
+    let Some(doc) = doc else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let fonts = shared.images.fonts.clone();
+    let made = tokio::task::spawn_blocking(move || {
+        let f = fonts.get()?;
+        let mut f = f.lock().ok()?;
+        Some(images::slide_png(&mut f, &doc, flat, w))
+    })
+    .await;
+    match made {
+        Ok(Some(Ok(png))) => {
+            let png = Arc::new(png);
+            if let Ok(mut c) = shared.cache.lock() {
+                c.put(cache_key, w, png.clone());
+            }
+            image_response("image/png", CACHE, &png)
+        }
+        Ok(None) => not_ready(),
+        Ok(Some(Err(e))) => {
+            tracing::debug!(error = %e, "phone remote: slide image failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// Poster frame of the background media.
+async fn background_image(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Path(key): Path<String>,
+    Query(q): Query<ImageQuery>,
+) -> Response {
+    const CACHE: &str = "private, max-age=86400";
+    if !authed(&shared, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let w = images::width(q.w);
+    let cache_key = format!("bg/{key}");
+    if let Some(d) = shared.cache.lock().ok().and_then(|c| c.get(&cache_key, w)) {
+        return image_response("image/jpeg", CACHE, &d);
+    }
+    let path = shared
+        .registry
+        .lock()
+        .ok()
+        .and_then(|r| r.media.get(&key).cloned());
+    let (Some(path), Some(poster)) = (path, shared.images.poster.clone()) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let made = tokio::task::spawn_blocking(move || images::poster_jpeg(&poster, &path, w)).await;
+    match made {
+        Ok(Ok(jpg)) => {
+            let jpg = Arc::new(jpg);
+            if let Ok(mut c) = shared.cache.lock() {
+                c.put(cache_key, w, jpg.clone());
+            }
+            image_response("image/jpeg", CACHE, &jpg)
+        }
+        Ok(Err(e)) => {
+            tracing::debug!(error = %e, "phone remote: background poster failed");
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
 async fn api_cmd(
     State(shared): State<Arc<Shared>>,
     headers: HeaderMap,
@@ -421,6 +562,10 @@ async fn api_cmd(
         "next" => Command::Next,
         "prev" => Command::Prev,
         "clear" => Command::ClearAll,
+        "clear-text" => Command::ClearText,
+        "clear-bg" => Command::ClearBackground,
+        "output-on" => Command::OutputEnable(true),
+        "output-off" => Command::OutputEnable(false),
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     tracing::info!(?cmd, "phone remote command");
@@ -454,14 +599,29 @@ async fn push(socket: WebSocket, shared: Arc<Shared>) {
     shared.clients.fetch_add(1, Ordering::Relaxed);
     let (mut tx, mut rx) = socket.split();
     let mut state = shared.state.clone();
+    let mut show = shared.show.clone();
     let initial = state.borrow_and_update().clone();
+    let initial_show = show.borrow_and_update().clone();
     if tx
         .send(Message::Text((*initial).clone().into()))
         .await
         .is_ok()
+        && tx
+            .send(Message::Text((*initial_show).clone().into()))
+            .await
+            .is_ok()
     {
         loop {
             tokio::select! {
+                changed = show.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    let json = show.borrow_and_update().clone();
+                    if tx.send(Message::Text((*json).clone().into())).await.is_err() {
+                        break;
+                    }
+                }
                 changed = state.changed() => {
                     if changed.is_err() {
                         break;

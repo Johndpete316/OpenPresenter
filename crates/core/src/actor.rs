@@ -491,6 +491,7 @@ impl Core {
                 self.s.selected = Some(path.clone());
                 self.request_load(&path);
             }
+            Command::Preload(path) => self.request_load(&path),
             Command::OutputEnable(on) => self.s.output_enabled = on,
             Command::PlaylistCreate(name) => {
                 let i = self.add_playlist(Playlist {

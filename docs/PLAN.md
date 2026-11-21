@@ -172,6 +172,13 @@ pp6/
   - The page is embedded in the binary (no `tower-http` / static files to deploy).
   - Binds to the PC's LAN IPv4 (auto-detected) unless `[web] bind` is set; port 8686.
   - PIN 4 digits by default (4–6 configurable). Five wrong PINs lock that IP out for 30 s, doubling up to 10 min. A new PIN logs out every phone. Sessions are HttpOnly + SameSite=Strict cookies (also blocks cross-site command posts); there's no HTTPS (LAN only).
+- **Slide previews and playlist browsing (John, 2026-11-21):** after first use, John asked for real slide previews and playlist navigation, with the phone kept simple and the desktop showing more.
+  - Slides are drawn on the server by the output's renderer (`render_slide`), as PNGs with a transparent background, on the remote's own font copy. Image URLs are unique per loaded document (an edit makes a new URL), so browsers cache them for good. Until fonts are loaded, images answer 503 and the page retries. A slide that can't be drawn (e.g. missing font) shows its text instead.
+  - The background media shows as a poster frame (`media_thumbs::poster`, cached on disk) under the slide image; a playing video isn't streamed. Clear Text / Clear Background hide the layers. A slide's own background colour is part of the slide image, so it hides with Clear Text (minor difference from the output).
+  - One page, two layouts. Phone: current and next previews, Prev / Next / Clear (side by side when held sideways). Wide screen (≥ 900 × 500): playlists | slide grid | current/next, plus Clear Text, Clear Background and Output on/off, and arrow / Space / Page Up / Page Down keys (a clicker on a laptop works).
+  - Browsing never touches the operator's screen: it happens in the page. Clicking a grid tile sends `GoTo`; an unloaded presentation is loaded with the new `Command::Preload`, which doesn't change `selected`. Clicking a tile goes live straight away, like the operator grid. Phones have no grid, so a stray tap while scrolling can't put a slide up.
+  - Two WebSocket messages: live/next state (every change) and playlists + slides (only when playlists, loaded documents or arrangements change). Presentations are named by path hashes; paths never reach the browser, and the server accepts only presentations in a playlist or live.
+  - `cargo run -p web --example remote_demo [port] [background-image]` serves the page with the fixtures, for trying it in a browser.
 
 ### M7 — Editor
 - [x] Edit slide text, add/remove/reorder slides

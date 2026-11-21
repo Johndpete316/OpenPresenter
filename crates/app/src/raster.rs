@@ -94,7 +94,7 @@ pub fn spawn(
     font_dirs: Vec<PathBuf>,
     output: OutputLink,
     events: winit::event_loop::EventLoopProxy<UserEvent>,
-    fonts_for_others: Sender<Fonts>,
+    fonts_for_others: Vec<Sender<Fonts>>,
 ) -> std::io::Result<Spawned> {
     let (tx, rx) = crossbeam_channel::unbounded();
     let thread = std::thread::Builder::new()
@@ -105,7 +105,9 @@ pub fn spawn(
             for d in &font_dirs {
                 fonts.add_dir(d);
             }
-            let _ = fonts_for_others.send(fonts.fork());
+            for tx in &fonts_for_others {
+                let _ = tx.send(fonts.fork());
+            }
             let _ = events.send_event(UserEvent::FontsReady {
                 elapsed: started.elapsed(),
                 faces: fonts.face_count(),
