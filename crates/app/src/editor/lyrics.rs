@@ -114,6 +114,21 @@ pub fn open_new(st: &mut UiState, ctx: &egui::Context, selected: bool) {
     }
 }
 
+/// Like [`open_new`], with a name and text already filled in (Import, song words from
+/// a text file).
+pub fn open_new_with(
+    st: &mut UiState,
+    ctx: &egui::Context,
+    selected: bool,
+    name: &str,
+    text: &str,
+) {
+    open_new(st, ctx, selected);
+    let l = &mut st.edit.lyrics;
+    l.new_name = name.trim().to_owned();
+    l.text = text.replace("\r\n", "\n").replace('\r', "\n");
+}
+
 fn colors(st: &UiState) -> Vec<(String, doc::Rgba)> {
     st.edit
         .group_colors

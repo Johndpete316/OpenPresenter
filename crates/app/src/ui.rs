@@ -128,6 +128,10 @@ pub struct UiState {
     pub grid_rename: Option<((PathBuf, String), String)>,
     /// Open the New presentation window on the first frame (`--open-new`).
     pub open_new_at_start: bool,
+    /// Exports running in the background (Import/Export menu).
+    pub exports: Vec<crate::file_menu::Report>,
+    /// Latest piece of information for the operator (not a problem), and when.
+    pub(crate) info_toast: Option<(String, Instant)>,
     /// Problems up to this time have been seen in Settings → Log.
     pub seen_notices_at: Option<Instant>,
     pub seen_app_notices: usize,
@@ -262,6 +266,13 @@ impl UiState {
         core + self.app_notices.len().saturating_sub(self.seen_app_notices)
     }
 
+    /// Tell the operator something went well (a short toast; not a problem).
+    pub fn info(&mut self, message: impl Into<String>) {
+        let m = message.into();
+        tracing::info!(message = %m, "app info");
+        self.info_toast = Some((m, Instant::now()));
+    }
+
     /// Tell the operator about a problem (toast, and Settings → Log).
     pub fn toast(&mut self, message: impl Into<String>) {
         let m = message.into();
@@ -311,6 +322,7 @@ pub fn draw(
     st.edit.new_dir = settings.new_presentations_folder();
     // A new presentation finished saving (from either window): open it.
     crate::editor::lyrics::poll(st, &mut actions);
+    crate::file_menu::poll(st);
     // The editor takes the whole window under the toolbar. It shows its own copy
     // (unsaved edits), not the saved document.
     if st.edit.on
@@ -467,6 +479,7 @@ fn toolbar(
                         .is_some_and(|p| show.docs.get(p).is_some_and(|d| d.theme.is_none()));
                     crate::editor::lyrics::open_new(st, ui.ctx(), selected);
                 }
+                crate::file_menu::button(ui, st, show, settings, actions);
                 let can_edit = show
                     .selected
                     .as_ref()
@@ -2341,6 +2354,35 @@ fn toast(ctx: &egui::Context, st: &mut UiState, show: &ShowState) {
         (Some(a), Some(b)) => Some(if a.0 >= b.0 { a } else { b }),
         (a, b) => a.or(b),
     };
+    // Information shows when it's newer than any problem still on screen.
+    if let Some((text, at)) = st.info_toast.clone()
+        && newest
+            .as_ref()
+            .is_none_or(|n| at > n.0 || now.saturating_duration_since(n.0) > TOAST_FOR)
+    {
+        let age = now.saturating_duration_since(at);
+        if age <= TOAST_FOR {
+            ctx.request_repaint_after(TOAST_FOR - age);
+            egui::Area::new(egui::Id::unique("info-toast"))
+                .anchor(Align2::RIGHT_BOTTOM, Vec2::new(-16.0, -16.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    egui::Frame::new()
+                        .fill(theme::brand::BG_TOP)
+                        .stroke(Stroke::new(1.0, theme::brand::ACCENT))
+                        .corner_radius(6.0)
+                        .inner_margin(10.0)
+                        .show(ui, |ui| {
+                            ui.set_max_width(420.0);
+                            ui.add(
+                                egui::Label::new(RichText::new(text).color(Color32::WHITE)).wrap(),
+                            );
+                        });
+                });
+            return;
+        }
+        st.info_toast = None;
+    }
     let Some((at, text, error)) = newest else {
         return;
     };

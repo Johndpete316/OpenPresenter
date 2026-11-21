@@ -6,6 +6,7 @@ mod canvas;
 mod crash;
 mod editor;
 mod error;
+mod file_menu;
 mod gl;
 mod grid_menu;
 mod keys;
