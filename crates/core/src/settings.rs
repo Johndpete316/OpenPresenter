@@ -20,6 +20,21 @@ pub struct Settings {
     /// mpv audio device name (`None` = system default). Used from M5.
     pub audio_device: Option<String>,
     pub web: WebSettings,
+    pub editor: EditorSettings,
+}
+
+/// Slide editor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EditorSettings {
+    /// Fit Text never shrinks the main text size below this (canvas pixels).
+    pub fit_min_size: f64,
+}
+
+impl Default for EditorSettings {
+    fn default() -> Self {
+        EditorSettings { fit_min_size: 24.0 }
+    }
 }
 
 /// Phone remote.

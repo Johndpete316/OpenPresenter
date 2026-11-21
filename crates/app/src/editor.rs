@@ -28,6 +28,7 @@ use crate::ui::{UiAction, UiState, color32, paint_error};
 
 mod arrange;
 mod copy_style;
+mod fit;
 mod image;
 mod snap;
 mod text;
@@ -112,6 +113,8 @@ pub struct EditState {
     grid: bool,
     /// Tab (`false`) / Shift+Tab (`true`) pressed with nothing focused this frame.
     tab_pressed: Option<bool>,
+    /// Fit Text's minimum size (from the settings).
+    pub fit_min_size: f64,
     /// Copied style (Copy Style), for pasting.
     style_clip: Option<doc::Style>,
     /// Layer being dragged in the Layers tab.
@@ -682,7 +685,11 @@ fn context_bar(
                 }
                 let Some(el) = element(d, g, s, e) else { return };
                 match el {
-                    Element::Text(_) => text::toolbar(ui, st, actions, path, d, (g, s, e)),
+                    Element::Text(_) => {
+                        text::toolbar(ui, st, actions, path, d, (g, s, e));
+                        ui.separator();
+                        fit::buttons(ui, st, actions, path, d, (g, s, e));
+                    }
                     Element::Image(_) => image::toolbar(ui, st, actions, path, d, (g, s, e)),
                     Element::Pro6(_) => return,
                 }

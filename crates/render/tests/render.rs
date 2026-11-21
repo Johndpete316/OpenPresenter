@@ -747,3 +747,74 @@ fn adjust_timing() {
     println!("adjust only: {:?}", t.elapsed());
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// E6: Fit Text clears the overflow at every output size, keeping relative sizes.
+#[test]
+fn fit_text_shrinks_until_it_fits_everywhere() {
+    let mut f = fonts();
+    let mut d = load("render_1024x768.pro6");
+    {
+        let t = first_box(&mut d, 0);
+        let base = t.paragraphs[0].runs[0].clone();
+        t.paragraphs = (0..9)
+            .map(|i| doc::Paragraph {
+                align: doc::Align::Center,
+                line_spacing: 1.0,
+                runs: vec![
+                    doc::Run {
+                        text: format!("Line number {i} is long "),
+                        size: 60.0,
+                        ..base.clone()
+                    },
+                    doc::Run {
+                        text: "small".into(),
+                        size: 30.0,
+                        ..base.clone()
+                    },
+                ],
+            })
+            .collect();
+    }
+    let overflow = |f: &mut Fonts, d: &doc::Document, w, h| {
+        render(f, d, 0, w, h)
+            .unwrap()
+            .warnings
+            .iter()
+            .any(|w| w.overflow)
+    };
+    assert!(overflow(&mut f, &d, 1024, 768), "starts overflowing");
+    let t = d.groups[0].slides[0].text_boxes().next().unwrap().clone();
+    let uuid = d.groups[0].slides[0].uuid.clone();
+    let fit = render::fit_text(&mut f, &d.path, &uuid, &t, 12.0).unwrap();
+    let render::Fit::Fitted { paragraphs, factor } = fit else {
+        panic!("expected a fit, got {fit:?}");
+    };
+    assert!(factor < 1.0 && factor > 0.2, "{factor}");
+    let (big, small) = (paragraphs[0].runs[0].size, paragraphs[0].runs[1].size);
+    assert!(
+        (big / small - 2.0).abs() < 0.1,
+        "relative sizes kept: {big} / {small}"
+    );
+    first_box(&mut d, 0).paragraphs = paragraphs;
+    for (w, h) in [(1024, 768), (1920, 1080), (1280, 720), (320, 240)] {
+        assert!(!overflow(&mut f, &d, w, h), "fits at {w}×{h}");
+    }
+    let t = d.groups[0].slides[0].text_boxes().next().unwrap().clone();
+    assert_eq!(
+        render::fit_text(&mut f, &d.path, &uuid, &t, 12.0).unwrap(),
+        render::Fit::AlreadyFits
+    );
+    // A minimum above what would fit: shrinks to the minimum and says it's too big.
+    let mut tall = t.clone();
+    tall.frame.height = 40.0;
+    match render::fit_text(&mut f, &d.path, &uuid, &tall, 30.0).unwrap() {
+        render::Fit::TooBig {
+            paragraphs: Some(p),
+            min_size,
+        } => {
+            assert_eq!(min_size, 30.0);
+            assert!(p[0].runs[0].size >= 29.5);
+        }
+        other => panic!("{other:?}"),
+    }
+}

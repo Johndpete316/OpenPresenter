@@ -18,4 +18,4 @@ pub use fonts::{Fonts, ResolvedFont};
 pub use frame::{PixelRect, Placement, SlideFrame};
 pub use picture::{MAX_DECODED, adjusted_premultiplied, image_size};
 pub use slide::render_slide;
-pub use text::{BoxLayout, layout_box};
+pub use text::{BoxLayout, Fit, fit_text, layout_box};

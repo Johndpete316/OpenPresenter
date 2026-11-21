@@ -914,6 +914,10 @@ impl App {
                     let _ = o.tx.send(RenderCmd::MediaScaling(media_scaling(sc)));
                 }
             }
+            UiAction::SetFitMinSize(v) => {
+                self.settings.editor.fit_min_size = v;
+                self.save_settings();
+            }
             UiAction::SetResolution(r) => {
                 self.settings.output.resolution = r;
                 self.save_settings();

@@ -343,10 +343,14 @@ Filled in from real files and testing in PP6. Starting state:
   - The plan mentions a paint-roller icon; the button is labelled "Copy Style" (no icon set has been added for the editor yet).
 
 ### E6 — Fit Text (Button)
-- [ ] **Fit Text** button in the text toolbar. It shrinks the font size until the text fits the box, uniformly across runs so relative sizes are kept. It never runs automatically.
-- [ ] Also available for all slides in a group or presentation, fixing every overflowing box in one step
-- [ ] Respects a minimum size (a setting). If the text still doesn't fit at the minimum, it shows a readable warning instead of shrinking further.
+- [x] **Fit Text** button in the text toolbar. It shrinks the font size until the text fits the box, uniformly across runs so relative sizes are kept. It never runs automatically.
+- [x] Also available for all slides in a group or presentation, fixing every overflowing box in one step
+- [x] Respects a minimum size (a setting). If the text still doesn't fit at the minimum, it shows a readable warning instead of shrinking further.
 - **Accept:** overflow badges clear after Fit Text; one undo reverts it.
+- **Status (2026-11-21):** done. Acceptance test: `fitting_a_presentation_clears_every_overflow_in_one_step` (`crates/app/src/editor/fit.rs`); `fit_text_shrinks_until_it_fits_everywhere` (`crates/render/tests/render.rs`) checks the result fits at 1024×768, 1920×1080, 1280×720 and 320×240.
+  - **How it measures:** `render::fit_text` uses the renderer's own layout (so "fits" means the badge goes away), at canvas scale with one pixel to spare so it also fits at other output sizes. It finds the largest factor that fits (binary search) and scales every run by it, in half-pixel steps (what a `.pro6` stores).
+  - **Toolbar:** Fit Text (this box) and ▾ → every overflowing box in this group / presentation. One edit, one undo step.
+  - **Minimum size:** Settings → General → Editor → "Fit Text minimum size" (default 24 px). It applies to the size most of the box's text uses, so smaller words in the same box can go below it. If the text still doesn't fit there, the box is shrunk to the minimum and a message says to shorten the text or enlarge the box. Boxes that can't be measured (font not installed, damaged text) are left alone and counted in a message.
 
 ### E7 — Themes
 - [ ] A theme is a named set of:

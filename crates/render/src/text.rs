@@ -466,3 +466,97 @@ mod tests {
         assert_eq!(t, ["sing", "\nlove;", "\n", "a  b"]);
     }
 }
+
+/// Result of [`fit_text`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum Fit {
+    /// The text already fits; nothing to change.
+    AlreadyFits,
+    /// These paragraphs (every run scaled by the same factor) fit.
+    Fitted {
+        paragraphs: Vec<doc::Paragraph>,
+        factor: f64,
+    },
+    /// Even at the minimum size the text doesn't fit: the paragraphs at the
+    /// minimum (`None` if the text is already at or below it).
+    TooBig {
+        paragraphs: Option<Vec<doc::Paragraph>>,
+        min_size: f64,
+    },
+}
+
+/// Size most of the box's characters use.
+fn main_size(el: &TextBox) -> Option<f64> {
+    let mut by: Vec<(f64, usize)> = Vec::new();
+    for r in el.runs() {
+        let n = r.text.chars().count().max(1);
+        match by.iter_mut().find(|(s, _)| *s == r.size) {
+            Some(e) => e.1 += n,
+            None => by.push((r.size, n)),
+        }
+    }
+    by.into_iter().max_by_key(|e| e.1).map(|e| e.0)
+}
+
+/// `el`'s paragraphs with every run's size times `factor`, in half-pixel steps
+/// (what a `.pro6` can store).
+fn scaled(el: &TextBox, factor: f64) -> Vec<doc::Paragraph> {
+    let mut p = el.paragraphs.clone();
+    for r in p.iter_mut().flat_map(|p| &mut p.runs) {
+        r.size = ((r.size * factor * 2.0).floor() / 2.0).max(1.0);
+    }
+    p
+}
+
+/// Shrink a text box's text until it fits its box: every run by the same factor,
+/// so relative sizes are kept, but never below `min_size` (for the size most of
+/// the text uses). Measured at canvas scale with a pixel to spare, so it also fits
+/// at other output sizes.
+pub fn fit_text(
+    fonts: &mut Fonts,
+    file: &Path,
+    slide_uuid: &str,
+    el: &TextBox,
+    min_size: f64,
+) -> Result<Fit, RenderError> {
+    let fits = |fonts: &mut Fonts, paragraphs: &[doc::Paragraph]| -> Result<bool, RenderError> {
+        let mut t = el.clone();
+        t.paragraphs = paragraphs.to_vec();
+        let l = layout_box(fonts, file, slide_uuid, &t, 1.0)?;
+        Ok(l.text_height() <= el.frame.height as f32 - 1.0)
+    };
+    if fits(fonts, &el.paragraphs)? {
+        return Ok(Fit::AlreadyFits);
+    }
+    let Some(main) = main_size(el).filter(|m| *m > 0.0) else {
+        return Ok(Fit::AlreadyFits);
+    };
+    let lowest = (min_size / main).min(1.0);
+    if lowest >= 1.0 {
+        return Ok(Fit::TooBig {
+            paragraphs: None,
+            min_size,
+        });
+    }
+    let at_min = scaled(el, lowest);
+    if !fits(fonts, &at_min)? {
+        return Ok(Fit::TooBig {
+            paragraphs: Some(at_min),
+            min_size,
+        });
+    }
+    // Largest factor that fits.
+    let (mut lo, mut hi) = (lowest, 1.0);
+    for _ in 0..14 {
+        let mid = (lo + hi) / 2.0;
+        if fits(fonts, &scaled(el, mid))? {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Ok(Fit::Fitted {
+        paragraphs: scaled(el, lo),
+        factor: lo,
+    })
+}

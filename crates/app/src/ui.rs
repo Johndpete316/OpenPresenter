@@ -52,6 +52,7 @@ pub enum UiAction {
     SetResolution(Option<pp6core::Resolution>),
     /// How background media fills the output.
     SetMediaScaling(pp6core::MediaScaling),
+    SetFitMinSize(f64),
     /// mpv audio device name; `None` = system default.
     SetAudioDevice(Option<String>),
     RemoveLibraryFolder(usize),
@@ -278,6 +279,7 @@ pub fn draw(
         st.app_notice_at = Some(Instant::now());
     }
     toolbar(ui, st, show, settings, &mut actions);
+    st.edit.fit_min_size = settings.editor.fit_min_size;
     // The editor takes the whole window under the toolbar. It shows its own copy
     // (unsaved edits), not the saved document.
     if st.edit.on
@@ -1952,6 +1954,24 @@ fn settings_general(
             {
                 actions.push(UiAction::SetMediaScaling(m));
             }
+        }
+    });
+    ui.separator();
+    ui.heading("Editor");
+    ui.horizontal(|ui| {
+        ui.label("Fit Text minimum size");
+        let mut v = settings.editor.fit_min_size;
+        if ui
+            .add(
+                egui::DragValue::new(&mut v)
+                    .range(4.0..=400.0)
+                    .speed(0.5)
+                    .suffix(" px"),
+            )
+            .on_hover_text("Fit Text never makes the main text smaller than this (canvas pixels)")
+            .changed()
+        {
+            actions.push(UiAction::SetFitMinSize(v));
         }
     });
     ui.separator();
