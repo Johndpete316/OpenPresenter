@@ -9,12 +9,13 @@
 use std::time::Instant;
 
 use cosmic_text::Color;
-use doc::{Document, Element, Rgba, Slide, TextBox, TextProblem};
+use doc::{BackgroundImage, Document, Element, Fit, ImageBox, Rgba, Slide, TextBox, TextProblem};
 
 use crate::effects;
 use crate::error::{RenderError, RenderWarning};
 use crate::fonts::Fonts;
 use crate::frame::{Placement, SlideFrame, mul};
+use crate::picture;
 use crate::text::{self, Ctx, TextLayout};
 
 /// Render `slide` of `doc` for an output of `width × height` pixels.
@@ -40,13 +41,18 @@ pub fn render_slide(
         warnings: Vec::new(),
         render_time: Default::default(),
     };
+    if let Some(bg) = &slide.background_image {
+        render_background_image(doc, bg, &mut frame);
+    }
     for el in &slide.elements {
         match el {
             Element::Text(t) => render_text(fonts, doc, slide, t, &mut frame)?,
+            Element::Image(i) => render_image(doc, i, &mut frame),
             Element::Pro6(raw) => frame.warnings.push(RenderWarning {
                 element_uuid: raw.uuid.clone(),
                 message: format!("<{}> elements aren't drawn yet", raw.kind),
                 overflow: false,
+                media: false,
             }),
         }
     }
@@ -68,6 +74,7 @@ fn warning(el: &TextBox, message: String) -> RenderWarning {
         element_uuid: el.uuid.clone(),
         message,
         overflow: false,
+        media: false,
     }
 }
 
@@ -247,6 +254,150 @@ fn render_text(
         );
     }
     Ok(())
+}
+
+fn media_warning(uuid: &str, message: String, media: bool) -> RenderWarning {
+    RenderWarning {
+        element_uuid: uuid.to_owned(),
+        message,
+        overflow: false,
+        media,
+    }
+}
+
+/// An image element: resized to its box at output scale, adjusted, then placed
+/// like a text box's layer (rotated about its centre if needed).
+fn render_image(doc: &Document, el: &ImageBox, frame: &mut SlideFrame) {
+    let p = frame.placement;
+    let r = el.frame;
+    let (x0, y0) = p.map(r.x, r.y);
+    let (bw, bh) = (r.width as f32 * p.scale, r.height as f32 * p.scale);
+    let (w, h) = (bw.round().max(1.0) as u32, bh.round().max(1.0) as u32);
+    if w > 16384 || h > 16384 {
+        frame.warnings.push(media_warning(
+            &el.uuid,
+            "image is too large to draw".into(),
+            false,
+        ));
+        return;
+    }
+    let sized = match picture::sized(&doc.path, &el.media, w, h, el.flip_h, el.flip_v) {
+        Ok(s) => s,
+        Err(e) => {
+            frame
+                .warnings
+                .push(media_warning(&el.uuid, e.message(&el.media), true));
+            return;
+        }
+    };
+    for n in sized.notes {
+        frame.warnings.push(media_warning(&el.uuid, n, false));
+    }
+    let px = picture::adjusted_premultiplied(&sized.image, &el.adjust, el.opacity);
+    let rotation = el.rotation.rem_euclid(360.0);
+    if rotation == 0.0 {
+        composite_offset(
+            frame,
+            &px,
+            (w as usize, h as usize),
+            (x0.round() as i32, y0.round() as i32),
+        );
+    } else {
+        composite_rotated(
+            frame,
+            &px,
+            (w as usize, h as usize),
+            (w as f32 / 2.0, h as f32 / 2.0),
+            (x0 + bw / 2.0, y0 + bh / 2.0),
+            rotation as f32,
+        );
+    }
+}
+
+/// The slide's background image over the whole canvas (Fit / Fill / Stretch),
+/// adjusted over the canvas area (so a vignette frames the slide).
+fn render_background_image(doc: &Document, bg: &BackgroundImage, frame: &mut SlideFrame) {
+    let c = frame.placement.canvas;
+    if c.width == 0 || c.height == 0 {
+        return;
+    }
+    let path = bg.media.resolve(&doc.path);
+    let (iw, ih) = match picture::image_size(&path) {
+        Ok(s) => s,
+        Err(_) if !path.exists() => {
+            frame.warnings.push(media_warning(
+                "",
+                picture::ImageProblem::Missing(path).message(&bg.media),
+                true,
+            ));
+            return;
+        }
+        Err(e) => {
+            frame.warnings.push(media_warning(
+                "",
+                picture::ImageProblem::Unreadable(e).message(&bg.media),
+                true,
+            ));
+            return;
+        }
+    };
+    let (cw, ch) = (c.width as f32, c.height as f32);
+    let (dw, dh) = match bg.fit {
+        Fit::Stretch => (cw, ch),
+        Fit::Fit | Fit::Fill => {
+            let sx = cw / iw.max(1) as f32;
+            let sy = ch / ih.max(1) as f32;
+            let s = if bg.fit == Fit::Fit {
+                sx.min(sy)
+            } else {
+                sx.max(sy)
+            };
+            (iw as f32 * s, ih as f32 * s)
+        }
+    };
+    let (w, h) = (dw.round().max(1.0) as u32, dh.round().max(1.0) as u32);
+    let sized = match picture::sized(&doc.path, &bg.media, w, h, false, false) {
+        Ok(s) => s,
+        Err(e) => {
+            frame
+                .warnings
+                .push(media_warning("", e.message(&bg.media), true));
+            return;
+        }
+    };
+    for n in sized.notes {
+        frame.warnings.push(media_warning("", n, false));
+    }
+    // Crop / pad into a canvas-sized picture, then adjust over the canvas.
+    let (ox, oy) = (
+        ((cw - w as f32) / 2.0).round() as i64,
+        ((ch - h as f32) / 2.0).round() as i64,
+    );
+    let mut canvas = image::RgbaImage::new(c.width, c.height);
+    {
+        // Columns of the canvas covered by the picture, and where they start in it.
+        let x_a = ox.max(0) as usize;
+        let x_b = (ox + i64::from(w)).min(i64::from(c.width)).max(0) as usize;
+        let (src, cw4, sw4) = (sized.image.as_raw(), c.width as usize * 4, w as usize * 4);
+        let dst: &mut [u8] = &mut canvas;
+        for y in 0..c.height as usize {
+            let sy = y as i64 - oy;
+            if sy < 0 || sy >= i64::from(h) || x_b <= x_a {
+                continue;
+            }
+            let sx = (x_a as i64 - ox) as usize;
+            let s0 = sy as usize * sw4 + sx * 4;
+            let n = (x_b - x_a) * 4;
+            dst[y * cw4 + x_a * 4..y * cw4 + x_a * 4 + n].copy_from_slice(&src[s0..s0 + n]);
+        }
+    }
+    let px = picture::adjusted_premultiplied(&canvas, &bg.adjust, 1.0);
+    composite_offset(
+        frame,
+        &px,
+        (c.width as usize, c.height as usize),
+        (c.x as i32, c.y as i32),
+    );
 }
 
 /// Paint `color` through `mask` (shifted by `offset`) over a premultiplied layer.

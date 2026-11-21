@@ -246,6 +246,13 @@ impl UiState {
         core + self.app_notices.len().saturating_sub(self.seen_app_notices)
     }
 
+    /// Tell the operator about a problem (toast, and Settings → Log).
+    pub fn toast(&mut self, message: impl Into<String>) {
+        let m = message.into();
+        tracing::warn!(message = %m, "app notice");
+        self.app_notices.push(m);
+    }
+
     fn mark_seen(&mut self, show: &ShowState) {
         self.seen_notices_at = show
             .notices

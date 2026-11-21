@@ -352,7 +352,7 @@ impl<'a> Attrs<'a> {
 // ---- value formatting -------------------------------------------------------------
 
 /// Shortest representation that parses back to the same `f64` (`1`, `0.5`, `0.3333333432674408`).
-pub(crate) fn fmt_f64(v: f64) -> String {
+pub fn fmt_f64(v: f64) -> String {
     let s = format!("{v}");
     if s == "-0" { "0".to_owned() } else { s }
 }

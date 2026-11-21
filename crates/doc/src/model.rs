@@ -86,6 +86,9 @@ pub struct Slide {
     pub hot_key: String,
     /// Slide background colour, when the slide draws one.
     pub background: Option<Rgba>,
+    /// Image filling the canvas behind every element (over the background colour).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_image: Option<BackgroundImage>,
     pub elements: Vec<Element>,
     /// Auto-advance timer.
     pub timer: Option<SlideTimer>,
@@ -122,6 +125,7 @@ mod secs {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Element {
     Text(Box<TextBox>),
+    Image(Box<ImageBox>),
     /// A `.pro6` element the native model doesn't describe yet (shape, media, ...).
     /// Kept in place and written back unchanged; not drawn.
     Pro6(Pro6Element),
@@ -131,9 +135,202 @@ impl Element {
     pub fn uuid(&self) -> &str {
         match self {
             Element::Text(t) => &t.uuid,
+            Element::Image(i) => &i.uuid,
             Element::Pro6(p) => &p.uuid,
         }
     }
+
+    pub fn set_uuid(&mut self, uuid: String) {
+        match self {
+            Element::Text(t) => t.uuid = uuid,
+            Element::Image(i) => i.uuid = uuid,
+            Element::Pro6(p) => p.uuid = uuid,
+        }
+    }
+
+    pub fn src(&self) -> Option<&str> {
+        match self {
+            Element::Text(t) => t.src.as_deref(),
+            Element::Image(i) => i.src.as_deref(),
+            Element::Pro6(p) => p.src.as_deref(),
+        }
+    }
+
+    /// Position and size, for elements the editor can place.
+    pub fn frame(&self) -> Option<Rect> {
+        match self {
+            Element::Text(t) => Some(t.frame),
+            Element::Image(i) => Some(i.frame),
+            Element::Pro6(_) => None,
+        }
+    }
+
+    pub fn rotation(&self) -> f64 {
+        match self {
+            Element::Text(t) => t.rotation,
+            Element::Image(i) => i.rotation,
+            Element::Pro6(_) => 0.0,
+        }
+    }
+
+    pub fn locked(&self) -> bool {
+        match self {
+            Element::Text(t) => t.locked,
+            Element::Image(i) => i.locked,
+            Element::Pro6(_) => true,
+        }
+    }
+
+    pub fn as_text(&self) -> Option<&TextBox> {
+        match self {
+            Element::Text(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    pub fn as_image(&self) -> Option<&ImageBox> {
+        match self {
+            Element::Image(i) => Some(i),
+            _ => None,
+        }
+    }
+}
+
+/// A media file. `path` is relative to the document's folder (forward slashes), or
+/// absolute (images from a `.pro6`, which stores absolute paths).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MediaRef {
+    pub path: String,
+    /// SHA-256 (hex) of the file when it was added, so a changed file is noticed.
+    /// `None` for images that came from a `.pro6`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+}
+
+impl MediaRef {
+    /// Where the file is, for a document at `doc_path`.
+    pub fn resolve(&self, doc_path: &std::path::Path) -> PathBuf {
+        let p = std::path::Path::new(&self.path);
+        if p.is_absolute() || is_windows_absolute(&self.path) {
+            return p.to_path_buf();
+        }
+        let base = doc_path.parent().unwrap_or(std::path::Path::new(""));
+        base.join(self.path.replace('\\', "/"))
+    }
+
+    /// The file name, for messages.
+    pub fn file_name(&self) -> &str {
+        self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path)
+    }
+}
+
+fn is_windows_absolute(p: &str) -> bool {
+    let b = p.as_bytes();
+    (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
+        || p.starts_with("\\\\")
+}
+
+/// Non-destructive image adjustments, applied when drawing. Each is 0 for "none".
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Adjust {
+    /// −1 … 1.
+    pub brightness: f64,
+    /// −1 … 1.
+    pub contrast: f64,
+    /// −1 (grey) … 1.
+    pub saturation: f64,
+    /// −1 (cool / blue) … 1 (warm / orange).
+    pub temperature: f64,
+    /// −1 (green) … 1 (magenta).
+    pub tint: f64,
+    /// Darkening towards the edges, 0 … 1.
+    pub vignette: f64,
+    /// How far in the vignette reaches, 0 (edges only) … 1 (to the centre).
+    pub vignette_size: f64,
+}
+
+impl Default for Adjust {
+    fn default() -> Self {
+        Adjust {
+            brightness: 0.0,
+            contrast: 0.0,
+            saturation: 0.0,
+            temperature: 0.0,
+            tint: 0.0,
+            vignette: 0.0,
+            vignette_size: 0.5,
+        }
+    }
+}
+
+impl Adjust {
+    pub fn is_none(&self) -> bool {
+        !self.has_color() && !self.has_vignette()
+    }
+
+    /// Brightness, contrast, saturation, temperature or tint is set.
+    pub fn has_color(&self) -> bool {
+        [
+            self.brightness,
+            self.contrast,
+            self.saturation,
+            self.temperature,
+            self.tint,
+        ]
+        .iter()
+        .any(|v| *v != 0.0)
+    }
+
+    pub fn has_vignette(&self) -> bool {
+        self.vignette != 0.0
+    }
+
+    fn is_default(&self) -> bool {
+        *self == Adjust::default()
+    }
+}
+
+/// An image on the slide.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageBox {
+    pub uuid: String,
+    pub name: String,
+    pub frame: Rect,
+    /// Degrees clockwise.
+    pub rotation: f64,
+    pub opacity: f64,
+    pub locked: bool,
+    #[serde(default)]
+    pub flip_h: bool,
+    #[serde(default)]
+    pub flip_v: bool,
+    pub media: MediaRef,
+    #[serde(default, skip_serializing_if = "Adjust::is_default")]
+    pub adjust: Adjust,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub src: Option<String>,
+}
+
+/// How a background image fills the canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fit {
+    /// The whole picture, bars where the shapes differ.
+    Fit,
+    /// Cover the canvas, cropping what doesn't fit.
+    #[default]
+    Fill,
+    /// Stretch to the canvas shape.
+    Stretch,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BackgroundImage {
+    pub media: MediaRef,
+    pub fit: Fit,
+    #[serde(default, skip_serializing_if = "Adjust::is_default")]
+    pub adjust: Adjust,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -432,10 +629,11 @@ impl Group {
 
 impl Slide {
     pub fn text_boxes(&self) -> impl Iterator<Item = &TextBox> {
-        self.elements.iter().filter_map(|e| match e {
-            Element::Text(t) => Some(&**t),
-            Element::Pro6(_) => None,
-        })
+        self.elements.iter().filter_map(Element::as_text)
+    }
+
+    pub fn images(&self) -> impl Iterator<Item = &ImageBox> {
+        self.elements.iter().filter_map(Element::as_image)
     }
 
     /// Text of every box that has some, boxes separated by newlines.

@@ -136,11 +136,17 @@ pub(crate) fn convert(p: &pro6::Document) -> Document {
                                     DisplayElement::Other(raw) => {
                                         let uuid = raw_uuid(raw);
                                         let k = keys.key(&uuid, || format!("{skey}/el#{ei}"));
-                                        Element::Pro6(Pro6Element {
-                                            uuid,
-                                            kind: raw.name.clone(),
-                                            src: Some(k),
-                                        })
+                                        match image_box(raw, &uuid) {
+                                            Some(mut i) => {
+                                                i.src = Some(k);
+                                                Element::Image(Box::new(i))
+                                            }
+                                            None => Element::Pro6(Pro6Element {
+                                                uuid,
+                                                kind: raw.name.clone(),
+                                                src: Some(k),
+                                            }),
+                                        }
                                     }
                                 })
                                 .collect();
@@ -154,6 +160,7 @@ pub(crate) fn convert(p: &pro6::Document) -> Document {
                                     .background_color
                                     .filter(|_| draws_background(&s.extra.element))
                                     .map(rgba),
+                                background_image: None,
                                 elements,
                                 timer: timings.as_ref().and_then(|t| t.timers.get(&s.uuid)).map(
                                     |t| SlideTimer {
@@ -202,6 +209,137 @@ pub(crate) fn convert(p: &pro6::Document) -> Document {
         arrangements,
         cue_report,
         pro6: None,
+    }
+}
+
+/// Decode `%XX` escapes (PP6 stores image paths URL-encoded).
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            out.push(v);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The values PP6 writes for an image drawn plainly (seen in real files). Anything
+/// else (scaling, offsets, fill, shadow, stroke, rounded corners) isn't understood
+/// yet, so such elements are kept as raw `.pro6` and not drawn.
+fn plain_image_attrs(raw: &pro6::raw::RawElement) -> bool {
+    let is = |name: &str, ok: &[&str]| {
+        raw.attr(name)
+            .is_none_or(|a| ok.contains(&a.raw_value.as_str()))
+    };
+    is("drawingFill", &["false"])
+        && is("drawingShadow", &["false"])
+        && is("drawingStroke", &["false"])
+        && is("bezelRadius", &["0"])
+        && is("scaleBehavior", &["0"])
+        && is("scaleSize", &["{1, 1}"])
+        && is("imageOffset", &["{0, 0}"])
+        && is("flippedHorizontally", &["0", "1"])
+        && is("flippedVertically", &["0", "1"])
+}
+
+fn raw_attr(raw: &pro6::raw::RawElement, name: &str) -> Option<String> {
+    raw.attr(name)
+        .and_then(|a| a.value().ok())
+        .map(|v| v.into_owned())
+}
+
+fn raw_position(raw: &pro6::raw::RawElement) -> Option<(usize, pro6::model::Rect3D)> {
+    raw.elements().find_map(|(i, c)| {
+        (c.name == "RVRect3D" && c.ivar_name() == Some("position"))
+            .then(|| c.text().ok().and_then(|t| pro6::model::Rect3D::parse(&t)))
+            .flatten()
+            .map(|r| (i, r))
+    })
+}
+
+/// An `RVImageElement` the native model can describe, or `None`.
+fn image_box(raw: &pro6::raw::RawElement, uuid: &str) -> Option<ImageBox> {
+    if raw.name != "RVImageElement" || !plain_image_attrs(raw) {
+        return None;
+    }
+    let source = raw_attr(raw, "source")?;
+    if source.is_empty() {
+        return None;
+    }
+    let mut path = percent_decode(&source);
+    if let Some(p) = path.strip_prefix("file://") {
+        path = p.to_owned();
+    }
+    let (_, r) = raw_position(raw)?;
+    let num = |name: &str, default: f64| {
+        raw_attr(raw, name)
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .unwrap_or(default)
+    };
+    let flag = |name: &str| raw_attr(raw, name).is_some_and(|v| v == "1" || v == "true");
+    Some(ImageBox {
+        uuid: uuid.to_owned(),
+        name: raw_attr(raw, "displayName").unwrap_or_default(),
+        frame: Rect {
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+        },
+        rotation: num("rotation", 0.0),
+        opacity: num("opacity", 1.0),
+        locked: flag("locked"),
+        flip_h: flag("flippedHorizontally"),
+        flip_v: flag("flippedVertically"),
+        media: MediaRef { path, sha256: None },
+        adjust: Adjust::default(),
+        src: None,
+    })
+}
+
+/// Write an image's changed placement into its original `RVImageElement`.
+fn export_image(i: &ImageBox, base: &ImageBox, raw: &mut pro6::raw::RawElement) {
+    use pro6::write::fmt_f64;
+    if i.name != base.name {
+        raw.set_attr("displayName", &i.name);
+    }
+    if i.rotation != base.rotation {
+        raw.set_attr("rotation", &fmt_f64(i.rotation));
+    }
+    if i.opacity != base.opacity {
+        raw.set_attr("opacity", &fmt_f64(i.opacity));
+    }
+    if i.locked != base.locked {
+        raw.set_attr("locked", if i.locked { "true" } else { "false" });
+    }
+    if i.flip_h != base.flip_h {
+        raw.set_attr("flippedHorizontally", if i.flip_h { "1" } else { "0" });
+    }
+    if i.flip_v != base.flip_v {
+        raw.set_attr("flippedVertically", if i.flip_v { "1" } else { "0" });
+    }
+    if i.frame != base.frame
+        && let Some((idx, r)) = raw_position(raw)
+        && let Some(pro6::raw::RawNode::Element(c)) = raw.children.get_mut(idx)
+    {
+        c.set_text(&format!(
+            "{{{} {} {} {} {}}}",
+            fmt_f64(i.frame.x),
+            fmt_f64(i.frame.y),
+            fmt_f64(r.z),
+            fmt_f64(i.frame.width),
+            fmt_f64(i.frame.height)
+        ));
     }
 }
 
@@ -481,11 +619,7 @@ impl<'a> Index<'a> {
             for (ps, s) in pg.slides().iter().zip(&g.slides) {
                 ix.slides.insert(src(&s.src), (ps, s));
                 for (pe, e) in ps.elements().iter().zip(&s.elements) {
-                    let k = match e {
-                        Element::Text(t) => src(&t.src),
-                        Element::Pro6(o) => src(&o.src),
-                    };
-                    ix.elements.insert(k, (pe, e));
+                    ix.elements.insert(e.src().unwrap_or_default(), (pe, e));
                 }
             }
         }
@@ -601,6 +735,12 @@ fn export_slide(s: &Slide, ix: &Index<'_>, path: &Path) -> Result<pro6::Slide, E
     }
     let mut items = Vec::with_capacity(s.elements.len());
     for e in &s.elements {
+        // Elements made here with nothing to copy (images, text boxes in a
+        // presentation without one) are native-only: their slide is flagged, and an
+        // export writes it without them.
+        if e.src().is_none() {
+            continue;
+        }
         items.push(export_element(e, ix, path)?);
     }
     match ps.elements.as_mut() {
@@ -617,11 +757,7 @@ fn export_slide(s: &Slide, ix: &Index<'_>, path: &Path) -> Result<pro6::Slide, E
 }
 
 fn export_element(e: &Element, ix: &Index<'_>, path: &Path) -> Result<DisplayElement, ExportError> {
-    let src = match e {
-        Element::Text(t) => t.src.as_deref(),
-        Element::Pro6(o) => o.src.as_deref(),
-    };
-    let Some((po, base)) = src.and_then(|k| ix.elements.get(k)) else {
+    let Some((po, base)) = e.src().and_then(|k| ix.elements.get(k)) else {
         return Err(ExportError::NoOriginal {
             what: "slide element",
             uuid: e.uuid().to_owned(),
@@ -634,6 +770,15 @@ fn export_element(e: &Element, ix: &Index<'_>, path: &Path) -> Result<DisplayEle
                 refresh_raw_uuids(&mut raw);
                 raw.set_attr("UUID", &o.uuid);
             }
+            Ok(DisplayElement::Other(raw))
+        }
+        (Element::Image(i), DisplayElement::Other(raw), Element::Image(bi)) => {
+            let mut raw = raw.clone();
+            if raw_uuid(&raw) != i.uuid {
+                refresh_raw_uuids(&mut raw);
+                raw.set_attr("UUID", &i.uuid);
+            }
+            export_image(i, bi, &mut raw);
             Ok(DisplayElement::Other(raw))
         }
         (Element::Text(t), DisplayElement::Text(pt), Element::Text(bt)) => {
@@ -802,10 +947,7 @@ pub(crate) fn fresh_slide(s: &Slide) -> Slide {
     let mut c = s.clone();
     c.uuid = pro6::ops::new_uuid();
     for e in &mut c.elements {
-        match e {
-            Element::Text(t) => t.uuid = pro6::ops::new_uuid(),
-            Element::Pro6(o) => o.uuid = pro6::ops::new_uuid(),
-        }
+        e.set_uuid(pro6::ops::new_uuid());
     }
     c
 }

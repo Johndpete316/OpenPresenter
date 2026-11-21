@@ -45,6 +45,8 @@ pub enum Feature {
     BackgroundColor,
     TextShadow,
     TextOutline,
+    /// A text box made from nothing (the presentation has none to copy).
+    NewTextBox,
     ImageElement,
     ImageBackground,
     ImageAdjustColor,
@@ -75,6 +77,7 @@ impl Feature {
             Feature::BackgroundColor => "Background colour",
             Feature::TextShadow => "Drop shadow",
             Feature::TextOutline => "Outline",
+            Feature::NewTextBox => "A new text box",
             Feature::ImageElement => "Image",
             Feature::ImageBackground => "Background image",
             Feature::ImageAdjustColor => "Image adjustments",
@@ -92,8 +95,8 @@ pub fn pro6_support(feature: Feature) -> Support {
         SlideStructure | Text | FontFamily | FontSize | TextColor | Bold | Italic | Underline
         | HorizontalAlign | VerticalAlign | ElementFrame | ElementRotation | ElementOpacity
         | BackgroundColor => Support::Supported,
-        LineSpacing | LetterSpacing | TextShadow | TextOutline | ImageElement | ImageBackground
-        | ImageAdjustColor | LayerLock | LayerHide => Support::Unverified,
+        LineSpacing | LetterSpacing | TextShadow | TextOutline | NewTextBox | ImageElement
+        | ImageBackground | ImageAdjustColor | LayerLock | LayerHide => Support::Unverified,
         Vignette => Support::NativeOnly,
     }
 }

@@ -9,10 +9,11 @@ publish.workspace = true
 [dependencies]
 cosmic-text = "0.19"
 fontdb = "0.23"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 doc.workspace = true
 thiserror = "2.0.21"
 tracing = "0.1.44"
+sha2 = "0.11.1"
 
 [lints]
 workspace = true

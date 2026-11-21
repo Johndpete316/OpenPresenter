@@ -36,6 +36,7 @@ fn semantic(d: &Document) -> Document {
             for e in &mut s.elements {
                 match e {
                     doc::Element::Text(t) => t.src = None,
+                    doc::Element::Image(i) => i.src = None,
                     doc::Element::Pro6(o) => o.src = None,
                 }
             }

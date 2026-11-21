@@ -148,7 +148,7 @@ fn first_box(d: &mut doc::Document, slide: usize) -> &mut doc::TextBox {
         .iter_mut()
         .find_map(|e| match e {
             doc::Element::Text(t) => Some(&mut **t),
-            doc::Element::Pro6(_) => None,
+            _ => None,
         })
         .unwrap()
 }
@@ -530,5 +530,219 @@ fn styled_text_renders_the_same_after_saving_and_reopening() {
     assert_eq!(back.path, saved.path, "reopened as the .opres");
     let after = render(&mut f, &back, 0, 1280, 720).unwrap();
     assert!(after.text == before.text, "same pixels after reopening");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A 64×32 picture: left half red, right half blue.
+fn write_test_png(path: &std::path::Path) {
+    let img = image::RgbaImage::from_fn(64, 32, |x, _| {
+        if x < 32 {
+            image::Rgba([220, 40, 40, 255])
+        } else {
+            image::Rgba([40, 40, 220, 255])
+        }
+    });
+    img.save(path).unwrap();
+}
+
+fn px(f: &SlideFrame, x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * f.width + x) * 4) as usize;
+    [f.text[i], f.text[i + 1], f.text[i + 2], f.text[i + 3]]
+}
+
+fn image_box(media: doc::MediaRef, frame: doc::Rect) -> doc::ImageBox {
+    doc::ImageBox {
+        uuid: doc::new_uuid(),
+        name: "test".into(),
+        frame,
+        rotation: 0.0,
+        opacity: 1.0,
+        locked: false,
+        flip_h: false,
+        flip_v: false,
+        media,
+        adjust: doc::Adjust::default(),
+        src: None,
+    }
+}
+
+/// E3 acceptance: an adjusted background and foreground image render the same in
+/// every path (all use `render_slide`), including after saving and reopening.
+#[test]
+fn adjusted_images_render_the_same_after_saving_and_reopening() {
+    let mut f = fonts();
+    let dir = std::env::temp_dir().join(format!("render-e3-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Media")).unwrap();
+    write_test_png(&dir.join("Media/pic.png"));
+    let file = dir.join("pics.pro6");
+    std::fs::copy(fixtures().join("render_1024x768.pro6"), &file).unwrap();
+    let mut d = doc::open(&file).unwrap();
+    let media = doc::MediaRef {
+        path: "Media/pic.png".into(),
+        sha256: None,
+    };
+    {
+        let s = &mut d.groups[0].slides[0];
+        s.elements.clear();
+        s.background_image = Some(doc::BackgroundImage {
+            media: media.clone(),
+            fit: doc::Fit::Stretch,
+            adjust: doc::Adjust::default(),
+        });
+        let mut fg = image_box(
+            media.clone(),
+            doc::Rect {
+                x: 412.0,
+                y: 284.0,
+                width: 200.0,
+                height: 100.0,
+            },
+        );
+        fg.flip_h = true;
+        s.elements.push(doc::Element::Image(Box::new(fg)));
+    }
+    let plain = render(&mut f, &d, 0, 1024, 768).unwrap();
+    assert!(plain.warnings.is_empty(), "{:?}", plain.warnings);
+    // Background stretched: red on the left, blue on the right, edge to edge.
+    assert_eq!(px(&plain, 5, 5)[..3], [220, 40, 40]);
+    assert_eq!(px(&plain, 1018, 760)[..3], [40, 40, 220]);
+    // Foreground flipped: blue on its left.
+    assert_eq!(px(&plain, 420, 330)[..3], [40, 40, 220]);
+    assert_eq!(px(&plain, 600, 330)[..3], [220, 40, 40]);
+
+    {
+        let s = &mut d.groups[0].slides[0];
+        if let Some(b) = s.background_image.as_mut() {
+            b.adjust = doc::Adjust {
+                saturation: -1.0,
+                vignette: 1.0,
+                ..doc::Adjust::default()
+            };
+        }
+        if let doc::Element::Image(i) = &mut s.elements[0] {
+            i.adjust.brightness = 0.5;
+            i.opacity = 0.5;
+        }
+    }
+    let before = render(&mut f, &d, 0, 1024, 768).unwrap();
+    let bg = px(&before, 200, 384);
+    assert_eq!(bg[0], bg[1], "background desaturated: {bg:?}");
+    assert!(px(&before, 1, 1)[0] < 40, "vignette darkens the corner");
+    assert_ne!(
+        px(&before, 420, 330),
+        px(&plain, 420, 330),
+        "foreground adjusted"
+    );
+    d.mode = doc::Mode::Native;
+    let saved = doc::save(&d).unwrap();
+    let back = doc::open(&file).unwrap();
+    assert_eq!(back.path, saved.path);
+    let after = render(&mut f, &back, 0, 1024, 768).unwrap();
+    assert!(after.text == before.text, "same pixels after reopening");
+    // Another output size (the editor canvas draws at its on-screen size).
+    let small = render(&mut f, &back, 0, 512, 384).unwrap();
+    assert_eq!(px(&small, 2, 192)[0], px(&small, 2, 192)[1]);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn missing_or_changed_images_are_reported_and_the_rest_still_draws() {
+    let mut f = fonts();
+    let dir = std::env::temp_dir().join(format!("render-e3m-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write_test_png(&dir.join("pic.png"));
+    let mut d = load("render_1024x768.pro6");
+    d.path = dir.join("x.opres");
+    let frame = doc::Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 64.0,
+        height: 32.0,
+    };
+    let missing = image_box(
+        doc::MediaRef {
+            path: r"C:\Users\Someone\Graphics\gone.png".into(),
+            sha256: None,
+        },
+        frame,
+    );
+    let changed = image_box(
+        doc::MediaRef {
+            path: "pic.png".into(),
+            sha256: Some("00".repeat(32)),
+        },
+        frame,
+    );
+    let (mu, cu) = (missing.uuid.clone(), changed.uuid.clone());
+    d.groups[0].slides[0]
+        .elements
+        .push(doc::Element::Image(Box::new(missing)));
+    d.groups[0].slides[0]
+        .elements
+        .push(doc::Element::Image(Box::new(changed)));
+    let fr = render(&mut f, &d, 0, 1024, 768).unwrap();
+    let w = |u: &str| fr.warnings.iter().find(|w| w.element_uuid == u).unwrap();
+    assert!(w(&mu).media);
+    assert!(w(&mu).message.contains("gone.png"), "{}", w(&mu).message);
+    assert!(!w(&cu).media, "a changed file is still drawn");
+    assert!(w(&cu).message.contains("changed"));
+    assert_eq!(
+        px(&fr, 5, 5)[..3],
+        [220, 40, 40],
+        "the changed one is drawn"
+    );
+    ink_bbox(&fr);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+#[ignore = "timing, run with --release --ignored --nocapture"]
+fn adjust_timing() {
+    let mut f = fonts();
+    let dir = std::env::temp_dir().join(format!("render-e3t-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let big = image::RgbaImage::from_fn(4000, 3000, |x, y| {
+        image::Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255])
+    });
+    big.save(dir.join("big.jpg")).ok();
+    big.save(dir.join("big.png")).unwrap();
+    let mut d = load("render_1024x768.pro6");
+    d.path = dir.join("x.opres");
+    d.groups[0].slides[0].background_image = Some(doc::BackgroundImage {
+        media: doc::MediaRef {
+            path: "big.png".into(),
+            sha256: None,
+        },
+        fit: doc::Fit::Fill,
+        adjust: doc::Adjust::default(),
+    });
+    for i in 0..6 {
+        if let Some(b) = d.groups[0].slides[0].background_image.as_mut() {
+            b.adjust.brightness = f64::from(i) / 10.0;
+            b.adjust.vignette = 0.5;
+        }
+        let t = std::time::Instant::now();
+        let fr = render(&mut f, &d, 0, 1920, 1080).unwrap();
+        println!(
+            "render {i}: {:?} (render_time {:?})",
+            t.elapsed(),
+            fr.render_time
+        );
+    }
+    d.groups[0].slides[0].background_image = None;
+    let t = std::time::Instant::now();
+    render(&mut f, &d, 0, 1920, 1080).unwrap();
+    println!("text only: {:?}", t.elapsed());
+    let img = image::RgbaImage::from_pixel(1920, 1080, image::Rgba([100, 100, 100, 255]));
+    let t = std::time::Instant::now();
+    let a = doc::Adjust {
+        brightness: 0.2,
+        vignette: 0.5,
+        ..doc::Adjust::default()
+    };
+    render::adjusted_premultiplied(&img, &a, 1.0);
+    println!("adjust only: {:?}", t.elapsed());
     std::fs::remove_dir_all(&dir).unwrap();
 }

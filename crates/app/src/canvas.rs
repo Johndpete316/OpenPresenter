@@ -31,6 +31,8 @@ struct Done {
     image: Result<egui::ColorImage, String>,
     /// Text boxes (UUIDs) whose text is taller than the box.
     overflow: Vec<String>,
+    /// Images that can't be shown: (element UUID, "" for the background; message).
+    problems: Vec<(String, String)>,
 }
 
 pub struct CanvasRenderer {
@@ -42,6 +44,7 @@ pub struct CanvasRenderer {
     texture: Option<TextureHandle>,
     error: Option<String>,
     overflow: Vec<String>,
+    problems: Vec<(String, String)>,
 }
 
 impl CanvasRenderer {
@@ -61,6 +64,7 @@ impl CanvasRenderer {
                         req = newer;
                     }
                     let mut overflow = Vec::new();
+                    let mut problems = Vec::new();
                     let image = req
                         .doc
                         .slides()
@@ -77,6 +81,12 @@ impl CanvasRenderer {
                                 .filter(|w| w.overflow)
                                 .map(|w| w.element_uuid.clone())
                                 .collect();
+                            problems = frame
+                                .warnings
+                                .iter()
+                                .filter(|w| w.media)
+                                .map(|w| (w.element_uuid.clone(), w.message.clone()))
+                                .collect();
                             let img = frame.composite();
                             egui::ColorImage::from_rgba_unmultiplied(
                                 [img.width() as usize, img.height() as usize],
@@ -88,6 +98,7 @@ impl CanvasRenderer {
                             key: req.key,
                             image,
                             overflow,
+                            problems,
                         })
                         .is_err()
                     {
@@ -104,6 +115,7 @@ impl CanvasRenderer {
             texture: None,
             error: None,
             overflow: Vec::new(),
+            problems: Vec::new(),
         })
     }
 
@@ -147,6 +159,7 @@ impl CanvasRenderer {
                 Err(e) => self.error = Some(e),
             }
             self.overflow = d.overflow;
+            self.problems = d.problems;
             self.shown = Some(d.key);
         }
     }
@@ -160,5 +173,13 @@ impl CanvasRenderer {
     /// Text boxes (UUIDs) overflowing in the latest image.
     pub fn overflow(&self) -> &[String] {
         &self.overflow
+    }
+
+    /// Why the image `uuid` (`""` = the background image) isn't shown, if it isn't.
+    pub fn problem(&self, uuid: &str) -> Option<&str> {
+        self.problems
+            .iter()
+            .find(|(u, _)| u == uuid)
+            .map(|(_, m)| m.as_str())
     }
 }

@@ -26,6 +26,7 @@ use pp6core::{Command, ShowState};
 use crate::thumbs::ThumbRequest;
 use crate::ui::{UiAction, UiState, color32, paint_error};
 
+mod image;
 mod text;
 
 const RULER: f32 = 18.0;
@@ -50,6 +51,9 @@ enum Tab {
     Text,
     /// Outline and shadow (opens from the text toolbar, Canva-style).
     Effects,
+    Image,
+    /// Image adjustments (opens from the image toolbar or the background image).
+    Adjust,
     Slide,
 }
 
@@ -70,6 +74,8 @@ struct Drag {
     rotation: f64,
     now_frame: doc::Rect,
     now_rotation: f64,
+    /// Resizing keeps the shape (images by default; Shift switches).
+    keep_aspect: bool,
     /// Preview document for the canvas while dragging.
     preview: Option<(doc::Rect, f64, Arc<doc::Document>)>,
 }
@@ -113,6 +119,9 @@ pub struct EditState {
     recent_colors: Vec<[u8; 3]>,
     font_search: String,
     font_previews: std::collections::HashMap<String, Option<egui::TextureHandle>>,
+    imports: image::Imports,
+    /// The Adjust panel is for the slide's background image (else the selected image).
+    adjust_background: bool,
 }
 
 impl EditState {
@@ -170,7 +179,79 @@ fn flat_index(d: &doc::Document, g: usize, s: usize) -> usize {
 fn text_box(d: &doc::Document, g: usize, s: usize, e: usize) -> Option<&doc::TextBox> {
     match d.groups.get(g)?.slides.get(s)?.elements.get(e)? {
         Element::Text(t) => Some(t),
-        Element::Pro6(_) => None,
+        _ => None,
+    }
+}
+
+fn element(d: &doc::Document, g: usize, s: usize, e: usize) -> Option<&Element> {
+    d.groups.get(g)?.slides.get(s)?.elements.get(e)
+}
+
+/// A text box to insert on slide `(g, s)`: a copy of the nearest existing one
+/// (its style, outline and shadow; a `.pro6` can hold that), or a plain one.
+fn new_text_box(d: &doc::Document, g: usize, s: usize) -> doc::TextBox {
+    let template = d.groups[g].slides[s]
+        .text_boxes()
+        .chain(d.text_boxes())
+        .find(|t| t.problem.is_none() && t.runs().next().is_some());
+    let (cw, ch) = (f64::from(d.canvas.width), f64::from(d.canvas.height));
+    let frame = doc::Rect {
+        x: (cw * 0.2).round(),
+        y: (ch * 0.4).round(),
+        width: (cw * 0.6).round(),
+        height: (ch * 0.2).round(),
+    };
+    match template {
+        Some(t) => {
+            let style = t.runs().next().cloned();
+            let align = t.paragraphs.first().map(|p| p.align).unwrap_or_default();
+            let mut n = t.clone();
+            n.uuid = new_uuid();
+            n.frame = frame;
+            n.rotation = 0.0;
+            n.locked = false;
+            n.paragraphs = vec![doc::Paragraph {
+                align,
+                line_spacing: 1.0,
+                runs: style
+                    .map(|r| doc::Run {
+                        text: "Text".into(),
+                        ..r
+                    })
+                    .into_iter()
+                    .collect(),
+            }];
+            n
+        }
+        None => doc::TextBox {
+            uuid: new_uuid(),
+            name: "Text".into(),
+            frame,
+            rotation: 0.0,
+            opacity: 1.0,
+            locked: false,
+            valign: doc::VAlign::Middle,
+            fill: None,
+            corner_radius: 0.0,
+            outline: None,
+            shadow: None,
+            paragraphs: vec![doc::Paragraph {
+                align: doc::Align::Center,
+                line_spacing: 1.0,
+                runs: vec![doc::Run {
+                    text: "Text".into(),
+                    font: "Arial".into(),
+                    size: (ch / 10.0).round(),
+                    color: Some([255, 255, 255]),
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                    letter_spacing: 0.0,
+                }],
+            }],
+            problem: None,
+            src: None,
+        },
     }
 }
 
@@ -251,13 +332,29 @@ pub fn editor(
             .map(|g| (g, 0));
     }
     if let (Some((g, s)), Some(e)) = (st.edit.sel, st.edit.element)
-        && text_box(d, g, s, e).is_none()
+        && element(d, g, s, e).and_then(Element::frame).is_none()
     {
         st.edit.element = None;
         st.edit.drag = None;
     }
 
+    // The inspector follows the selection: Image for images, Text for text boxes.
+    if let (Some((g, s)), Some(e)) = (st.edit.sel, st.edit.element) {
+        match element(d, g, s, e) {
+            Some(Element::Image(_)) if matches!(st.edit.tab, Tab::Text | Tab::Effects) => {
+                st.edit.tab = Tab::Image;
+            }
+            Some(Element::Text(_))
+                if st.edit.tab == Tab::Image
+                    || (st.edit.tab == Tab::Adjust && !st.edit.adjust_background) =>
+            {
+                st.edit.tab = Tab::Text;
+            }
+            _ => {}
+        }
+    }
     text::check_session(st, actions, path, d);
+    image::poll(ui, st, actions, path, d);
     top_bar(ui, st, show, actions, path, d);
     context_bar(ui, st, actions, path, d);
     bottom_bar(ui, st, actions, path, d);
@@ -355,6 +452,43 @@ fn top_bar(
                     st.edit.notes_for = None;
                 }
                 ui.separator();
+                ui.label("Insert");
+                if let Some((g, s)) = st.edit.sel {
+                    if ui
+                        .button("Text")
+                        .on_hover_text("A new text box on this slide")
+                        .clicked()
+                    {
+                        text::commit(st, actions, path, d);
+                        let t = new_text_box(d, g, s);
+                        let at = d.groups[g].slides[s].elements.len();
+                        text::send_checked(
+                            st,
+                            actions,
+                            path,
+                            d,
+                            Op::AddElement {
+                                group: g,
+                                slide: s,
+                                at: None,
+                                element: Element::Text(Box::new(t)),
+                            },
+                            None,
+                        );
+                        st.edit.element = Some(at);
+                        st.edit.tab = Tab::Text;
+                    }
+                    let busy = st.edit.imports.running > 0;
+                    if ui
+                        .add_enabled(!busy, egui::Button::new(if busy { "Image…" } else { "Image" }))
+                        .on_hover_text("A PNG or JPEG picture on this slide (you can also drop files on the editor or paste one)")
+                        .clicked()
+                    {
+                        text::commit(st, actions, path, d);
+                        image::start(st, ui.ctx(), path, image::Source::Pick, image::Target::Insert(g, s));
+                    }
+                }
+                ui.separator();
                 let save = egui::Button::new(RichText::new("Save").strong()).fill(if unsaved {
                     Color32::from_rgb(40, 90, 40)
                 } else {
@@ -424,9 +558,13 @@ fn context_bar(
                     );
                     return;
                 };
-                let Some(t) = text_box(d, g, s, e) else { return };
-                text::toolbar(ui, st, actions, path, d, (g, s, e));
-                let rotation = t.rotation.rem_euclid(360.0);
+                let Some(el) = element(d, g, s, e) else { return };
+                match el {
+                    Element::Text(_) => text::toolbar(ui, st, actions, path, d, (g, s, e)),
+                    Element::Image(_) => image::toolbar(ui, st, actions, path, d, (g, s, e)),
+                    Element::Pro6(_) => return,
+                }
+                let rotation = el.rotation().rem_euclid(360.0);
                 if rotation != 0.0
                     && ui
                         .button(format!("Straighten ({rotation:.0}°)"))
@@ -443,7 +581,7 @@ fn context_bar(
                         },
                     );
                 }
-                if t.locked {
+                if el.locked() {
                     ui.label(RichText::new("Locked: it can't be moved or resized here.").color(Color32::YELLOW));
                 }
             });
@@ -1074,6 +1212,7 @@ fn inspector(
     ui.horizontal(|ui| {
         ui.selectable_value(&mut st.edit.tab, Tab::Text, "Text");
         ui.selectable_value(&mut st.edit.tab, Tab::Effects, "Effects");
+        ui.selectable_value(&mut st.edit.tab, Tab::Image, "Image");
         ui.selectable_value(&mut st.edit.tab, Tab::Slide, "Slide");
     });
     ui.separator();
@@ -1097,6 +1236,16 @@ fn inspector(
                 }
             }
         }
+        Tab::Image => {
+            let e = st.edit.element.or_else(|| {
+                d.groups[g].slides[s]
+                    .elements
+                    .iter()
+                    .position(|e| matches!(e, Element::Image(_)))
+            });
+            image::image_tab(ui, st, actions, path, d, (g, s, e.unwrap_or(usize::MAX)));
+        }
+        Tab::Adjust => image::adjust_tab(ui, st, actions, path, d, (g, s)),
         Tab::Slide => slide_tab(ui, st, actions, path, d, g, s),
     }
 }
@@ -1317,6 +1466,8 @@ fn slide_tab(
     }
     ui.add_space(6.0);
     ui.horizontal(|ui| background_picker(ui, actions, path, d, g, s));
+    ui.add_space(6.0);
+    image::background_section(ui, st, actions, path, d, (g, s));
     if slide.pro6_incompatible {
         ui.add_space(6.0);
         ui.label(RichText::new("This slide uses something a ProPresenter 6 file can't hold; it only opens correctly in OpenPresent.").color(Color32::from_rgb(255, 130, 130)));
@@ -1324,6 +1475,28 @@ fn slide_tab(
 }
 
 // ───────────────────────────── canvas ─────────────────────────────
+
+/// What the canvas needs to know about an element it can place.
+#[derive(Clone, Copy)]
+struct Item<'a> {
+    frame: doc::Rect,
+    rotation: f64,
+    locked: bool,
+    uuid: &'a str,
+    text: bool,
+}
+
+impl<'a> Item<'a> {
+    fn of(e: &'a Element) -> Option<Item<'a>> {
+        Some(Item {
+            frame: e.frame()?,
+            rotation: e.rotation(),
+            locked: e.locked(),
+            uuid: e.uuid(),
+            text: matches!(e, Element::Text(_)),
+        })
+    }
+}
 
 fn centre(f: &doc::Rect) -> Pos2 {
     Pos2::new((f.x + f.width / 2.0) as f32, (f.y + f.height / 2.0) as f32)
@@ -1387,6 +1560,21 @@ fn drag_update(dr: &mut Drag, p: Pos2) {
             let mut dh = f64::from(hy) * f64::from(d.y);
             dw = dw.max(MIN_SIZE - f.width).round();
             dh = dh.max(MIN_SIZE - f.height).round();
+            if dr.keep_aspect && f.width > 0.0 && f.height > 0.0 {
+                let ratio = f.width / f.height;
+                let by_width = if hx != 0 && hy != 0 {
+                    (dw / f.width).abs() >= (dh / f.height).abs()
+                } else {
+                    hx != 0
+                };
+                if by_width {
+                    dh = ((f.width + dw) / ratio - f.height).round();
+                } else {
+                    dw = ((f.height + dh) * ratio - f.width).round();
+                }
+                dw = dw.max(MIN_SIZE - f.width);
+                dh = dh.max(MIN_SIZE - f.height);
+            }
             let shift = rotate(
                 Vec2::new(
                     (f64::from(hx) * dw / 2.0) as f32,
@@ -1529,9 +1717,16 @@ fn canvas(
                 .is_none_or(|(f, r, _)| *f != dr.now_frame || *r != dr.now_rotation)
             {
                 let mut p = (**d).clone();
-                if let Some(Element::Text(t)) = p.groups[g].slides[s].elements.get_mut(dr.element) {
-                    t.frame = dr.now_frame;
-                    t.rotation = dr.now_rotation;
+                match p.groups[g].slides[s].elements.get_mut(dr.element) {
+                    Some(Element::Text(t)) => {
+                        t.frame = dr.now_frame;
+                        t.rotation = dr.now_rotation;
+                    }
+                    Some(Element::Image(i)) => {
+                        i.frame = dr.now_frame;
+                        i.rotation = dr.now_rotation;
+                    }
+                    _ => {}
                 }
                 dr.preview = Some((dr.now_frame, dr.now_rotation, Arc::new(p)));
             }
@@ -1580,19 +1775,16 @@ fn canvas(
         .drag
         .as_ref()
         .map(|dr| (dr.element, dr.now_frame, dr.now_rotation));
-    let geom = |e: usize, t: &doc::TextBox| match dragged {
+    let geom = |e: usize, t: &Item<'_>| match dragged {
         Some((de, f, r)) if de == e => (f, r),
         _ => (t.frame, t.rotation),
     };
     let selected_el = st.edit.element;
-    let boxes: Vec<(usize, &doc::TextBox)> = slide
+    let boxes: Vec<(usize, Item<'_>)> = slide
         .elements
         .iter()
         .enumerate()
-        .filter_map(|(i, e)| match e {
-            Element::Text(t) => Some((i, &**t)),
-            Element::Pro6(_) => None,
-        })
+        .filter_map(|(i, e)| Item::of(e).map(|it| (i, it)))
         .collect();
     let pointer = resp.hover_pos().map(to_canvas);
     let topmost_at = |p: Pos2| {
@@ -1652,7 +1844,7 @@ fn canvas(
         if st
             .canvas
             .as_ref()
-            .is_some_and(|c| c.overflow().iter().any(|u| u == &t.uuid))
+            .is_some_and(|c| c.overflow().iter().any(|u| u == t.uuid))
         {
             let at = pts[3];
             let badge = Rect::from_min_size(at + Vec2::new(0.0, 2.0), Vec2::new(118.0, 18.0));
@@ -1751,6 +1943,7 @@ fn canvas(
                 rotation: t.rotation,
                 now_frame: t.frame,
                 now_rotation: t.rotation,
+                keep_aspect: !t.text,
                 preview: None,
             });
         }
@@ -1758,6 +1951,9 @@ fn canvas(
     if let Some(dr) = st.edit.drag.as_mut()
         && let Some(p) = ui.input(|i| i.pointer.interact_pos())
     {
+        let is_text = boxes.iter().any(|(i, t)| *i == dr.element && t.text);
+        // Images keep their shape unless Shift is held; text boxes the other way round.
+        dr.keep_aspect = shift ^ !is_text;
         drag_update(dr, to_canvas(p));
     }
     if resp.drag_stopped()
@@ -1802,6 +1998,7 @@ fn canvas(
         && let Some(p) = resp.interact_pointer_pos().map(to_canvas)
         && let Some(e) = topmost_at(p)
         && let Some((_, t)) = boxes.iter().find(|(i, _)| *i == e)
+        && t.text
     {
         st.edit.drag = None;
         let at = local_of(&t.frame, t.rotation, p);
@@ -1835,6 +2032,7 @@ fn canvas(
         && ui.memory(|m| m.focused().is_none())
         && ui.input(|i| i.key_pressed(egui::Key::Enter))
         && let Some(e) = st.edit.element
+        && boxes.iter().any(|(i, t)| *i == e && t.text)
     {
         text::begin(st, d, (g, s, e), None, scale * ppp, now);
     }
@@ -1843,15 +2041,32 @@ fn canvas(
         && let Some(e) = st.edit.element
         && let Some((_, t)) = boxes.iter().find(|(i, _)| *i == e)
     {
-        let (dx, dy, esc) = ui.input(|i| {
+        let (dx, dy, esc, delete) = ui.input(|i| {
             let step = if i.modifiers.shift { 10.0 } else { 1.0 };
             let k = |key| if i.key_pressed(key) { step } else { 0.0 };
             (
                 k(egui::Key::ArrowRight) - k(egui::Key::ArrowLeft),
                 k(egui::Key::ArrowDown) - k(egui::Key::ArrowUp),
                 i.key_pressed(egui::Key::Escape),
+                i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
             )
         });
+        if delete && st.edit.drag.is_none() {
+            text::send_checked(
+                st,
+                actions,
+                path,
+                d,
+                Op::RemoveElement {
+                    group: g,
+                    slide: s,
+                    element: e,
+                },
+                None,
+            );
+            st.edit.element = None;
+            return;
+        }
         if (dx != 0.0 || dy != 0.0) && !t.locked {
             edit_merging(
                 actions,
@@ -2282,6 +2497,105 @@ mod tests {
     }
 
     #[test]
+    fn images_select_resize_at_their_shape_and_delete() {
+        let mut h = Harness::new();
+        let mut d = (*h.doc).clone();
+        d.groups[0].slides[0]
+            .elements
+            .push(Element::Image(Box::new(doc::ImageBox {
+                uuid: new_uuid(),
+                name: "pic".into(),
+                frame: doc::Rect {
+                    x: 920.0,
+                    y: 690.0,
+                    width: 80.0,
+                    height: 40.0,
+                },
+                rotation: 0.0,
+                opacity: 1.0,
+                locked: false,
+                flip_h: false,
+                flip_v: false,
+                media: doc::MediaRef {
+                    path: "Media/none.png".into(),
+                    sha256: None,
+                },
+                adjust: doc::Adjust::default(),
+                src: None,
+            })));
+        h.doc = Arc::new(d);
+        h.frame(vec![]);
+        h.click(h.at(960.0, 710.0));
+        assert_eq!(h.st.edit.element, Some(1), "the image got selected");
+        // Bottom-right handle dragged right and a little down: 2:1 is kept.
+        let edits = h.drag(
+            h.at(1000.0, 730.0),
+            h.at(1000.0, 730.0) + Vec2::new(10.0, 2.0),
+        );
+        match edits.as_slice() {
+            [
+                Op::SetFrame {
+                    element: 1, frame, ..
+                },
+            ] => {
+                assert_eq!((frame.x, frame.y), (920.0, 690.0));
+                assert!(frame.width > 80.0);
+                assert!((frame.width / frame.height - 2.0).abs() < 0.06, "{frame:?}");
+            }
+            other => panic!("expected a resize, got {other:?}"),
+        }
+        let edits = h.frame(vec![egui::Event::Key {
+            key: egui::Key::Delete,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }]);
+        assert_eq!(
+            edits,
+            vec![Op::RemoveElement {
+                group: 0,
+                slide: 0,
+                element: 1
+            }]
+        );
+        assert_eq!(h.st.edit.element, None);
+    }
+
+    #[test]
+    fn imported_files_are_copied_once_by_content() {
+        let dir = std::env::temp_dir().join(format!("pp6-import-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("My Logo.png");
+        ::image::RgbaImage::from_pixel(30, 20, ::image::Rgba([1, 2, 3, 255]))
+            .save(&src)
+            .unwrap();
+        let doc_path = dir.join("songs").join("Song.pro6");
+        std::fs::create_dir_all(doc_path.parent().unwrap()).unwrap();
+        let a = image::import_file_for_test(&doc_path, &src).unwrap();
+        let b = image::import_file_for_test(&doc_path, &src).unwrap();
+        assert_eq!(a.media, b.media);
+        assert!(
+            a.media.path.starts_with("Media/My Logo-"),
+            "{}",
+            a.media.path
+        );
+        assert_eq!(a.size, (30, 20));
+        let stored = a.media.resolve(&doc_path);
+        assert_eq!(
+            std::fs::read(&stored).unwrap(),
+            std::fs::read(&src).unwrap()
+        );
+        assert_eq!(
+            std::fs::read_dir(stored.parent().unwrap()).unwrap().count(),
+            1
+        );
+        assert!(image::import_file_for_test(&doc_path, &dir.join("notes.txt")).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn dragging_a_slide_in_the_strip_moves_it() {
         let mut h = Harness::new();
         h.frame(vec![]);
@@ -2563,8 +2877,31 @@ mod tests {
             rotation,
             now_frame: f,
             now_rotation: rotation,
+            keep_aspect: false,
             preview: None,
         }
+    }
+
+    #[test]
+    fn image_resize_keeps_its_shape() {
+        let mut dr = drag(Grab::Resize(1, 1), 0.0);
+        dr.keep_aspect = true;
+        // Pointer mostly right: the width leads, the height follows at 2:1.
+        drag_update(&mut dr, Pos2::new(100.0, 10.0));
+        assert_eq!(dr.now_frame.width, 300.0);
+        assert_eq!(dr.now_frame.height, 150.0);
+        assert_eq!(
+            (dr.now_frame.x, dr.now_frame.y),
+            (100.0, 100.0),
+            "top-left stays"
+        );
+        // An edge handle: the other side grows evenly about the centre.
+        let mut dr = drag(Grab::Resize(0, 1), 0.0);
+        dr.keep_aspect = true;
+        drag_update(&mut dr, Pos2::new(0.0, 50.0));
+        assert_eq!((dr.now_frame.width, dr.now_frame.height), (300.0, 150.0));
+        assert_eq!(dr.now_frame.x, 50.0);
+        assert_eq!(dr.now_frame.y, 100.0);
     }
 
     fn close(a: f64, b: f64) -> bool {

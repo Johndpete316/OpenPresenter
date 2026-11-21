@@ -115,8 +115,8 @@ Filled in from real files and testing in PP6. Starting state:
 |Element position / size / rotation / opacity|Supported|`position`, `rotation`, `opacity`|
 |Text drop shadow|Unverified|element `shadow` string exists; per-run?|
 |Text outline|Unverified|stroke dictionary exists on element|
-|Image element (foreground)|Unverified|not in gist — find element type in real files|
-|Image as slide background|Unverified|slide cues / media — find in real files|
+|Image element (foreground)|Unverified|`RVImageElement` (real files): existing ones are read, drawn, and their position / rotation / opacity written back; new ones aren't written|
+|Image as slide background|Unverified|real files use a full-canvas `RVImageElement`; no slide media cue seen|
 |Image brightness / saturation / colour|Unverified||
 |Vignette|NativeOnly||
 |Layer lock / hide|Unverified|`locked` exists; hide unknown|
@@ -284,17 +284,29 @@ Filled in from real files and testing in PP6. Starting state:
   - **Test fonts:** the bundled ones have no italic faces, so italic is tested through warnings only.
 
 ### E3 — Images
-- [ ] Insert an image (file dialog, drag-and-drop, paste from clipboard): PNG, JPEG
-- [ ] Copy imported images into the library media folder; reference them by relative path plus hash
-- [ ] Foreground image element: move, resize (aspect locked by default), rotate, opacity, flip H/V
-- [ ] **Set as Background:** fills the canvas with Fit / Fill / Stretch; always behind all elements
-- [ ] Adjust panel (Canva-style sliders):
+- [x] Insert an image (file dialog, drag-and-drop, paste from clipboard): PNG, JPEG
+- [x] Copy imported images into the library media folder; reference them by relative path plus hash
+- [x] Foreground image element: move, resize (aspect locked by default), rotate, opacity, flip H/V
+- [x] **Set as Background:** fills the canvas with Fit / Fill / Stretch; always behind all elements
+- [x] Adjust panel (Canva-style sliders):
   - brightness, contrast, saturation, temperature, tint, vignette (amount, size)
   - live preview
   - reset per slider, and "reset all"
-- [ ] Adjustments applied in a GPU shader at render time; originals never modified
-- [ ] Large images downscaled to a cached texture at canvas resolution on the I/O worker
+- [x] Adjustments applied ~~in a GPU shader~~ at render time (CPU, see status); originals never modified
+- [x] Large images downscaled to a cached texture at canvas resolution ~~on the I/O worker~~ (on the render threads, see status)
 - **Accept:** an adjusted background and foreground image render identically in editor and output; the editor stays responsive while dragging sliders.
+- **Status (2026-11-21):** done. Acceptance test: `adjusted_images_render_the_same_after_saving_and_reopening` in `crates/render/tests/render.rs`.
+  - **Two deviations from the plan, for John to confirm:**
+    - **Adjustments run on the CPU in `render`, not in a GPU shader.** Thumbnails, the phone remote and `pp6tool render` have no GL context, so a shader would make them differ from the output (the audit's open question). One CPU path keeps every view identical. Brightness and contrast use a lookup table, the vignette a distance table, and rows are split across threads: about 3 ms for a full-HD picture, 7 ms for a whole 1920×1080 slide per slider step (release build). The canvas renders on its own thread and only the newest request, so dragging a slider never blocks the UI.
+    - **Decoding and downscaling happen on the render threads** (output, editor canvas, thumbnails), not the core I/O worker, in one cache shared by all of them. Pictures are kept at most 4096 px on the long side, plus resized copies per drawn size (LRU, 512 MB). The thumbnail grid renders every slide, so a presentation's pictures are decoded before a slide goes live; a resize to the output size can still take ~10–20 ms at go-live the first time.
+  - **Insert:** Insert → Image (file dialog), dropping files on the editor, or pasting (a copied picture, or a copied PNG/JPEG file). Insert → Text adds a text box styled like the nearest one (a copy, so a `.pro6` holds it; with no text box in the presentation it's a plain one and needs native mode).
+  - **Media folder:** imports are copied on a worker thread to `Media/` next to the presentation, named `<name>-<first 8 of SHA-256>.<ext>` (the same picture is stored once), and referenced by that relative path plus the full SHA-256. A missing file shows "wasn't found" on the canvas and in the Image tab, and isn't drawn (the rest of the slide is). A changed file is drawn with a warning.
+  - **Image element:** select, move, resize (keeps its shape; Shift resizes freely), rotate, nudge, Delete key. Toolbar: Adjust, Flip H, Flip V, Opacity, Set as Background, Straighten. Image tab: name, file, size, opacity, flips, Adjust, Set as Background, Delete.
+  - **Set as Background** removes the element and makes it the slide's background image in one undo step. The Slide tab has the background image: Fit / Fill / Stretch, Adjust, Replace, Remove. It's drawn over the slide's background colour and under every element, as part of the slide (so Clear Text hides it, like a full-canvas image in PP6).
+  - **Adjust panel:** brightness, contrast, saturation, temperature, tint, vignette amount and size; ↺ per slider and Reset all; live on the canvas; a slider drag is one undo step.
+  - **Images in `.pro6` files** (`RVImageElement`, seen in the Welcome file): imported as image elements when they use the plain values seen in real files (no scaling, offset, fill, shadow, stroke or rounded corners); anything else stays raw and undrawn. Their `source` is an absolute Windows path, so on another PC they show as missing. Moving, resizing, rotating and opacity are written back to the `.pro6`; flips and adjustments need native mode.
+  - **Compatibility:** inserting images, background images, flips and adjustments are Unverified (vignette NativeOnly), so they ask first. A native document exported to `.pro6` leaves new images and background images out.
+  - **Also new everywhere:** image elements from `.pro6` files are now drawn (output, thumbnails, phone remote, `pp6tool render`) instead of warned about.
 
 ### E4 — Alignment, Layers, Snapping
 - [ ] Position panel (arrange, align to page, align selection, distribute, exact fields)
@@ -342,7 +354,7 @@ Filled in from real files and testing in PP6. Starting state:
 
 ## Unknowns to Verify
 - [ ] Every `Unverified` row in the Compatibility Matrix
-- [ ] PP6 element type for images (foreground) and how slide backgrounds are stored
+- [ ] PP6 element type for images (foreground) and how slide backgrounds are stored. **Foreground: `RVImageElement`** (real files; `source` is a URL-encoded absolute path, `scaleBehavior` / `scaleSize` / `imageOffset` meanings unknown, only the defaults are imported). Backgrounds: real files use a full-canvas `RVImageElement`; no slide media cue seen yet. Writing a new `RVImageElement` and flips (`flippedHorizontally="1"`?) still need a PP6 check.
 - [ ] Whether shadow and outline are per element or per run in `.pro6`.
   - Real hymn files use **per-run RTF outlines** (`\outl \strokewidth \strokec`, PLAN.md "Found in real files"). These aren't read or drawn yet.
   - The editor's outline is per box, using the element's stroke.

@@ -63,4 +63,6 @@ pub struct RenderWarning {
     pub message: String,
     /// The text is taller than its box (the editor badges the box and slide).
     pub overflow: bool,
+    /// An image that can't be shown (missing or unreadable file).
+    pub media: bool,
 }

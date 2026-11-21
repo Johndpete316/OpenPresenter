@@ -9,11 +9,13 @@ mod effects;
 mod error;
 mod fonts;
 mod frame;
+mod picture;
 mod slide;
 mod text;
 
 pub use error::{RenderError, RenderWarning};
 pub use fonts::{Fonts, ResolvedFont};
 pub use frame::{PixelRect, Placement, SlideFrame};
+pub use picture::{MAX_DECODED, adjusted_premultiplied, image_size};
 pub use slide::render_slide;
 pub use text::{BoxLayout, layout_box};

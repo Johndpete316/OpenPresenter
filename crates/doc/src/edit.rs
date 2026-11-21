@@ -68,6 +68,47 @@ pub enum Edit {
         element: usize,
         degrees: f64,
     },
+    /// Element opacity, 0–1.
+    SetOpacity {
+        group: usize,
+        slide: usize,
+        element: usize,
+        opacity: f64,
+    },
+    /// Mirror an image.
+    SetFlip {
+        group: usize,
+        slide: usize,
+        element: usize,
+        horizontal: bool,
+        vertical: bool,
+    },
+    /// Image adjustments (brightness, ..., vignette).
+    SetImageAdjust {
+        group: usize,
+        slide: usize,
+        element: usize,
+        adjust: Adjust,
+    },
+    /// Insert an element at `at` in the slide's elements (`None` = on top). It must
+    /// have a fresh UUID.
+    AddElement {
+        group: usize,
+        slide: usize,
+        at: Option<usize>,
+        element: Element,
+    },
+    RemoveElement {
+        group: usize,
+        slide: usize,
+        element: usize,
+    },
+    /// Slide background image (`None` = none).
+    SetBackgroundImage {
+        group: usize,
+        slide: usize,
+        image: Option<BackgroundImage>,
+    },
     SetSlideEnabled {
         group: usize,
         slide: usize,
@@ -201,6 +242,17 @@ impl Edit {
             Edit::SetShadow { .. } => "Drop shadow".into(),
             Edit::SetFrame { .. } => "Move".into(),
             Edit::SetRotation { .. } => "Rotate".into(),
+            Edit::SetOpacity { .. } => "Opacity".into(),
+            Edit::SetFlip { .. } => "Flip".into(),
+            Edit::SetImageAdjust { .. } => "Adjust image".into(),
+            Edit::AddElement {
+                element: Element::Image(_),
+                ..
+            } => "Insert image".into(),
+            Edit::AddElement { .. } => "Insert text box".into(),
+            Edit::RemoveElement { .. } => "Delete".into(),
+            Edit::SetBackgroundImage { image: Some(_), .. } => "Set background image".into(),
+            Edit::SetBackgroundImage { image: None, .. } => "Remove background image".into(),
             Edit::SetSlideEnabled { enabled: true, .. } => "Enable slide".into(),
             Edit::SetSlideEnabled { enabled: false, .. } => "Disable slide".into(),
             Edit::SetSlideNotes { .. } => "Edit notes".into(),
@@ -262,6 +314,36 @@ impl Edit {
             Edit::SetOutline { .. } | Edit::SetShadow { .. } => vec![Feature::Text],
             Edit::SetFrame { .. } => vec![Feature::ElementFrame],
             Edit::SetRotation { .. } => vec![Feature::ElementRotation],
+            Edit::SetOpacity { .. } => vec![Feature::ElementOpacity],
+            Edit::SetFlip { .. } => vec![Feature::ImageElement],
+            Edit::SetImageAdjust { adjust, .. } => {
+                let mut v = vec![Feature::ImageElement];
+                if adjust.has_color() {
+                    v.push(Feature::ImageAdjustColor);
+                }
+                if adjust.has_vignette() {
+                    v.push(Feature::Vignette);
+                }
+                v
+            }
+            Edit::AddElement { element, .. } => match element {
+                Element::Image(_) => vec![Feature::ImageElement],
+                // A copy of an existing text box: .pro6 holds it.
+                Element::Text(t) if t.src.is_some() => vec![Feature::Text, Feature::ElementFrame],
+                _ => vec![Feature::NewTextBox],
+            },
+            Edit::RemoveElement { .. } => vec![Feature::SlideStructure],
+            Edit::SetBackgroundImage { image: Some(b), .. } => {
+                let mut v = vec![Feature::ImageBackground];
+                if b.adjust.has_color() {
+                    v.push(Feature::ImageAdjustColor);
+                }
+                if b.adjust.has_vignette() {
+                    v.push(Feature::Vignette);
+                }
+                v
+            }
+            Edit::SetBackgroundImage { image: None, .. } => vec![Feature::SlideStructure],
             Edit::SetSlideBackground { .. } => vec![Feature::BackgroundColor],
             Edit::Batch { edits, .. } => {
                 let mut v: Vec<Feature> = edits.iter().flat_map(Edit::features).collect();
@@ -374,7 +456,10 @@ impl Edit {
                 {
                     return Err(not_found("usable size"));
                 }
-                text_mut(doc, *group, *slide, *element)?.frame = *frame;
+                match placed_mut(doc, *group, *slide, *element)? {
+                    Placed::Text(t) => t.frame = *frame,
+                    Placed::Image(i) => i.frame = *frame,
+                }
                 Ok(())
             }
             Edit::SetRotation {
@@ -386,7 +471,97 @@ impl Edit {
                 if !degrees.is_finite() {
                     return Err(not_found("usable angle"));
                 }
-                text_mut(doc, *group, *slide, *element)?.rotation = *degrees;
+                match placed_mut(doc, *group, *slide, *element)? {
+                    Placed::Text(t) => t.rotation = *degrees,
+                    Placed::Image(i) => i.rotation = *degrees,
+                }
+                Ok(())
+            }
+            Edit::SetOpacity {
+                group,
+                slide,
+                element,
+                opacity,
+            } => {
+                if !opacity.is_finite() {
+                    return Err(not_found("usable opacity"));
+                }
+                let o = opacity.clamp(0.0, 1.0);
+                match placed_mut(doc, *group, *slide, *element)? {
+                    Placed::Text(t) => t.opacity = o,
+                    Placed::Image(i) => i.opacity = o,
+                }
+                Ok(())
+            }
+            Edit::SetFlip {
+                group,
+                slide,
+                element,
+                horizontal,
+                vertical,
+            } => {
+                let i = image_mut(doc, *group, *slide, *element)?;
+                i.flip_h = *horizontal;
+                i.flip_v = *vertical;
+                Ok(())
+            }
+            Edit::SetImageAdjust {
+                group,
+                slide,
+                element,
+                adjust,
+            } => {
+                image_mut(doc, *group, *slide, *element)?.adjust = clean_adjust(adjust)?;
+                Ok(())
+            }
+            Edit::AddElement {
+                group,
+                slide,
+                at,
+                element,
+            } => {
+                let s = slide_mut(doc, *group, *slide)?;
+                let at = at.unwrap_or(s.elements.len());
+                if at > s.elements.len() {
+                    return Err(not_found("element position"));
+                }
+                if element
+                    .frame()
+                    .is_some_and(|f| !(f.width > 0.0 && f.height > 0.0))
+                {
+                    return Err(not_found("usable size"));
+                }
+                if s.elements.iter().any(|e| e.uuid() == element.uuid()) {
+                    return Err(not_found("new element ID"));
+                }
+                s.elements.insert(at, element.clone());
+                Ok(())
+            }
+            Edit::RemoveElement {
+                group,
+                slide,
+                element,
+            } => {
+                let s = slide_mut(doc, *group, *slide)?;
+                if *element >= s.elements.len() {
+                    return Err(not_found("element"));
+                }
+                s.elements.remove(*element);
+                Ok(())
+            }
+            Edit::SetBackgroundImage {
+                group,
+                slide,
+                image,
+            } => {
+                let image = match image {
+                    Some(b) => Some(BackgroundImage {
+                        adjust: clean_adjust(&b.adjust)?,
+                        ..b.clone()
+                    }),
+                    None => None,
+                };
+                slide_mut(doc, *group, *slide)?.background_image = image;
                 Ok(())
             }
             Edit::SetSlideEnabled {
@@ -570,6 +745,12 @@ impl Edit {
             | Edit::SetShadow { group, slide, .. }
             | Edit::SetFrame { group, slide, .. }
             | Edit::SetRotation { group, slide, .. }
+            | Edit::SetOpacity { group, slide, .. }
+            | Edit::SetFlip { group, slide, .. }
+            | Edit::SetImageAdjust { group, slide, .. }
+            | Edit::AddElement { group, slide, .. }
+            | Edit::RemoveElement { group, slide, .. }
+            | Edit::SetBackgroundImage { group, slide, .. }
             | Edit::SetSlideBackground { group, slide, .. }
             | Edit::DuplicateSlide { group, slide } => at(*group, *slide).into_iter().collect(),
             Edit::Batch { edits, .. } => edits.iter().flat_map(|e| e.slides_touched(doc)).collect(),
@@ -604,7 +785,64 @@ fn text_mut(
 fn first_text_mut(s: &mut Slide) -> Option<&mut TextBox> {
     s.elements.iter_mut().find_map(|e| match e {
         Element::Text(t) => Some(&mut **t),
-        Element::Pro6(_) => None,
+        _ => None,
+    })
+}
+
+enum Placed<'a> {
+    Text(&'a mut TextBox),
+    Image(&'a mut ImageBox),
+}
+
+/// An element the editor can move (a text box or an image).
+fn placed_mut(
+    doc: &mut Document,
+    group: usize,
+    slide: usize,
+    element: usize,
+) -> Result<Placed<'_>, EditError> {
+    match slide_mut(doc, group, slide)?.elements.get_mut(element) {
+        Some(Element::Text(t)) => Ok(Placed::Text(t)),
+        Some(Element::Image(i)) => Ok(Placed::Image(i)),
+        _ => Err(not_found("element")),
+    }
+}
+
+fn image_mut(
+    doc: &mut Document,
+    group: usize,
+    slide: usize,
+    element: usize,
+) -> Result<&mut ImageBox, EditError> {
+    match slide_mut(doc, group, slide)?.elements.get_mut(element) {
+        Some(Element::Image(i)) => Ok(i),
+        _ => Err(not_found("image")),
+    }
+}
+
+/// Adjustments clamped to their ranges; refuses NaN.
+fn clean_adjust(a: &Adjust) -> Result<Adjust, EditError> {
+    let v = [
+        a.brightness,
+        a.contrast,
+        a.saturation,
+        a.temperature,
+        a.tint,
+        a.vignette,
+        a.vignette_size,
+    ];
+    if !v.iter().all(|v| v.is_finite()) {
+        return Err(not_found("usable adjustment"));
+    }
+    let c = |v: f64| v.clamp(-1.0, 1.0);
+    Ok(Adjust {
+        brightness: c(a.brightness),
+        contrast: c(a.contrast),
+        saturation: c(a.saturation),
+        temperature: c(a.temperature),
+        tint: c(a.tint),
+        vignette: a.vignette.clamp(0.0, 1.0),
+        vignette_size: a.vignette_size.clamp(0.0, 1.0),
     })
 }
 
