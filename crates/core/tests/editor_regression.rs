@@ -1,0 +1,156 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+//! Regression test for the M7 editor behaviour, kept through the editor redesign
+//! (docs/editor-audit.md): open → edit text → reorder slides and groups → edit an
+//! arrangement → save → reopen. Written against the M7 `pro6` operations first; now
+//! runs the same flow through the native model (`doc`), which the app uses, with the
+//! real save path (backup + atomic write) and a fresh parse from disk.
+
+use std::path::PathBuf;
+
+use doc::{Edit as Op, new_uuid};
+
+fn fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures")
+        .join(name)
+}
+
+fn text(doc: &doc::Document, g: usize, s: usize) -> String {
+    doc.groups()[g].slides()[s].plain_text()
+}
+
+/// Everything the M7 editor can change, in a comparable form.
+/// (uuid, text, enabled)
+type SlideSummary = (String, String, bool);
+/// (uuid, name, colour, slides)
+type GroupSummary = (String, String, Option<[u8; 3]>, Vec<SlideSummary>);
+
+#[derive(Debug, PartialEq)]
+struct Summary {
+    groups: Vec<GroupSummary>,
+    arrangements: Vec<(String, String, Vec<String>)>,
+}
+
+fn summary(doc: &doc::Document) -> Summary {
+    let c = |c: &doc::Rgba| {
+        let b = |v: f64| (v * 255.0).round() as u8;
+        [b(c.r), b(c.g), b(c.b)]
+    };
+    let groups = doc
+        .groups()
+        .iter()
+        .enumerate()
+        .map(|(gi, g)| {
+            let slides = g
+                .slides()
+                .iter()
+                .enumerate()
+                .map(|(si, s)| {
+                    let t = s
+                        .text_boxes()
+                        .next()
+                        .map(|_| text(doc, gi, si))
+                        .unwrap_or_default();
+                    (s.uuid.clone(), t, s.enabled)
+                })
+                .collect();
+            (g.uuid.clone(), g.name.clone(), g.color.as_ref().map(c), slides)
+        })
+        .collect();
+    let arrangements = doc
+        .arrangements()
+        .into_iter()
+        .map(|a| {
+            let ids = a
+                .groups
+                .iter()
+                .map(|&g| doc.groups()[g].uuid.clone())
+                .collect();
+            (a.uuid, a.name, ids)
+        })
+        .collect();
+    Summary {
+        groups,
+        arrangements,
+    }
+}
+
+#[test]
+fn open_edit_reorder_arrange_save_reopen() {
+    let dir = std::env::temp_dir().join(format!("pp6-editor-regression-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("song.pro6");
+    std::fs::copy(fixture("song_1024x768.pro6"), &file).unwrap();
+
+    let mut doc = doc::open(&file).unwrap();
+    let before = summary(&doc);
+    assert_eq!(doc.groups().len(), 3);
+    let g0_uuid = doc.groups()[0].uuid.clone();
+    let g1_uuid = doc.groups()[1].uuid.clone();
+    let first_slide = doc.groups()[0].slides()[0].uuid.clone();
+    let second_slide = doc.groups()[0].slides()[1].uuid.clone();
+
+    let arr = new_uuid();
+    let ops = [
+        Op::SetText {
+            group: 0,
+            slide: 0,
+            text: "Edited line one\nEdited line two".into(),
+        },
+        // Swap the first two slides of group 0.
+        Op::MoveSlide {
+            group: 0,
+            slide: 0,
+            to_group: 0,
+            to: 1,
+        },
+        // Move group 0 below group 1.
+        Op::MoveGroup { from: 0, to: 1 },
+        Op::RenameGroup {
+            group: 2,
+            name: "Bridge".into(),
+        },
+        Op::AddArrangement {
+            uuid: arr.clone(),
+            name: "Sunday".into(),
+            groups: vec![0, 1, 0],
+        },
+        Op::SetArrangementGroups {
+            uuid: arr.clone(),
+            groups: vec![1, 0, 1, 2],
+        },
+    ];
+    for op in &ops {
+        op.apply(&mut doc).unwrap();
+    }
+    let edited = summary(&doc);
+    assert_ne!(edited, before);
+
+    doc::save(&doc).unwrap();
+    let back = doc::load(&file).unwrap();
+    assert_eq!(summary(&back), edited, "reopened file matches the edits");
+
+    // Spot checks on what the edits did.
+    assert_eq!(back.groups()[0].uuid, g1_uuid);
+    assert_eq!(back.groups()[1].uuid, g0_uuid);
+    assert_eq!(back.groups()[1].slides()[0].uuid, second_slide);
+    assert_eq!(back.groups()[1].slides()[1].uuid, first_slide);
+    assert_eq!(text(&back, 1, 1), "Edited line one\nEdited line two");
+    assert_eq!(back.groups()[2].name, "Bridge");
+    let a = back.arrangements().into_iter().find(|a| a.uuid == arr).unwrap();
+    assert_eq!(a.name, "Sunday");
+    assert_eq!(a.groups, vec![1, 0, 1, 2]);
+
+    // The backup is the untouched original.
+    let bak = doc::load(&dir.join("song.pro6.bak")).unwrap();
+    assert_eq!(summary(&bak), before);
+    assert_eq!(
+        std::fs::read(dir.join("song.pro6.bak")).unwrap(),
+        std::fs::read(fixture("song_1024x768.pro6")).unwrap()
+    );
+
+    // Saving again without changes is stable.
+    doc::save(&back).unwrap();
+    assert_eq!(summary(&doc::load(&file).unwrap()), edited);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

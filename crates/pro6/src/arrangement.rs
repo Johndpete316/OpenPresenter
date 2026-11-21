@@ -21,6 +21,8 @@ pub struct Arrangement {
     pub groups: Vec<usize>,
     /// Group IDs listed by the arrangement that match no group.
     pub unknown_group_ids: Vec<String>,
+    /// Every group ID the arrangement lists, in order (known or not).
+    pub group_ids: Vec<String>,
 }
 
 impl Document {
@@ -43,6 +45,7 @@ impl Document {
                 collect_strings(el, &mut ids);
                 let mut groups = Vec::new();
                 let mut unknown_group_ids = Vec::new();
+                let group_ids = ids.clone();
                 for id in ids {
                     match self
                         .groups()
@@ -59,6 +62,7 @@ impl Document {
                     color: attr("color").as_deref().and_then(Rgba::parse),
                     groups,
                     unknown_group_ids,
+                    group_ids,
                 })
             })
             .collect()

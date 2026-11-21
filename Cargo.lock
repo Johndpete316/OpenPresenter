@@ -134,6 +134,7 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "directories",
+ "doc",
  "egui",
  "egui-winit",
  "egui_glow",
@@ -808,6 +809,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
  "libloading 0.8.9",
+]
+
+[[package]]
+name = "doc"
+version = "0.1.0"
+dependencies = [
+ "pretty_assertions",
+ "pro6",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]
@@ -2539,6 +2552,7 @@ name = "pp6core"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "doc",
  "pretty_assertions",
  "pro6",
  "serde",
@@ -2554,6 +2568,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "doc",
  "image",
  "insta",
  "pro6",
@@ -2794,6 +2809,7 @@ name = "render"
 version = "0.1.0"
 dependencies = [
  "cosmic-text",
+ "doc",
  "fontdb",
  "image",
  "pretty_assertions",
@@ -4058,11 +4074,11 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "crossbeam-channel",
+ "doc",
  "futures-util",
  "getrandom 0.4.3",
  "image",
  "pp6core",
- "pro6",
  "render",
  "serde",
  "serde_json",

@@ -26,7 +26,7 @@ pub struct ThumbKey {
 
 pub struct ThumbRequest {
     pub key: ThumbKey,
-    pub doc: Arc<pro6::Document>,
+    pub doc: Arc<doc::Document>,
 }
 
 pub struct ThumbResult {

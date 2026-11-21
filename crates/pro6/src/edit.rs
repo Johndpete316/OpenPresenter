@@ -136,6 +136,77 @@ impl TextElement {
     }
 }
 
+impl TextElement {
+    /// Replace the element's text with styled paragraphs, regenerating `RTFData` and
+    /// `PlainText`. Each run's `font` name is looked up in the existing font table
+    /// (added if missing; `font_index` is ignored); colours are added to the colour
+    /// table as needed. `PlainText` keeps its newline style. UUIDs are not touched.
+    pub fn set_rich_text(
+        &mut self,
+        paragraphs: Vec<Paragraph>,
+        win: WinPayloads,
+        file: &Path,
+    ) -> Result<(), EditError> {
+        let _span = tracing::info_span!("set_rich_text", uuid = %self.uuid).entered();
+        let old = match self.rtf_doc(file) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(file = %file.display(), xml_path = %self.xml_path, error = %e, "text edit refused");
+                return Err(EditError::ExistingRtf(e));
+            }
+        };
+        let (mut fonts, colors, code_page) = match old {
+            Some(d) => (d.fonts, d.colors, d.code_page),
+            None => (Vec::new(), Vec::new(), None),
+        };
+        let mut paragraphs = paragraphs;
+        for run in paragraphs.iter_mut().flat_map(|p| p.runs.iter_mut()) {
+            let Some(name) = run.font.clone() else {
+                return Err(EditError::NoStyle {
+                    uuid: self.uuid.clone(),
+                });
+            };
+            run.font_index = match fonts.iter().find(|f| f.name == name) {
+                Some(f) => f.index,
+                None => {
+                    let index = fonts.iter().map(|f| f.index + 1).max().unwrap_or(0);
+                    fonts.push(rtf::FontEntry {
+                        index,
+                        name,
+                        charset: Some(0),
+                    });
+                    index
+                }
+            };
+        }
+        let new = RtfDoc {
+            fonts,
+            colors,
+            paragraphs,
+            code_page,
+            unhandled_words: Default::default(),
+        };
+        let text = new.plain_text();
+        set_payload(&mut self.rtf, "RTFData", rtf::write(&new).into_bytes());
+        let newline = match &self.plain_text {
+            Some(p) if p.value.bytes.windows(2).any(|w| w == b"\r\n") => "\r\n",
+            Some(p) if p.value.bytes.contains(&b'\r') => "\r",
+            _ => "\n",
+        };
+        set_payload(
+            &mut self.plain_text,
+            "PlainText",
+            text.replace('\n', newline).into_bytes(),
+        );
+        if win == WinPayloads::Drop {
+            self.win_flow = None;
+            self.win_font = None;
+        }
+        tracing::info!(chars = text.chars().count(), win_payloads = ?win, "rich text edited");
+        Ok(())
+    }
+}
+
 fn set_payload(slot: &mut Option<Leaf<Payload>>, ivar: &str, bytes: Vec<u8>) {
     match slot {
         Some(leaf) => leaf.value.bytes = bytes,

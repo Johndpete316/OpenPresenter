@@ -34,6 +34,7 @@ image = { version = "0.25", default-features = false, features = [
 media.workspace = true
 pp6core.workspace = true
 pro6.workspace = true
+doc.workspace = true
 raw-window-handle = "0.6"
 render.workspace = true
 rfd = "0.18"

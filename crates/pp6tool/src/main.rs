@@ -1,5 +1,6 @@
 //! `pp6tool`: command-line tools for `.pro6` libraries.
 
+mod convert_cmd;
 mod render_cmd;
 mod report;
 mod rescale_cmd;
@@ -87,6 +88,18 @@ enum Command {
         #[arg(long = "fonts")]
         font_dirs: Vec<PathBuf>,
     },
+    /// Convert a .pro6 to the native .opres format (checked by converting back), or a
+    /// .opres back to .pro6. Never overwrites a file.
+    Convert {
+        file: PathBuf,
+        /// Output file (default: next to the input with the other extension).
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// .opres → .pro6: leave out slides marked incompatible (default: write them
+        /// without the parts .pro6 can't hold).
+        #[arg(long)]
+        skip_incompatible: bool,
+    },
 }
 
 fn main() -> anyhow::Result<ExitCode> {
@@ -167,6 +180,20 @@ fn main() -> anyhow::Result<ExitCode> {
             if results.iter().any(|r| r.error.is_some()) {
                 return Ok(ExitCode::FAILURE);
             }
+        }
+        Command::Convert {
+            file,
+            out,
+            skip_incompatible,
+        } => {
+            print!(
+                "{}",
+                convert_cmd::run(&convert_cmd::Options {
+                    file,
+                    out,
+                    skip_incompatible,
+                })?
+            );
         }
         Command::Render {
             file,

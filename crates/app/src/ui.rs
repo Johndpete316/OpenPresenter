@@ -161,7 +161,7 @@ impl UiState {
     pub(crate) fn thumb_public(
         &mut self,
         tx: &Sender<ThumbRequest>,
-        doc: &Arc<pro6::Document>,
+        doc: &Arc<doc::Document>,
         flat: usize,
     ) -> (ThumbKey, Option<&Result<TextureHandle, String>>) {
         self.thumb(tx, doc, flat)
@@ -170,7 +170,7 @@ impl UiState {
     fn thumb(
         &mut self,
         tx: &Sender<ThumbRequest>,
-        doc: &Arc<pro6::Document>,
+        doc: &Arc<doc::Document>,
         flat: usize,
     ) -> (ThumbKey, Option<&Result<TextureHandle, String>>) {
         let width = THUMB_W;
@@ -1263,7 +1263,7 @@ fn drag_label(ctx: &egui::Context, show: &ShowState) {
 
 // ─────────────────────────── presentation ───────────────────────────
 
-pub(crate) fn color32(c: Option<pro6::Rgba>) -> Color32 {
+pub(crate) fn color32(c: Option<doc::Rgba>) -> Color32 {
     let q = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     match c {
         Some(c) if c.a > 0.0 => Color32::from_rgb(q(c.r), q(c.g), q(c.b)),
@@ -1328,7 +1328,9 @@ fn presentation(
         return;
     };
     if st.edit.on {
-        crate::editor::grid_edit(ui, st, show, thumbs, actions, &path, &doc);
+        // The editor shows its own copy (unsaved edits), not the saved document.
+        let edited = show.edited_doc(&path).cloned().unwrap_or(doc);
+        crate::editor::grid_edit(ui, st, show, thumbs, actions, &path, &edited);
         return;
     }
     let arrangement = show.arrangement_for(&path);
@@ -1363,15 +1365,8 @@ fn presentation(
                 }
             });
         // Slide timers are supported; other cues and timeline/media tracks aren't yet.
-        let timeline_cues = doc
-            .timeline
-            .as_ref()
-            .is_some_and(|t| t.time_cue_count() + t.media_track_count() > 0);
-        let other_cues = match doc.slide_timings() {
-            Some(t) => t.other_cues,
-            None => doc.slides().map(|s| s.cue_count()).sum(),
-        };
-        if timeline_cues || other_cues > 0 {
+        let r = doc.cue_report;
+        if r.timeline_cues > 0 || r.other_cues > 0 {
             ui.label(theme::icon_text(icon::WARNING, 14.0).color(Color32::YELLOW))
                 .on_hover_text("Some cues (media / timeline) in this file aren't supported yet.");
         }

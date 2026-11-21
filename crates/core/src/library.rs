@@ -1,5 +1,6 @@
-//! Library index: one entry per `.pro6` file (path, title, mtime, size, search
-//! tokens from title and slide text). Cached on disk so the library shows
+//! Library index: one entry per presentation file (path, title, mtime, size, search
+//! tokens from title and slide text). A `.opres` saved next to a `.pro6` takes its
+//! place (the `.pro6` is left on disk but not listed). Cached on disk so the library shows
 //! instantly; revalidated in the background, re-parsing only changed files.
 //! The full document is parsed for display only when a presentation is opened.
 
@@ -9,7 +10,7 @@ use std::time::{Instant, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct IndexEntry {
@@ -77,6 +78,8 @@ impl LibraryIndex {
         }
         files.sort();
         files.dedup();
+        // A .opres next to a .pro6 of the same name replaces it.
+        files.retain(|f| !doc::is_pro6(f) || !f.with_extension(doc::NATIVE_EXT).is_file());
         let mut stats = RevalidateStats::default();
         let mut entries = Vec::with_capacity(files.len());
         for path in files {
@@ -171,18 +174,11 @@ fn index_file(path: &Path, modified_ms: u64, size: u64) -> IndexEntry {
         text_tokens: Vec::new(),
         error: None,
     };
-    match pro6::load(path) {
-        Ok(doc) => {
+    match doc::load(path) {
+        Ok(d) => {
             let mut text = String::new();
-            for el in doc.text_elements().filter(|e| !e.is_placeholder(path)) {
-                match el.rtf_doc(path) {
-                    Ok(Some(rtf)) => text.push_str(&rtf.plain_text()),
-                    _ => {
-                        if let Some(p) = &el.plain_text {
-                            text.push_str(&p.value.text());
-                        }
-                    }
-                }
+            for s in d.slides() {
+                text.push_str(&s.plain_text());
                 text.push('\n');
             }
             entry.text_tokens = tokenize(&text);
@@ -198,10 +194,7 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
         let path = entry.path();
         if entry.file_type()?.is_dir() {
             collect(&path, out)?;
-        } else if path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("pro6"))
-        {
+        } else if doc::is_pro6(&path) || doc::is_native(&path) {
             out.push(path);
         }
     }
@@ -261,6 +254,28 @@ mod tests {
         assert_eq!(titles("amaz gra"), ["song_1024x768"], "word prefixes");
         assert!(titles("zzz").is_empty());
         assert_eq!(idx.search("").len(), idx.entries.len());
+    }
+
+    #[test]
+    fn opres_replaces_the_pro6_it_was_saved_next_to() {
+        let dir = std::env::temp_dir().join(format!("pp6core-lib-opres-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pro6 = dir.join("song.pro6");
+        std::fs::copy(fixtures().join("song_1024x768.pro6"), &pro6).unwrap();
+        let (idx, _) = LibraryIndex::default().revalidate(std::slice::from_ref(&dir));
+        assert_eq!(idx.entries.len(), 1);
+        assert_eq!(idx.entries[0].path, pro6);
+
+        let mut d = doc::open(&pro6).unwrap();
+        d.mode = doc::Mode::Native;
+        let saved = doc::save(&d).unwrap();
+        let (idx, s) = idx.revalidate(std::slice::from_ref(&dir));
+        assert_eq!(idx.entries.len(), 1, "{:?}", idx.entries);
+        assert_eq!(idx.entries[0].path, saved.path);
+        assert_eq!(s.removed, 1);
+        assert!(idx.search("wretch").len() == 1, "native text is indexed");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

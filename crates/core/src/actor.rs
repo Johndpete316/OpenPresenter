@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use crossbeam_channel::{Receiver, Sender};
-use pro6::Document;
+use doc::Document;
 
 use crate::command::Command;
 use crate::order::{SlideRef, find_nearest, next_enabled, prev_enabled, slide_order};
@@ -28,7 +28,8 @@ enum Msg {
     Loaded(PathBuf, Result<Arc<Document>, String>),
     PlaylistLoaded(PathBuf, Result<Playlist, String>),
     PlaylistSaved(PathBuf, Result<(), String>),
-    Saved(PathBuf, Result<(), String>),
+    /// `(presentation, document sent to save, result)`.
+    Saved(PathBuf, Arc<Document>, Result<Document, String>),
     /// Publish a final snapshot and stop.
     Shutdown,
 }
@@ -39,7 +40,7 @@ enum IoJob {
     SavePlaylist(Playlist, PathBuf),
     /// Move a deleted playlist's file into `deleted/` (kept, not destroyed).
     DeletePlaylist(PathBuf),
-    SaveDocument(Arc<Document>),
+    SaveDocument(PathBuf, Arc<Document>),
 }
 
 /// Handle used by every command source.
@@ -110,7 +111,7 @@ fn io_worker(rx: &Receiver<IoJob>, back: &Sender<Msg>) {
     while let Ok(job) = rx.recv() {
         let msg = match job {
             IoJob::Load(path) => {
-                let r = pro6::load(&path)
+                let r = doc::open(&path)
                     .map(Arc::new)
                     .map_err(|e| e.user_message());
                 Msg::Loaded(path, r)
@@ -119,9 +120,9 @@ fn io_worker(rx: &Receiver<IoJob>, back: &Sender<Msg>) {
                 let r = Playlist::load(&path).map_err(|e| e.user_message());
                 Msg::PlaylistLoaded(path, r)
             }
-            IoJob::SaveDocument(doc) => {
-                let path = doc.path.clone();
-                Msg::Saved(path, save_with_backup(&doc))
+            IoJob::SaveDocument(path, d) => {
+                let r = doc::save(&d).map_err(|e| e.user_message());
+                Msg::Saved(path, d, r)
             }
             IoJob::SavePlaylist(p, path) => {
                 let r = p.save(&path).map_err(|e| e.user_message());
@@ -141,27 +142,6 @@ fn io_worker(rx: &Receiver<IoJob>, back: &Sender<Msg>) {
         // still reach the disk. The loop ends when the queue is empty and closed.
         let _ = back.send(msg);
     }
-}
-
-/// Keep the previous version as `<name>.pro6.bak` (replacing an older backup), then
-/// save atomically.
-pub fn save_with_backup(doc: &Document) -> Result<(), String> {
-    let path = &doc.path;
-    if path.exists() {
-        let mut name = path
-            .file_name()
-            .map(|n| n.to_os_string())
-            .unwrap_or_default();
-        name.push(".bak");
-        let bak = path.with_file_name(name);
-        if let Err(e) = std::fs::copy(path, &bak) {
-            return Err(format!(
-                "'{}' wasn't saved: the backup copy couldn't be made ({e}). Your edits are still open; nothing on disk changed.",
-                path.display()
-            ));
-        }
-    }
-    pro6::save(doc, path).map_err(|e| e.user_message())
 }
 
 struct PendingGoTo {
@@ -190,6 +170,8 @@ struct Core {
     /// Loop stopped by the operator (Stop / Clear) for this live presentation: don't
     /// auto-start again until it is put live again or Start Loop is pressed.
     loop_suppressed: Option<PathBuf>,
+    /// Undo history of each editor copy.
+    histories: std::collections::HashMap<PathBuf, doc::History>,
 }
 
 impl Core {
@@ -208,6 +190,7 @@ impl Core {
             playlists_dir: config.playlists_dir.clone(),
             pending_loop: None,
             loop_suppressed: None,
+            histories: std::collections::HashMap::new(),
         };
         if let Some(dir) = &config.playlists_dir {
             let (playlists, errors) = crate::playlist::load_dir(dir);
@@ -268,11 +251,8 @@ impl Core {
                     }
                     Err(e) => self.notice(NoticeLevel::Error, e),
                 },
-                Msg::Saved(path, result) => match result {
-                    Ok(()) => {
-                        Arc::make_mut(&mut self.s.unsaved).remove(&path);
-                        self.notice(NoticeLevel::Info, format!("Saved {}", path.display()));
-                    }
+                Msg::Saved(path, sent, result) => match result {
+                    Ok(saved) => self.saved(path, &sent, saved),
                     Err(e) => self.notice(NoticeLevel::Error, e),
                 },
                 // Playlists save on every change; only failures are worth a notice.
@@ -340,7 +320,7 @@ impl Core {
         match result {
             Ok(doc) => {
                 Arc::make_mut(&mut self.s.load_errors).remove(&path);
-                for w in &doc.warnings {
+                for w in doc.pro6.iter().flat_map(|p| &p.warnings) {
                     tracing::debug!(file = %path.display(), path = %w.xml_path, msg = %w.message, "parse warning");
                 }
                 Arc::make_mut(&mut self.s.docs).insert(path.clone(), doc);
@@ -391,7 +371,7 @@ impl Core {
         while self.doc_lru.len() > DOC_CACHE {
             let keep = |p: &PathBuf, s: &ShowState| {
                 s.is_live(p)
-                    || s.unsaved.contains(p)
+                    || s.editing.contains_key(p)
                     || s.selected.as_ref() == Some(p)
                     || s.in_any_playlist(p)
             };
@@ -592,10 +572,16 @@ impl Core {
                 }
             }
             Command::PlaylistSelect(r) => self.select_item(r),
-            Command::Edit { presentation, op } => self.edit(presentation, &op),
-            Command::Save(path) => match self.s.docs.get(&path) {
-                Some(doc) => {
-                    let _ = self.io.send(IoJob::SaveDocument(doc.clone()));
+            Command::Edit {
+                presentation,
+                edit,
+                accept_native,
+            } => self.edit(presentation, &edit, accept_native),
+            Command::Undo(path) => self.undo_redo(&path, true),
+            Command::Redo(path) => self.undo_redo(&path, false),
+            Command::Save(path) => match self.s.edited_doc(&path) {
+                Some(d) => {
+                    let _ = self.io.send(IoJob::SaveDocument(path.clone(), d.clone()));
                 }
                 None => self.notice(
                     NoticeLevel::Warning,
@@ -608,70 +594,165 @@ impl Core {
             Command::StartLoop => self.start_loop(at),
             Command::StopLoop => self.stop_loop_by_operator("Loop stopped."),
             Command::Revert(path) => {
+                Arc::make_mut(&mut self.s.editing).remove(&path);
                 Arc::make_mut(&mut self.s.unsaved).remove(&path);
-                Arc::make_mut(&mut self.s.docs).remove(&path);
-                self.request_load(&path);
+                self.histories.remove(&path);
             }
         }
     }
 
-    fn edit(&mut self, path: PathBuf, op: &pro6::ops::Op) {
-        let Some(old) = self.s.docs.get(&path).cloned() else {
+    fn edit(&mut self, path: PathBuf, edit: &doc::Edit, accept_native: bool) {
+        let Some(current) = self.s.edited_doc(&path).cloned() else {
             self.notice(
                 NoticeLevel::Warning,
                 format!("'{}' isn't open, so it can't be edited.", path.display()),
             );
             return;
         };
-        let mut doc = (*old).clone();
-        if let Err(e) = op.apply(&mut doc) {
+        let check = doc::check(&current, edit);
+        if let doc::Check::NeedsNative { features, .. } = &check
+            && !accept_native
+        {
+            let names: Vec<&str> = features.iter().map(|f| f.name()).collect();
+            self.notice(
+                NoticeLevel::Warning,
+                format!(
+                    "{} can't be saved in a ProPresenter 6 file. Nothing was changed.",
+                    names.join(", ")
+                ),
+            );
+            return;
+        }
+        let mut d = (*current).clone();
+        if let Err(e) = edit.apply(&mut d) {
             self.notice(NoticeLevel::Warning, e.user_message());
             return;
         }
-        let doc = Arc::new(doc);
-        Arc::make_mut(&mut self.s.docs).insert(path.clone(), doc.clone());
-        Arc::make_mut(&mut self.s.unsaved).insert(path.clone());
+        if let doc::Check::NeedsNative { slides, .. } = &check {
+            doc::mark_native(&mut d, slides);
+        }
+        self.histories
+            .entry(path.clone())
+            .or_default()
+            .record(edit.label(), current);
+        self.set_editing(&path, Arc::new(d));
+    }
+
+    fn undo_redo(&mut self, path: &PathBuf, undo: bool) {
+        let Some(current) = self.s.editing.get(path).map(|e| e.doc.clone()) else {
+            return;
+        };
+        let h = self.histories.entry(path.clone()).or_default();
+        let to = if undo { h.undo(current) } else { h.redo(current) };
+        if let Some(d) = to {
+            self.set_editing(path, d);
+        }
+    }
+
+    /// Make `d` the editor copy of `path`; it's unsaved unless it is the saved document.
+    fn set_editing(&mut self, path: &PathBuf, d: Arc<Document>) {
+        let h = self.histories.get(path);
+        let clean = self.s.docs.get(path).is_some_and(|s| Arc::ptr_eq(s, &d));
+        Arc::make_mut(&mut self.s.editing).insert(
+            path.clone(),
+            crate::state::Editing {
+                doc: d,
+                undo: h.and_then(|h| h.undo_label()).map(str::to_owned),
+                redo: h.and_then(|h| h.redo_label()).map(str::to_owned),
+            },
+        );
+        let unsaved = Arc::make_mut(&mut self.s.unsaved);
+        if clean {
+            unsaved.remove(path);
+        } else {
+            unsaved.insert(path.clone());
+        }
+    }
+
+    /// A save finished: the saved document becomes the one the grid and output use
+    /// (the output switches at its next slide change; see `follow_saved`).
+    fn saved(&mut self, path: PathBuf, sent: &Arc<Document>, saved: Document) {
+        let first_native = saved.mode == doc::Mode::Native && !doc::is_native(&sent.path);
+        let file = saved.path.clone();
+        let saved = Arc::new(saved);
+        Arc::make_mut(&mut self.s.docs).insert(path.clone(), saved.clone());
+        if self
+            .s
+            .editing
+            .get(&path)
+            .is_some_and(|e| Arc::ptr_eq(&e.doc, sent))
+        {
+            self.set_editing(&path, saved.clone());
+        }
         // A removed arrangement can't stay chosen.
-        let arrangements = doc.arrangements();
         if let Some(Some(a)) = self.s.arrangements.get(&path)
-            && !arrangements.iter().any(|x| x.uuid.eq_ignore_ascii_case(a))
+            && !saved
+                .arrangements
+                .iter()
+                .any(|x| x.uuid.eq_ignore_ascii_case(a))
         {
             Arc::make_mut(&mut self.s.arrangements).insert(path.clone(), None);
         }
-        // Follow the live slide (by UUID) into the edited document so edits show on
-        // screen; if it was deleted, the screen keeps the old version until the next trigger.
-        if let Some(live) = self.s.live.as_ref().filter(|l| l.path == path) {
-            let uuid = live
-                .doc
-                .slides()
-                .nth(live.slide.flat)
-                .map(|s| s.uuid.clone());
-            let arrangement = self.s.arrangement_for(&path);
-            let order = slide_order(&doc, arrangement.as_deref());
-            let found = uuid.and_then(|u| {
-                let flat = doc.slides().position(|s| s.uuid == u)?;
-                let probe = SlideRef {
-                    flat,
-                    group: 0,
-                    slide: 0,
-                    enabled: true,
-                };
-                find_nearest(&order, probe, live.position.unwrap_or(0))
-            });
-            if let Some(pos) = found {
-                let slide = order[pos];
-                self.s.live = Some(Live {
-                    path: path.clone(),
-                    doc,
-                    arrangement,
-                    order: Arc::new(order),
-                    position: Some(pos),
-                    slide,
-                });
-            } else if let Some(l) = self.s.live.as_mut() {
-                l.position = None;
-            }
+        let text = if first_native {
+            format!(
+                "Saved as {} (the ProPresenter 6 file is unchanged).",
+                file.display()
+            )
+        } else {
+            format!("Saved {}", file.display())
+        };
+        self.notice(NoticeLevel::Info, text);
+    }
+
+    /// If the live presentation was saved since it went live, switch to the saved
+    /// version, keeping the live slide (by UUID). Called on slide changes, so a save
+    /// never changes what's on screen by itself.
+    fn follow_saved(&mut self) {
+        let Some(live) = &self.s.live else { return };
+        let Some(d) = self.s.docs.get(&live.path).cloned() else {
+            return;
+        };
+        if Arc::ptr_eq(&d, &live.doc) {
+            return;
         }
+        let path = live.path.clone();
+        let uuid = live
+            .doc
+            .slides()
+            .nth(live.slide.flat)
+            .map(|s| s.uuid.clone());
+        let arrangement = self.s.arrangement_for(&path);
+        let order = slide_order(&d, arrangement.as_deref());
+        let found = uuid.and_then(|u| {
+            let flat = d.slides().position(|s| s.uuid == u)?;
+            let probe = SlideRef {
+                flat,
+                group: 0,
+                slide: 0,
+                enabled: true,
+            };
+            find_nearest(&order, probe, live.position.unwrap_or(0))
+        });
+        self.s.live = Some(match found {
+            Some(pos) => Live {
+                path,
+                doc: d,
+                arrangement,
+                slide: order[pos],
+                order: Arc::new(order),
+                position: Some(pos),
+            },
+            // The live slide was deleted: it stays on screen (old document), and the
+            // step goes on in the saved order (Next = its first enabled slide).
+            None => Live {
+                path,
+                doc: live.doc.clone(),
+                arrangement,
+                slide: live.slide,
+                order: Arc::new(order),
+                position: None,
+            },
+        });
     }
 
     fn start_loop(&mut self, at: Instant) {
@@ -902,6 +983,7 @@ impl Core {
     }
 
     fn step(&mut self, forward: bool, at: Instant) {
+        self.follow_saved();
         if let Some(live) = &self.s.live {
             let target = match (forward, live.position) {
                 (true, pos) => next_enabled(&live.order, pos),

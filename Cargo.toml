@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/pro6", "crates/core", "crates/render", "crates/media", "crates/web", "crates/app", "crates/pp6tool"]
+members = ["crates/pro6", "crates/doc", "crates/core", "crates/render", "crates/media", "crates/web", "crates/app", "crates/pp6tool"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,6 +10,7 @@ publish = false
 
 [workspace.dependencies]
 pro6 = { path = "crates/pro6" }
+doc = { path = "crates/doc" }
 render = { path = "crates/render" }
 pp6core = { path = "crates/core" }
 media = { path = "crates/media" }

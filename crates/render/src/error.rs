@@ -18,8 +18,14 @@ pub enum RenderError {
         slide_uuid: String,
         element_uuid: String,
     },
-    #[error(transparent)]
-    Text(#[from] pro6::ParseError),
+    /// The stored text can't be read (`message` is already a user message).
+    #[error("{file}: slide {slide_uuid} text can't be read: {message}", file = .file.display())]
+    BadText {
+        message: String,
+        file: PathBuf,
+        slide_uuid: String,
+        element_uuid: String,
+    },
     #[error("output size {width}x{height} is not usable")]
     BadTarget { width: u32, height: u32 },
 }
@@ -35,7 +41,7 @@ impl RenderError {
                 "Slide text refers to a font that isn't listed in the slide, so it can't be drawn. The slide is not shown."
                     .to_owned()
             }
-            RenderError::Text(e) => e.user_message(),
+            RenderError::BadText { message, .. } => message.clone(),
             RenderError::BadTarget { width, height } => {
                 format!("The output size {width}×{height} can't be drawn to. Check the output display settings.")
             }

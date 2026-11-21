@@ -315,7 +315,8 @@ fn first_text_mut(s: &mut Slide) -> Option<&mut crate::model::TextElement> {
     })
 }
 
-fn new_group(name: &str, color: Option<Rgba>) -> SlideGroup {
+/// An empty group with a new UUID.
+pub fn new_group(name: &str, color: Option<Rgba>) -> SlideGroup {
     let uuid = new_uuid();
     let color_str = color
         .map(|c| format!("{} {} {} {}", c.r, c.g, c.b, c.a))
@@ -342,7 +343,7 @@ fn new_group(name: &str, color: Option<Rgba>) -> SlideGroup {
 }
 
 /// Deep copy with new UUIDs for the slide, its elements and anything below that has one.
-fn fresh_copy(s: &Slide) -> Slide {
+pub fn fresh_copy(s: &Slide) -> Slide {
     let mut c = s.clone();
     c.uuid = new_uuid();
     refresh_raw_uuids(&mut c.extra.element);
@@ -361,7 +362,7 @@ fn fresh_copy(s: &Slide) -> Slide {
 }
 
 /// Replace every `UUID`/`uuid` attribute in a raw subtree (cues, media, ...).
-fn refresh_raw_uuids(el: &mut RawElement) {
+pub fn refresh_raw_uuids(el: &mut RawElement) {
     for name in ["UUID", "uuid"] {
         if el.attr(name).is_some() {
             el.set_attr(name, &new_uuid());

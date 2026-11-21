@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use pro6::CanvasSize;
+use doc::CanvasSize;
 
 use crate::error::RenderWarning;
 

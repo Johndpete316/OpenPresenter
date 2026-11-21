@@ -39,7 +39,8 @@ pub fn parse_size(s: &str) -> Result<(u32, u32), String> {
 }
 
 pub fn run(opts: &Options) -> anyhow::Result<Vec<SlideResult>> {
-    let doc = pro6::load(&opts.file)
+    // Exactly the given file (a .pro6 or .opres), as the app would show it.
+    let doc = doc::load(&opts.file)
         .map_err(|e| anyhow::anyhow!("{}\n  detail: {e}", e.user_message()))?;
     let started = Instant::now();
     let mut fonts = if opts.fonts_only {

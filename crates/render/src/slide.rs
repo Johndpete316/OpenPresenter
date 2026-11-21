@@ -1,8 +1,7 @@
 //! Lay out and rasterise one slide.
 //!
-//! Assumptions (docs/PLAN.md Unknowns): one RTF point = one canvas pixel, so
-//! `\fs` half-points / 2 = font size in canvas pixels; RTF "auto" colour (no
-//! `\cf`) = black. `verticalAlignment`: 0 = middle is **verified** (every real
+//! Assumptions (docs/PLAN.md Unknowns): one RTF point = one canvas pixel (the
+//! native run size is in canvas pixels); RTF "auto" colour (no `\cf`) = black. `verticalAlignment`: 0 = middle is **verified** (every real
 //! file uses 0 and PP6 shows it centred); 1 = top, 2 = bottom are assumed.
 //! Layout happens directly at output scale (font sizes and boxes multiplied by
 //! the fit scale), so text stays sharp on any output resolution.
@@ -10,8 +9,7 @@
 use std::time::Instant;
 
 use cosmic_text::{Align as CtAlign, Attrs, Buffer, Color, Family, Metrics, Shaping, Wrap};
-use pro6::rtf::Align;
-use pro6::{DisplayElement, Document, Rgba, Slide, TextElement};
+use doc::{Align, Document, Element, Rgba, Slide, TextBox, TextProblem, VAlign};
 
 use crate::error::{RenderError, RenderWarning};
 use crate::fonts::{Fonts, ResolvedFont};
@@ -35,21 +33,17 @@ pub fn render_slide(
         width,
         height,
         placement,
-        background: background(doc, slide),
+        background: slide.background.or(doc.background).map(to_rgba8),
         text: vec![0; width as usize * height as usize * 4],
         warnings: Vec::new(),
         render_time: Default::default(),
     };
-    for el in slide.elements() {
+    for el in &slide.elements {
         match el {
-            // PP6's "Double-click to edit" placeholder is never shown (blank slides).
-            DisplayElement::Text(t) if t.is_placeholder(&doc.path) => {}
-            DisplayElement::Text(t) => render_text(fonts, doc, slide, t, &mut frame)?,
-            DisplayElement::Other(raw) => frame.warnings.push(RenderWarning {
-                element_uuid: pro6::raw::RawElement::attr(raw, "UUID")
-                    .map(|a| a.raw_value.clone())
-                    .unwrap_or_default(),
-                message: format!("<{}> elements aren't drawn yet", raw.name),
+            Element::Text(t) => render_text(fonts, doc, slide, t, &mut frame)?,
+            Element::Pro6(raw) => frame.warnings.push(RenderWarning {
+                element_uuid: raw.uuid.clone(),
+                message: format!("<{}> elements aren't drawn yet", raw.kind),
             }),
         }
     }
@@ -62,34 +56,15 @@ pub fn render_slide(
     Ok(frame)
 }
 
-/// Slide background if the slide draws one, else the document's, else `None`
-/// (black, or background media when there is some).
-fn background(doc: &Document, slide: &Slide) -> Option<[u8; 4]> {
-    let draws = |e: &pro6::Extra| {
-        e.element
-            .attr("drawingBackgroundColor")
-            .is_some_and(|a| a.raw_value == "true")
-    };
-    let c = if draws(&slide.extra) {
-        slide.background_color
-    } else if draws(&doc.extra) {
-        doc.background_color
-    } else {
-        None
-    };
-    c.map(to_rgba8)
-}
-
 fn to_rgba8(c: Rgba) -> [u8; 4] {
-    let q = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    [q(c.r), q(c.g), q(c.b), q(c.a)]
+    c.to_rgba8()
 }
 
 fn render_text(
     fonts: &mut Fonts,
     doc: &Document,
     slide: &Slide,
-    el: &TextElement,
+    el: &TextBox,
     frame: &mut SlideFrame,
 ) -> Result<(), RenderError> {
     let warn = |frame: &mut SlideFrame, message: String| {
@@ -98,16 +73,10 @@ fn render_text(
             message,
         });
     };
-    if el.drawing_shadow {
+    if el.shadow.is_some() {
         warn(frame, "text shadow isn't drawn yet".into());
     }
-    if el.drawing_stroke
-        && el
-            .stroke
-            .as_ref()
-            .and_then(|s| s.width.as_ref())
-            .is_some_and(|w| w.value > 0.0)
-    {
+    if el.outline.is_some() {
         warn(frame, "text outline (stroke) isn't drawn yet".into());
     }
     // 360° (seen in real files) is no rotation.
@@ -119,15 +88,13 @@ fn render_text(
     }
 
     let p = frame.placement;
-    let r = el.position.value;
+    let r = el.frame;
     let (x0, y0) = p.map(r.x, r.y);
     let box_w = (r.width as f32 * p.scale).max(1.0);
     let box_h = r.height as f32 * p.scale;
 
-    if el.drawing_fill
-        && let Some(fill) = el.fill_color
-    {
-        if el.bezel_radius > 0.0 {
+    if let Some(fill) = el.fill {
+        if el.corner_radius > 0.0 {
             warn(
                 frame,
                 "rounded corners on the element fill aren't drawn yet".into(),
@@ -138,10 +105,34 @@ fn render_text(
         fill_rect(frame, x0, y0, box_w, box_h, [c[0], c[1], c[2], a]);
     }
 
-    let Some(rtf) = el.rtf_doc(&doc.path)? else {
-        warn(frame, "element has no RTFData; its text isn't drawn".into());
+    let fail = |e: RenderError| Err(e.logged());
+    match &el.problem {
+        None => {}
+        Some(TextProblem::NoStyledText) => {
+            warn(frame, "element has no RTFData; its text isn't drawn".into());
+            return Ok(());
+        }
+        Some(TextProblem::Unreadable { message }) => {
+            return fail(RenderError::BadText {
+                message: message.clone(),
+                file: doc.path.clone(),
+                slide_uuid: slide.uuid.clone(),
+                element_uuid: el.uuid.clone(),
+            });
+        }
+        Some(TextProblem::FontNotInTable { index }) => {
+            return fail(RenderError::FontNotInTable {
+                index: *index,
+                file: doc.path.clone(),
+                slide_uuid: slide.uuid.clone(),
+                element_uuid: el.uuid.clone(),
+            });
+        }
+    }
+    // Empty text (including PP6's hidden "Double-click to edit" placeholder) draws nothing.
+    if el.runs().all(|r| r.text.is_empty()) {
         return Ok(());
-    };
+    }
 
     // Resolve every run's font first: a missing font is an error, never a substitute.
     let missing = |font: String| RenderError::MissingFont {
@@ -154,7 +145,7 @@ fn render_text(
     let mut spans: Vec<(String, usize)> = Vec::new();
     let mut aligns: Vec<Option<CtAlign>> = Vec::new();
     let mut underline = false;
-    for (pi, para) in rtf.paragraphs.iter().enumerate() {
+    for (pi, para) in el.paragraphs.iter().enumerate() {
         if pi > 0 {
             // Paragraph break carries the previous style (sets the empty line's height).
             if let Some(&(_, s)) = spans.last() {
@@ -170,15 +161,7 @@ fn render_text(
         let soft_breaks: usize = para.runs.iter().map(|r| r.text.matches('\n').count()).sum();
         aligns.extend(std::iter::repeat_n(Some(align), soft_breaks + 1));
         for run in &para.runs {
-            let Some(name) = &run.font else {
-                return Err(RenderError::FontNotInTable {
-                    index: run.font_index,
-                    file: doc.path.clone(),
-                    slide_uuid: slide.uuid.clone(),
-                    element_uuid: el.uuid.clone(),
-                }
-                .logged());
-            };
+            let name = &run.font;
             let font = fonts
                 .resolve(name, run.bold, run.italic)
                 .ok_or_else(|| missing(name.clone()).logged())?;
@@ -193,12 +176,10 @@ fn render_text(
                 );
             }
             underline |= run.underline;
-            let px = run.size_half_pt as f32 / 2.0 * p.scale;
+            let px = run.size as f32 * p.scale;
             let metrics = Metrics::new(px, fonts.line_height(&font, px));
-            let color = match run.color {
-                Some(c) => Color::rgba(c.r, c.g, c.b, (255.0 * el.opacity).round() as u8),
-                None => Color::rgba(0, 0, 0, (255.0 * el.opacity).round() as u8),
-            };
+            let [cr, cg, cb] = run.color.unwrap_or([0, 0, 0]);
+            let color = Color::rgba(cr, cg, cb, (255.0 * el.opacity).round() as u8);
             let idx = match styles
                 .iter()
                 .position(|s| s.0 == font && s.1 == metrics && s.2 == color)
@@ -280,10 +261,10 @@ fn render_text(
         );
     }
 
-    let dy = match el.vertical_alignment {
-        1 => 0.0,
-        2 => box_h - text_h,
-        _ => (box_h - text_h) / 2.0,
+    let dy = match el.valign {
+        VAlign::Top => 0.0,
+        VAlign::Bottom => box_h - text_h,
+        VAlign::Middle => (box_h - text_h) / 2.0,
     };
     let (ox, oy) = (x0.round() as i32, (y0 + dy).round() as i32);
     let c = p.canvas;

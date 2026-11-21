@@ -1,7 +1,7 @@
 //! Play order of a presentation's slides: natural group order, or an arrangement's
 //! group sequence (groups may repeat).
 
-use pro6::Document;
+use doc::Document;
 
 /// One position in the play order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

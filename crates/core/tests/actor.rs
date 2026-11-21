@@ -490,122 +490,152 @@ fn next_slide_looks_into_the_next_playlist_item() {
 }
 
 #[test]
-fn edits_follow_the_live_slide_save_and_revert() {
-    use pro6::ops::Op;
+fn edits_work_on_a_copy_until_saved_with_undo_and_revert() {
+    use doc::Edit;
     let dir = std::env::temp_dir().join(format!("pp6core-edit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("song.pro6");
     std::fs::copy(fixture("song_1024x768.pro6"), &file).unwrap();
     let (core, rx) = start(CoreConfig::default());
-    core.send(Command::SelectArrangement {
+    let edit = |e: Edit| Command::Edit {
         presentation: file.clone(),
-        arrangement: None,
-    });
+        edit: e,
+        accept_native: false,
+    };
     core.send(Command::GoTo {
         presentation: file.clone(),
         position: 1,
     });
     let s = wait(&rx, "live", |s| pos(s) == Some(1));
-    let live_uuid = s
-        .live
-        .as_ref()
-        .unwrap()
-        .doc
-        .slides()
-        .nth(1)
-        .unwrap()
-        .uuid
-        .clone();
+    let saved0 = s.docs[&file].clone();
+    let live_uuid = saved0.slides().nth(1).unwrap().uuid.clone();
+    let text_of = |d: &doc::Document, flat: usize| d.slides().nth(flat).unwrap().plain_text();
+    let live_text = text_of(&saved0, 1);
 
-    // Insert a slide before the live one: the live slide keeps showing, its position shifts.
-    core.send(Command::Edit {
-        presentation: file.clone(),
-        op: Op::AddSlide {
-            group: 0,
-            at: 0,
-            text: "Inserted".into(),
-        },
+    // Edits go to the editor copy: the saved document and the output are untouched.
+    core.send(edit(Edit::AddSlide {
+        group: 0,
+        at: 0,
+        text: "Inserted".into(),
+    }));
+    core.send(edit(Edit::SetText {
+        group: 0,
+        slide: 2,
+        text: "Changed".into(),
+    }));
+    let s = wait(&rx, "edited", |s| {
+        s.editing
+            .get(&file)
+            .is_some_and(|e| e.undo.as_deref() == Some("Edit text"))
     });
-    let s = wait(&rx, "edited", |s| s.unsaved.contains(&file));
+    assert!(s.unsaved.contains(&file));
+    let e = &s.editing[&file];
+    assert_eq!(e.doc.groups[0].slides.len(), 3);
+    assert_eq!(text_of(&e.doc, 2), "Changed");
+    assert!(Arc::ptr_eq(&s.docs[&file], &saved0), "saved document untouched");
     let live = s.live.as_ref().unwrap();
-    assert_eq!(live.position, Some(2));
-    assert_eq!(
-        live.doc.slides().nth(live.slide.flat).unwrap().uuid,
-        live_uuid
-    );
-    assert!(
-        Arc::ptr_eq(&live.doc, &s.docs[&file]),
-        "live follows the edited document"
-    );
+    assert!(Arc::ptr_eq(&live.doc, &saved0), "output untouched");
+    assert_eq!(live.position, Some(1));
 
-    // Editing the live slide's text updates what's live.
-    core.send(Command::Edit {
-        presentation: file.clone(),
-        op: Op::SetText {
-            group: 0,
-            slide: 2,
-            text: "Changed".into(),
-        },
+    // Undo / redo walk the editor copy.
+    core.send(Command::Undo(file.clone()));
+    let s = wait(&rx, "undone", |s| {
+        s.editing
+            .get(&file)
+            .is_some_and(|e| e.redo.as_deref() == Some("Edit text"))
     });
-    let s = wait(&rx, "text edited", |s| {
-        s.live.as_ref().is_some_and(|l| {
-            Arc::ptr_eq(&l.doc, &s.docs[&file])
-                && s.docs[&file]
-                    .slides()
-                    .nth(2)
-                    .is_some_and(|x| x.uuid == live_uuid)
-        }) && s.seq > 0
+    assert_eq!(text_of(&s.editing[&file].doc, 2), live_text);
+    core.send(Command::Redo(file.clone()));
+    let s = wait(&rx, "redone", |s| {
+        s.editing
+            .get(&file)
+            .is_some_and(|e| e.redo.is_none() && e.undo.as_deref() == Some("Edit text"))
     });
-    let t = s.docs[&file]
-        .slides()
-        .nth(2)
-        .unwrap()
-        .text_elements()
-        .next()
-        .unwrap()
-        .rtf_doc(&file)
-        .unwrap()
-        .unwrap()
-        .plain_text();
-    assert_eq!(t, "Changed");
+    assert_eq!(text_of(&s.editing[&file].doc, 2), "Changed");
 
-    // A refused edit is a notice, not a change.
-    core.send(Command::Edit {
-        presentation: file.clone(),
-        op: Op::RemoveSlide {
-            group: 0,
-            slide: 99,
-        },
-    });
+    // A refused edit is a notice, not a change (and not an undo step).
+    core.send(edit(Edit::RemoveSlide {
+        group: 0,
+        slide: 99,
+    }));
     let s = wait(&rx, "refused", |s| {
         s.notices
             .last()
             .is_some_and(|n| n.text.contains("Nothing was changed"))
     });
-    assert_eq!(s.docs[&file].groups()[0].slides().len(), 3);
+    assert_eq!(s.editing[&file].doc.groups[0].slides.len(), 3);
+    assert_eq!(s.editing[&file].undo.as_deref(), Some("Edit text"));
 
-    // Save writes the file and keeps a backup of the previous version.
+    // Save writes the file (with a backup) and becomes the saved document; the
+    // output keeps the old version until the next slide change.
     core.send(Command::Save(file.clone()));
-    wait(&rx, "saved", |s| !s.unsaved.contains(&file));
-    assert_eq!(pro6::load(&file).unwrap().groups()[0].slides().len(), 3);
+    let s = wait(&rx, "saved", |s| !s.unsaved.contains(&file));
+    assert_eq!(s.docs[&file].groups[0].slides.len(), 3);
+    assert!(Arc::ptr_eq(&s.docs[&file], &s.editing[&file].doc));
+    assert_eq!(doc::load(&file).unwrap().groups[0].slides.len(), 3);
     assert_eq!(
-        pro6::load(&dir.join("song.pro6.bak")).unwrap().groups()[0]
-            .slides()
+        doc::load(&dir.join("song.pro6.bak")).unwrap().groups[0]
+            .slides
             .len(),
         2
     );
-
-    // Revert throws away unsaved edits.
-    core.send(Command::Edit {
-        presentation: file.clone(),
-        op: Op::RemoveGroup { group: 2 },
+    assert!(Arc::ptr_eq(&s.live.as_ref().unwrap().doc, &saved0));
+    core.send(Command::Next);
+    let s = wait(&rx, "next on the saved version", |s| {
+        s.live
+            .as_ref()
+            .is_some_and(|l| Arc::ptr_eq(&l.doc, &s.docs[&file]))
     });
-    wait(&rx, "edited again", |s| s.unsaved.contains(&file));
+    let live = s.live.as_ref().unwrap();
+    // The live slide (now third in Verse 1) was followed by UUID; Next went past it.
+    assert_eq!(live.position, Some(3));
+    let prev = &live.doc.slides().nth(live.order[2].flat).unwrap().uuid;
+    assert_eq!(prev, &live_uuid);
+
+    // Undo after saving makes the copy unsaved again.
+    core.send(Command::Undo(file.clone()));
+    let s = wait(&rx, "undo after save", |s| s.unsaved.contains(&file));
+    assert_eq!(text_of(&s.editing[&file].doc, 2), live_text);
+
+    // Revert throws the editor copy away.
+    core.send(edit(Edit::RemoveGroup { group: 2 }));
+    wait(&rx, "edited again", |s| {
+        s.editing.get(&file).is_some_and(|e| e.doc.groups.len() == 2)
+    });
     core.send(Command::Revert(file.clone()));
     let s = wait(&rx, "reverted", |s| {
-        !s.unsaved.contains(&file) && s.docs.get(&file).is_some_and(|d| d.groups().len() == 3)
+        !s.unsaved.contains(&file) && !s.editing.contains_key(&file)
     });
-    assert_eq!(s.docs[&file].groups()[0].slides().len(), 3);
+    assert_eq!(s.docs[&file].groups.len(), 3);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn native_only_edits_need_consent_and_save_opres() {
+    let dir = std::env::temp_dir().join(format!("pp6core-native-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("song.pro6");
+    std::fs::copy(fixture("song_1024x768.pro6"), &file).unwrap();
+    let original = std::fs::read(&file).unwrap();
+    let (core, rx) = start(CoreConfig::default());
+    core.send(Command::Open(file.clone()));
+    let s = wait(&rx, "open", |s| s.docs.contains_key(&file));
+    // No edit uses a native-only feature yet (E2/E3 add them), so mark the copy
+    // native the way "Continue anyway" does and check the save rule end to end.
+    let mut d = (*s.docs[&file]).clone();
+    let first = d.groups[0].slides[0].uuid.clone();
+    doc::mark_native(&mut d, &[first]);
+    let saved = doc::save(&d).unwrap();
+    assert_eq!(saved.path, dir.join("song.opres"));
+    assert_eq!(std::fs::read(&file).unwrap(), original);
+    // Opening the .pro6 path now loads the .opres.
+    let (core2, rx2) = start(CoreConfig::default());
+    core2.send(Command::Open(file.clone()));
+    let s = wait(&rx2, "open native", |s| s.docs.contains_key(&file));
+    assert_eq!(s.docs[&file].mode, doc::Mode::Native);
+    assert_eq!(s.docs[&file].path, dir.join("song.opres"));
+    drop(core);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

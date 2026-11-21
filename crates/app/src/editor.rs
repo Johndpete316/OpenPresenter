@@ -1,5 +1,6 @@
 //! Edit mode for the presentation grid: slide text, slides, groups, arrangements.
-//! Clicking a slide selects it for editing; nothing goes live from here.
+//! Clicking a slide selects it for editing; nothing goes live from here. Edits go to
+//! the editor copy (`ShowState::editing`); the output and grid change only on Save.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -7,7 +8,7 @@ use std::sync::Arc;
 use crossbeam_channel::Sender;
 use egui::{Color32, RichText, Stroke, Vec2};
 use pp6core::{Command, ShowState};
-use pro6::ops::{Op, new_uuid};
+use doc::{Edit as Op, new_uuid};
 
 use crate::thumbs::ThumbRequest;
 use crate::ui::{UiAction, UiState, color32, tile_image};
@@ -39,31 +40,24 @@ impl EditState {
 fn edit(actions: &mut Vec<UiAction>, path: &Path, op: Op) {
     actions.push(UiAction::Core(Command::Edit {
         presentation: path.to_path_buf(),
-        op,
+        edit: op,
+        accept_native: false,
     }));
 }
 
-fn slide_text(doc: &pro6::Document, g: usize, s: usize) -> String {
+fn slide_text(doc: &doc::Document, g: usize, s: usize) -> String {
     doc.groups()
         .get(g)
         .and_then(|gr| gr.slides().get(s))
-        .and_then(|sl| sl.text_elements().next())
-        // A blank slide's placeholder edits as empty text.
-        .filter(|t| !t.is_placeholder(&doc.path))
-        .map(|t| match t.rtf_doc(&doc.path) {
-            Ok(Some(r)) => r.plain_text(),
-            _ => t
-                .plain_text
-                .as_ref()
-                .map(|p| p.value.text())
-                .unwrap_or_default(),
-        })
+        // A blank slide's placeholder is already empty text.
+        .and_then(|sl| sl.text_boxes().next())
+        .map(doc::TextBox::plain_text)
         .unwrap_or_default()
 }
 
-fn to_rgba(c: Color32) -> pro6::Rgba {
+fn to_rgba(c: Color32) -> doc::Rgba {
     let f = |v: u8| f64::from(v) / 255.0;
-    pro6::Rgba {
+    doc::Rgba {
         r: f(c.r()),
         g: f(c.g()),
         b: f(c.b()),
@@ -78,7 +72,7 @@ pub fn grid_edit(
     thumbs: &Sender<ThumbRequest>,
     actions: &mut Vec<UiAction>,
     path: &Path,
-    doc: &Arc<pro6::Document>,
+    doc: &Arc<doc::Document>,
 ) {
     let unsaved = show.unsaved.contains(path);
     ui.horizontal_wrapped(|ui| {
@@ -100,10 +94,44 @@ pub fn grid_edit(
         }
         if ui
             .add_enabled(unsaved, egui::Button::new("Revert"))
-            .on_hover_text("Throw away unsaved changes")
+            .on_hover_text("Throw away unsaved changes (the saved file is untouched)")
             .clicked()
         {
             actions.push(UiAction::Core(Command::Revert(path.to_path_buf())));
+            st.edit.text_for = None;
+        }
+        let editing = show.editing.get(path);
+        let undo = editing.and_then(|e| e.undo.as_deref());
+        let redo = editing.and_then(|e| e.redo.as_deref());
+        // Shortcuts only when no text field has focus (those have their own undo).
+        let (key_undo, key_redo) = if ui.memory(|m| m.focused().is_none()) {
+            ui.input(|i| {
+                let z = i.key_pressed(egui::Key::Z) && i.modifiers.command;
+                (
+                    z && !i.modifiers.shift,
+                    (z && i.modifiers.shift)
+                        || (i.key_pressed(egui::Key::Y) && i.modifiers.command),
+                )
+            })
+        } else {
+            (false, false)
+        };
+        let r = ui
+            .add_enabled(undo.is_some(), egui::Button::new("Undo"))
+            .on_hover_text(undo.map_or("Nothing to undo".to_owned(), |l| {
+                format!("Undo {l} (Ctrl+Z)")
+            }));
+        if (r.clicked() || key_undo) && undo.is_some() {
+            actions.push(UiAction::Core(Command::Undo(path.to_path_buf())));
+            st.edit.text_for = None;
+        }
+        let r = ui
+            .add_enabled(redo.is_some(), egui::Button::new("Redo"))
+            .on_hover_text(redo.map_or("Nothing to redo".to_owned(), |l| {
+                format!("Redo {l} (Ctrl+Shift+Z)")
+            }));
+        if (r.clicked() || key_redo) && redo.is_some() {
+            actions.push(UiAction::Core(Command::Redo(path.to_path_buf())));
             st.edit.text_for = None;
         }
         if unsaved {
@@ -112,6 +140,18 @@ pub fn grid_edit(
                     .color(Color32::YELLOW)
                     .small(),
             );
+        }
+        if doc.mode == doc::Mode::Native {
+            ui.label(
+                RichText::new(format!(
+                    "saves as {}.{} (OpenPresent only)",
+                    crate::ui::title(path),
+                    doc::NATIVE_EXT
+                ))
+                .small()
+                .weak(),
+            )
+            .on_hover_text("This presentation uses something a ProPresenter 6 file can't hold. The original .pro6 is left as it was.");
         }
     });
 
@@ -250,7 +290,7 @@ pub fn grid_edit(
                     Op::AddGroup {
                         at: doc.groups().len(),
                         name: "New Group".into(),
-                        color: Some(pro6::Rgba {
+                        color: Some(doc::Rgba {
                             r: 0.5,
                             g: 0.5,
                             b: 0.5,
@@ -272,7 +312,7 @@ fn group_header(
     actions: &mut Vec<UiAction>,
     path: &Path,
     gi: usize,
-    group: &pro6::SlideGroup,
+    group: &doc::Group,
     n_groups: usize,
 ) {
     ui.horizontal(|ui| {
@@ -393,7 +433,7 @@ fn slide_editor(
     st: &mut UiState,
     actions: &mut Vec<UiAction>,
     path: &Path,
-    doc: &pro6::Document,
+    doc: &doc::Document,
     g: usize,
     s: usize,
 ) {
@@ -408,7 +448,7 @@ fn slide_editor(
     ui.separator();
     ui.horizontal(|ui| {
         ui.strong(format!("Slide {} in {}", s + 1, doc.groups()[g].name));
-        let has_text = slide.text_elements().next().is_some();
+        let has_text = slide.text_boxes().next().is_some();
         if !has_text {
             ui.label(RichText::new("This slide has no text box.").color(Color32::YELLOW));
         }
@@ -473,7 +513,7 @@ fn arrangements(
     st: &mut UiState,
     actions: &mut Vec<UiAction>,
     path: &Path,
-    doc: &pro6::Document,
+    doc: &doc::Document,
 ) {
     let list = doc.arrangements();
     if st

@@ -276,7 +276,7 @@ impl Worker {
 
     fn frame(
         &mut self,
-        doc: &Arc<pro6::Document>,
+        doc: &Arc<doc::Document>,
         flat: usize,
         (width, height): (u32, u32),
     ) -> (FrameKey, Rendered) {

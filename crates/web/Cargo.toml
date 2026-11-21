@@ -7,7 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-pro6.workspace = true
+doc.workspace = true
 pp6core.workspace = true
 render.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

@@ -63,7 +63,7 @@ impl Cache {
 /// background colour (if any) and text over transparency.
 pub(crate) fn slide_png(
     fonts: &mut Fonts,
-    doc: &pro6::Document,
+    doc: &doc::Document,
     flat: usize,
     w: u32,
 ) -> Result<Vec<u8>, String> {

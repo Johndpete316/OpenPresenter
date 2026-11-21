@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
 use pp6core::ShowState;
-use pro6::Document;
+use doc::Document;
 use serde::{Deserialize, Serialize};
 
 /// Live / next state (JSON).
@@ -110,25 +110,12 @@ pub(crate) fn title(path: &Path) -> String {
     )
 }
 
-/// Plain text of a slide: each text element's RTF text (PlainText as fallback).
-pub fn slide_text(doc: &pro6::Document, flat: usize) -> String {
-    let Some(slide) = doc.slides().nth(flat) else {
-        return String::new();
-    };
-    slide
-        .text_elements()
-        .filter(|t| !t.is_placeholder(&doc.path))
-        .map(|t| match t.rtf_doc(&doc.path) {
-            Ok(Some(r)) => r.plain_text(),
-            _ => t
-                .plain_text
-                .as_ref()
-                .map(|p| p.value.text())
-                .unwrap_or_default(),
-        })
-        .filter(|s| !s.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+/// Plain text of a slide (text boxes with text, one after another).
+pub fn slide_text(doc: &Document, flat: usize) -> String {
+    doc.slides()
+        .nth(flat)
+        .map(doc::Slide::plain_text)
+        .unwrap_or_default()
 }
 
 fn hash_hex(v: impl Hash) -> String {
@@ -141,7 +128,7 @@ pub(crate) fn presentation_id(path: &Path) -> String {
     format!("p{}", hash_hex(path))
 }
 
-fn css(c: &pro6::Rgba) -> String {
+fn css(c: &doc::Rgba) -> String {
     let b = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("rgb({},{},{})", b(c.r), b(c.g), b(c.b))
 }

@@ -174,7 +174,9 @@ fn preview(
     dir: &Path,
 ) -> anyhow::Result<()> {
     std::fs::create_dir_all(dir)?;
-    for (label, doc) in [("before", before), ("after", after)] {
+    for (label, p) in [("before", before), ("after", after)] {
+        let doc = doc::convert::convert_ref(p);
+        let doc = &doc;
         for (i, slide) in doc.slides().enumerate() {
             let path = dir.join(format!("{label}-{:03}.png", i + 1));
             match render_slide(fonts, doc, slide, doc.canvas.width, doc.canvas.height) {

@@ -740,8 +740,8 @@ impl App {
             rfd::MessageDialogResult::Custom(s) if s == "Save" => {
                 let mut ok = true;
                 for p in &unsaved {
-                    if let Some(doc) = self.show.docs.get(p)
-                        && let Err(e) = pp6core::save_with_backup(doc)
+                    if let Some(d) = self.show.edited_doc(p)
+                        && let Err(e) = doc::save(d).map_err(|e| e.user_message())
                     {
                         ok = false;
                         rfd::MessageDialog::new()

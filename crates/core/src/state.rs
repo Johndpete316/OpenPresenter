@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use pro6::Document;
+use doc::Document;
 
 use crate::order::{SlideRef, slide_order};
 use crate::playlist::{ItemRef, PlaylistFile};
@@ -28,13 +28,23 @@ pub struct Live {
 #[derive(Debug, Clone)]
 pub struct LoopState {
     pub path: PathBuf,
-    pub timings: Arc<pro6::timing::SlideTimings>,
+    pub timings: Arc<doc::SlideTimings>,
     /// When the current slide advances; `None` = it has no stored time (waits for the operator).
     pub next_at: Option<Instant>,
     /// How long the current slide stays up.
     pub slide_duration: Option<std::time::Duration>,
     /// After the current slide, go back to the first slide (`loopToBeginning`).
     pub loops_back: bool,
+}
+
+/// A presentation open in the editor. The editor works on this copy; the output and
+/// the operator's grid keep showing the saved document until Save.
+#[derive(Debug, Clone)]
+pub struct Editing {
+    pub doc: Arc<Document>,
+    /// Label of the step Undo would revert / Redo would reapply.
+    pub undo: Option<String>,
+    pub redo: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,7 +86,9 @@ pub struct ShowState {
     /// Arrangement chosen per presentation (`None` inside = natural order).
     pub arrangements: Arc<HashMap<PathBuf, Option<String>>>,
     pub notices: Arc<Vec<Notice>>,
-    /// Presentations with unsaved edits.
+    /// Editor copies, by presentation (see [`Editing`]).
+    pub editing: Arc<HashMap<PathBuf, Editing>>,
+    /// Presentations whose editor copy differs from what's saved.
     pub unsaved: Arc<std::collections::HashSet<PathBuf>>,
     pub looping: Option<LoopState>,
 }
@@ -99,6 +111,7 @@ impl Default for ShowState {
             load_errors: Arc::default(),
             arrangements: Arc::default(),
             notices: Arc::default(),
+            editing: Arc::default(),
             unsaved: Arc::default(),
             looping: None,
         }
@@ -116,6 +129,14 @@ impl ShowState {
             .get(path)
             .and_then(|d| d.selected_arrangement())
             .map(|a| a.uuid)
+    }
+
+    /// The document the editor shows: the editor copy if there is one, else the saved one.
+    pub fn edited_doc(&self, path: &Path) -> Option<&Arc<Document>> {
+        self.editing
+            .get(path)
+            .map(|e| &e.doc)
+            .or_else(|| self.docs.get(path))
     }
 
     /// Play order for a loaded presentation under its current arrangement.

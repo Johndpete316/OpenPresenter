@@ -60,14 +60,24 @@ pub enum Command {
     },
     /// Select a playlist item (loads it; the next item is pre-parsed).
     PlaylistSelect(crate::ItemRef),
-    /// Edit a loaded presentation (in memory; marks it unsaved).
+    /// Edit a loaded presentation's editor copy (one undo step; the output and grid
+    /// don't change until Save). An edit that uses something `.pro6` can't hold is
+    /// refused in a `.pro6` document unless `accept_native` is set (the user chose
+    /// "Continue anyway"): then the touched slides are flagged and the document
+    /// switches to native mode.
     Edit {
         presentation: PathBuf,
-        op: pro6::ops::Op,
+        edit: doc::Edit,
+        accept_native: bool,
     },
-    /// Save a presentation's edits to its file (the previous version is kept as `.pro6.bak`).
+    /// Undo the last edit of a presentation's editor copy.
+    Undo(PathBuf),
+    Redo(PathBuf),
+    /// Save the editor copy under the save rules (`.pro6` with a `.bak`, or `.opres`
+    /// next to the original). A live presentation shows the saved version from the
+    /// next slide change.
     Save(PathBuf),
-    /// Throw away unsaved edits and reload from disk.
+    /// Throw away the editor copy and its undo history.
     Revert(PathBuf),
     /// Auto-advance the live (or selected) presentation using its stored slide timing.
     StartLoop,

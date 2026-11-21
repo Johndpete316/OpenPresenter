@@ -50,6 +50,7 @@ pp6/
 ├─ Cargo.toml            # workspace
 ├─ crates/
 │  ├─ pro6/              # .pro6 model, parser, writer, RTF handling (no GUI deps)
+│  ├─ doc/               # native model used app-wide, .opres, .pro6 conversion, edits, undo
 │  ├─ core/              # ShowState, Command, playlist model, settings
 │  ├─ render/            # slide → GPU: text layout (cosmic-text), canvas scaling, compositing
 │  ├─ media/             # libmpv wrapper, audio device list
@@ -59,7 +60,7 @@ pp6/
 ├─ fixtures/             # hand-written .pro6 files from the spec
 └─ docs/
 ```
-`pro6` and `core` must build and test without any GUI, GPU, or mpv dependency. Crates are added in the milestone that first needs them.
+`pro6`, `doc` and `core` must build and test without any GUI, GPU, or mpv dependency. Crates are added in the milestone that first needs them.
 
 ## Error Handling Rules
 - `thiserror` typed errors per crate (`ParseError`, `WriteError`, `RenderError`, `MediaError`, `OutputError`, `WebError`). Every error carries context: file path, XML element path, UUID where relevant.
@@ -194,6 +195,11 @@ pp6/
   - Arrangement editing writes the *assumed* `RVSongArrangement`/`groupIDs` structure.
   - Save keeps the previous file as `<name>.pro6.bak` (one rolling backup) and saves atomically. Revert reloads from disk. Quitting with unsaved edits asks Save / Don't save / Cancel. There's no undo yet, and unsaved edits aren't in the crash-restore file.
   - If the live slide is edited, the output updates; if it's deleted, the screen keeps it until the next trigger.
+  - **Superseded by the editor redesign (John, 2026-11-21; docs/EDITOR-PLAN.md E0):**
+    - Edits go to an editor copy, with undo/redo.
+    - The output changes only after Save, at the next slide change.
+    - Revert discards the copy.
+    - All presentations are now held in the native `doc` model; `.pro6` is converted on load and written back byte-identical where nothing changed.
 
 ### M8 — Announcements: Media Cues + Looping / Auto-Advance
 Only the Announcements presentation uses these.

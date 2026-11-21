@@ -12,7 +12,7 @@ mod state;
 use std::io::Write as _;
 use std::path::Path;
 
-pub use actor::{CoreConfig, CoreHandle, save_with_backup, spawn};
+pub use actor::{CoreConfig, CoreHandle, spawn};
 pub use command::Command;
 pub use order::{SlideRef, find_nearest, next_enabled, prev_enabled, slide_order};
 pub use playlist::{
@@ -21,7 +21,7 @@ pub use playlist::{
 pub use settings::{
     KeyBindings, MediaScaling, OutputSettings, Resolution, Settings, SettingsError, WebSettings,
 };
-pub use state::{Live, LoopState, Notice, NoticeLevel, ShowState};
+pub use state::{Editing, Live, LoopState, Notice, NoticeLevel, ShowState};
 
 /// Write a file atomically: temp file in the same folder, flush to disk, rename.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {

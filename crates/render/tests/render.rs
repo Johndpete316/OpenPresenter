@@ -13,13 +13,13 @@ fn fonts() -> Fonts {
     Fonts::from_dirs(&[&fixtures().join("fonts")])
 }
 
-fn doc(name: &str) -> pro6::Document {
-    pro6::load(&fixtures().join(name)).unwrap()
+fn load(name: &str) -> doc::Document {
+    doc::load(&fixtures().join(name)).unwrap()
 }
 
 fn render(
     fonts: &mut Fonts,
-    d: &pro6::Document,
+    d: &doc::Document,
     i: usize,
     w: u32,
     h: u32,
@@ -52,7 +52,7 @@ fn near(a: f32, b: f32, tol: f32) -> bool {
 #[test]
 fn missing_fonts_are_errors_not_substitutions() {
     let mut f = fonts();
-    let d = doc("render_1024x768.pro6");
+    let d = load("render_1024x768.pro6");
     match render(&mut f, &d, 3, 1024, 768) {
         Err(e @ RenderError::MissingFont { .. }) => assert_eq!(
             e.user_message(),
@@ -61,7 +61,7 @@ fn missing_fonts_are_errors_not_substitutions() {
         other => panic!("expected MissingFont, got {other:?}"),
     }
     // Arial isn't bundled. Liberation Sans is metric-compatible but must NOT be used silently.
-    let song = doc("song_1024x768.pro6");
+    let song = load("song_1024x768.pro6");
     assert!(matches!(
         render(&mut f, &song, 0, 1024, 768),
         Err(RenderError::MissingFont { ref font, .. }) if font == "Arial"
@@ -71,7 +71,7 @@ fn missing_fonts_are_errors_not_substitutions() {
 #[test]
 fn centred_middle_text_is_centred_in_its_box() {
     let mut f = fonts();
-    let d = doc("render_1024x768.pro6");
+    let d = load("render_1024x768.pro6");
     let frame = render(&mut f, &d, 0, 1024, 768).unwrap();
     assert!(frame.warnings.is_empty(), "{:?}", frame.warnings);
     let (x0, y0, x1, y1) = ink_bbox(&frame);
@@ -94,7 +94,7 @@ fn centred_middle_text_is_centred_in_its_box() {
 #[test]
 fn per_paragraph_alignment_fonts_and_colours() {
     let mut f = fonts();
-    let d = doc("render_1024x768.pro6");
+    let d = load("render_1024x768.pro6");
     let frame = render(&mut f, &d, 1, 1024, 768).unwrap();
     let (x0, y0, x1, _) = ink_bbox(&frame);
     assert!(
@@ -114,7 +114,7 @@ fn per_paragraph_alignment_fonts_and_colours() {
 #[test]
 fn bottom_aligned_bold_and_unsupported_shadow_warning() {
     let mut f = fonts();
-    let d = doc("render_1024x768.pro6");
+    let d = load("render_1024x768.pro6");
     let frame = render(&mut f, &d, 2, 1024, 768).unwrap();
     let (_, _, _, y1) = ink_bbox(&frame);
     assert!(y1 > 684 - 30 && y1 < 684, "bottom-aligned: {y1}");
@@ -125,7 +125,7 @@ fn bottom_aligned_bold_and_unsupported_shadow_warning() {
 #[test]
 fn scaled_output_pillarboxes_and_scales_text() {
     let mut f = fonts();
-    let d = doc("render_1024x768.pro6");
+    let d = load("render_1024x768.pro6");
     let small = render(&mut f, &d, 0, 1024, 768).unwrap();
     let big = render(&mut f, &d, 0, 1920, 1080).unwrap();
     assert_eq!(big.placement.canvas.x, 240);
@@ -153,15 +153,9 @@ fn scaled_output_pillarboxes_and_scales_text() {
 #[test]
 fn layers_composite_independently() {
     let mut f = fonts();
-    let mut d = doc("render_1024x768.pro6");
+    let mut d = load("render_1024x768.pro6");
     // Give slide 1 a visible background to tell the layers apart.
-    let s = &mut d.groups.as_mut().unwrap().items[0]
-        .slides
-        .as_mut()
-        .unwrap()
-        .items[0];
-    s.extra.element.set_attr("drawingBackgroundColor", "true");
-    s.background_color = Some(pro6::Rgba {
+    d.groups[0].slides[0].background = Some(doc::Rgba {
         r: 0.0,
         g: 0.0,
         b: 1.0,
@@ -208,8 +202,8 @@ fn font_resolution() {
 #[test]
 fn rescaled_document_renders_like_the_original_fitted() {
     let mut f = fonts();
-    let original = doc("render_1024x768.pro6");
-    let mut scaled = original.clone();
+    let original = load("render_1024x768.pro6");
+    let mut scaled = pro6::load(&fixtures().join("render_1024x768.pro6")).unwrap();
     pro6::rescale::rescale(
         &mut scaled,
         pro6::CanvasSize {
@@ -219,6 +213,7 @@ fn rescaled_document_renders_like_the_original_fitted() {
         pro6::rescale::Mode::Fit,
         pro6::WinPayloads::Drop,
     );
+    let scaled = doc::from_pro6(scaled);
     for i in 0..3 {
         let a = render(&mut f, &original, i, 1920, 1080).unwrap();
         let b = render(&mut f, &scaled, i, 1920, 1080).unwrap();
