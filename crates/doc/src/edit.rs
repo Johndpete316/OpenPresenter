@@ -741,6 +741,24 @@ impl Edit {
                     .ok_or(EditError::NoTemplate)?;
                 let mut new = fresh_slide(template);
                 if let Some(t) = first_text_mut(&mut new) {
+                    // A box emptied by older versions has no runs; borrow the first
+                    // styled run in the presentation so the new slide can still be made.
+                    if t.problem.is_none()
+                        && t.runs().next().is_none()
+                        && let Some(r) = doc.text_boxes().find_map(|b| b.runs().next())
+                    {
+                        let r = Run {
+                            text: String::new(),
+                            ..r.clone()
+                        };
+                        match t.paragraphs.first_mut() {
+                            Some(p) => p.runs.push(r),
+                            None => t.paragraphs.push(Paragraph {
+                                runs: vec![r],
+                                ..Paragraph::default()
+                            }),
+                        }
+                    }
                     set_text(t, text)?;
                 }
                 // A new slide starts enabled, without the template's label/notes/hot key.
@@ -1054,7 +1072,10 @@ fn set_text(t: &mut TextBox, text: &str) -> Result<(), EditError> {
         .map(|line| Paragraph {
             align,
             line_spacing,
-            runs: if line.is_empty() {
+            // An empty box keeps one empty run, so it remembers its style (typing into
+            // it, or a new slide copying it, needs the font and size). Empty lines
+            // between others have no run, as a .pro6 stores them.
+            runs: if line.is_empty() && !text.is_empty() {
                 Vec::new()
             } else {
                 vec![Run {

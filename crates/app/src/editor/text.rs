@@ -217,10 +217,30 @@ pub(super) fn begin(
     let Some(t) = text_box(d, g, s, e) else {
         return;
     };
-    if t.problem.is_some() || t.runs().next().is_none() {
+    // An empty box saved without a style (older versions did that): borrow the first
+    // styled run in the presentation so it can be typed into.
+    let borrowed = (t.problem.is_none() && t.runs().next().is_none())
+        .then(|| d.text_boxes().find_map(|b| b.runs().next()).cloned())
+        .flatten();
+    if t.problem.is_some() || (t.runs().next().is_none() && borrowed.is_none()) {
         // Unreadable / unstyled: the Text tab explains why.
         st.edit.tab = Tab::Text;
         return;
+    }
+    let mut paras = t.paragraphs.clone();
+    if let Some(r) = borrowed {
+        let r = Run {
+            text: String::new(),
+            ..r
+        };
+        match paras.first_mut() {
+            Some(p) => p.runs = vec![r],
+            None => paras.push(Paragraph {
+                runs: vec![r],
+                ..Paragraph::default()
+            }),
+        }
+        paras.truncate(1);
     }
     let mut sess = TextSession {
         g,
@@ -228,10 +248,10 @@ pub(super) fn begin(
         e,
         slide_uuid: d.groups[g].slides[s].uuid.clone(),
         el_uuid: t.uuid.clone(),
-        paras: t.paragraphs.clone(),
+        caret: rich::end(&paras),
+        anchor: rich::end(&paras),
         base: t.paragraphs.clone(),
-        caret: rich::end(&t.paragraphs),
-        anchor: rich::end(&t.paragraphs),
+        paras,
         typing: None,
         rev: 0,
         preview: None,

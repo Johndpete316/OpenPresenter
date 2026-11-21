@@ -346,7 +346,12 @@ pub fn parse(src: &[u8]) -> Result<RtfDoc, RtfError> {
         };
     }
 
+    // Character properties last in effect in the body: an empty box keeps its style.
+    let mut body_chr: Option<CharProps> = None;
     while let Some((offset, tok)) = lx.next()? {
+        if started && !ended && matches!(st.dest, Dest::Body) {
+            body_chr = Some(st.chr);
+        }
         if ended {
             // Anything after the outer group closes is ignored, but keep scanning for braces.
             if !matches!(tok, Tok::Text(b' ') | Tok::Text(0)) {
@@ -557,6 +562,22 @@ pub fn parse(src: &[u8]) -> Result<RtfDoc, RtfError> {
     }
     if !para.runs.is_empty() {
         doc.paragraphs.push(para);
+    }
+    // No text at all: one empty run in the style the body set, so the box still has a
+    // font and size (an empty slide can be typed into, or copied for a new slide).
+    if doc.paragraphs.iter().all(|p| p.runs.is_empty())
+        && let Some(chr) = body_chr
+        && doc.fonts.iter().any(|f| f.index == chr.font)
+    {
+        let st = State {
+            dest: Dest::Body,
+            chr,
+            uc: 1,
+        };
+        let mut p = doc.paragraphs.pop().unwrap_or_default();
+        let mut none = None;
+        emit(&mut doc, &mut p, &st, &mut none, "");
+        doc.paragraphs.push(p);
     }
     Ok(doc)
 }

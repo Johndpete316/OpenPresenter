@@ -652,3 +652,65 @@ fn an_opres_in_pro6_mode_still_saves_as_opres() {
     assert_eq!(back.groups, d.groups, "written as JSON and read back");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn empty_new_slides_keep_their_style_so_more_can_follow() {
+    // Add slide twice in a row: the second copies the first, which has no text.
+    let mut d = doc::load(&fixture("song_1024x768.pro6")).unwrap();
+    let n = d.groups[0].slides.len();
+    for i in 0..2 {
+        Edit::AddSlide {
+            group: 0,
+            at: n + i,
+            text: String::new(),
+        }
+        .apply(&mut d)
+        .unwrap();
+    }
+    assert_eq!(d.groups[0].slides.len(), n + 2);
+    let t = d.groups[0].slides[n + 1].text_boxes().next().unwrap();
+    assert!(t.plain_text().is_empty());
+    assert!(
+        t.runs().next().is_some(),
+        "the empty box keeps a styled run"
+    );
+    let back = through_pro6(&d);
+    assert!(
+        back.groups[0].slides[n + 1]
+            .text_boxes()
+            .next()
+            .unwrap()
+            .runs()
+            .next()
+            .is_some(),
+        "and still has it after a .pro6 round trip"
+    );
+    // A box already emptied by an older version (no runs at all) still works.
+    let doc::Element::Text(b) = d.groups[0].slides[n + 1]
+        .elements
+        .iter_mut()
+        .find(|e| matches!(e, doc::Element::Text(_)))
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    for p in &mut b.paragraphs {
+        p.runs.clear();
+    }
+    Edit::AddSlide {
+        group: 0,
+        at: n + 2,
+        text: String::new(),
+    }
+    .apply(&mut d)
+    .unwrap();
+    assert!(
+        d.groups[0].slides[n + 2]
+            .text_boxes()
+            .next()
+            .unwrap()
+            .runs()
+            .next()
+            .is_some()
+    );
+}
