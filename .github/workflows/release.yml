@@ -1,0 +1,151 @@
+# Windows installer for every push to main that passes CI.
+#
+# - Builds openpresenter.exe + pp6tool.exe natively on a Windows runner and packs them
+#   with Inno Setup (preinstalled on the runner image).
+# - Signs everything with Azure Artifact Signing when the repository variable
+#   SIGNING_ENABLED is 'true' (exes, libmpv-2.dll, the installer and its uninstaller).
+#   Until then the installer is built unsigned, exactly as before.
+# - The installer is always kept as a workflow artifact. When the version in Cargo.toml
+#   has no release yet, it's also published as GitHub Release v<version>: bump the
+#   version to release, every other push is a test build.
+#
+# Setup (once): docs/release.md.
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # libmpv isn't in git (121 MB). It's an asset on a release of this repo, pinned by hash.
+  MPV_RELEASE: deps-libmpv-0.42.0-38
+  MPV_SHA256: 88504ee5560942a955405e99dfb5971368e4cf851321f36565bf2a667271db1b
+  SIGN_CLIENT_VERSION: 1.0.151
+  SIGN_CLIENT_SHA256: 35375a4bc4e1102da729fc3d8d9925f774c3baae6b8b7ff6398d948ca9ab0d8a
+
+jobs:
+  installer:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: windows-2025
+    # The Azure federated credential trusts this environment, nothing else.
+    environment: release
+    permissions:
+      contents: write # create the release
+      id-token: write # OIDC login to Azure
+    env:
+      SIGN: ${{ vars.SIGNING_ENABLED == 'true' }}
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Version
+        id: v
+        run: |
+          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $version = ($meta.packages | Where-Object name -eq 'app').version
+          $build = git describe --always --exclude '*'
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "build=$build" >> $env:GITHUB_OUTPUT
+          Write-Host "OpenPresenter $version ($build), signing: $env:SIGN"
+
+      - name: Fetch libmpv
+        run: |
+          gh release download $env:MPV_RELEASE --pattern libmpv-2.dll --dir packaging/vendor --clobber
+          $h = (Get-FileHash packaging/vendor/libmpv-2.dll -Algorithm SHA256).Hash
+          if ($h -ne $env:MPV_SHA256) { throw "libmpv-2.dll hash mismatch: $h" }
+
+      - name: Build
+        run: cargo build --release --locked -p app -p pp6tool
+
+      - name: Stage
+        run: |
+          $stage = 'target/installer/stage'
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item target/release/openpresenter.exe, target/release/pp6tool.exe, packaging/vendor/libmpv-2.dll, packaging/THIRD-PARTY.txt $stage
+          # CRLF so Notepad and the installer's licence page show it properly.
+          (Get-Content LICENSE) -join "`r`n" | Set-Content -NoNewline -Encoding UTF8 "$stage/LICENSE.txt"
+
+      - name: Azure login
+        if: env.SIGN == 'true'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Signing client
+        if: env.SIGN == 'true'
+        run: |
+          $pkg = "$env:RUNNER_TEMP/signing.zip"
+          Invoke-WebRequest "https://api.nuget.org/v3-flatcontainer/microsoft.artifactsigning.client/$env:SIGN_CLIENT_VERSION/microsoft.artifactsigning.client.$env:SIGN_CLIENT_VERSION.nupkg" -OutFile $pkg
+          $h = (Get-FileHash $pkg -Algorithm SHA256).Hash
+          if ($h -ne $env:SIGN_CLIENT_SHA256) { throw "signing client hash mismatch: $h" }
+          Expand-Archive $pkg "$env:RUNNER_TEMP/signing"
+          "OP_SIGN_DLIB=$env:RUNNER_TEMP\signing\bin\x64\Azure.CodeSigning.Dlib.dll" >> $env:GITHUB_ENV
+
+      - name: Sign program files
+        if: env.SIGN == 'true'
+        env:
+          OP_SIGN_ENDPOINT: ${{ vars.SIGNING_ENDPOINT }}
+          OP_SIGN_ACCOUNT: ${{ vars.SIGNING_ACCOUNT }}
+          OP_SIGN_PROFILE: ${{ vars.SIGNING_PROFILE }}
+        run: |
+          $s = 'target/installer/stage'
+          ./packaging/sign.ps1 "$s/openpresenter.exe" "$s/pp6tool.exe" "$s/libmpv-2.dll"
+
+      - name: Installer
+        env:
+          OP_SIGN_ENDPOINT: ${{ vars.SIGNING_ENDPOINT }}
+          OP_SIGN_ACCOUNT: ${{ vars.SIGNING_ACCOUNT }}
+          OP_SIGN_PROFILE: ${{ vars.SIGNING_PROFILE }}
+        run: |
+          $stage = (Resolve-Path target/installer/stage).Path
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $a = @('/Q', "/DStage=$stage", "/DVersion=${{ steps.v.outputs.version }}", "/DBuild=${{ steps.v.outputs.build }}")
+          if ($env:SIGN -eq 'true') {
+            $sign = (Resolve-Path packaging/sign.ps1).Path
+            $a += '/DSign', "/Sopsign=pwsh -NoProfile -File `$q$sign`$q `$f"
+          }
+          & $iscc @a packaging/openpresenter.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+          $out = "target/installer/OpenPresenter-Setup-${{ steps.v.outputs.version }}-${{ steps.v.outputs.build }}.exe"
+          if (-not (Test-Path $out)) { throw "Inno Setup didn't produce $out" }
+          if ($env:SIGN -eq 'true') {
+            $sig = Get-AuthenticodeSignature $out
+            if ($sig.Status -ne 'Valid') { throw "installer isn't validly signed: $($sig.Status)" }
+          }
+          "INSTALLER=$out" >> $env:GITHUB_ENV
+          (Get-FileHash $out -Algorithm SHA256).Hash.ToLower() + "  " + (Split-Path $out -Leaf) | Tee-Object "$out.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenPresenter-Setup-${{ steps.v.outputs.version }}-${{ steps.v.outputs.build }}
+          path: |
+            ${{ env.INSTALLER }}
+            ${{ env.INSTALLER }}.sha256
+          retention-days: 30
+
+      - name: Release (new versions only)
+        run: |
+          $tag = "v${{ steps.v.outputs.version }}"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) { Write-Host "$tag already released; this build is a workflow artifact only."; exit 0 }
+          $signed = if ($env:SIGN -eq 'true') { 'Signed with Azure Artifact Signing.' } else { '**Not code-signed**: Windows SmartScreen will warn (More info → Run anyway), and Smart App Control blocks it.' }
+          $notes = "OpenPresenter $tag (build ${{ steps.v.outputs.build }}).`n`n$signed`n`nInstall or upgrade: run the installer. Settings, playlists and logs are kept."
+          gh release create $tag $env:INSTALLER "$env:INSTALLER.sha256" --target ${{ github.event.workflow_run.head_sha || github.sha }} --title "OpenPresenter $tag" --notes $notes

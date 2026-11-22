@@ -49,6 +49,12 @@ UninstallDisplayIcon={app}\openpresenter.exe
 SetupIconFile=..\docs\branding\windows\openpresenter.ico
 WizardSmallImageFile=..\docs\branding\windows\wizard-small-55x58.bmp,..\docs\branding\windows\wizard-small-110x116.bmp
 ; If OpenPresenter is running, the installer offers to close it (Restart Manager).
+; Signed builds (CI): ISCC gets /DSign and /Sopsign=<command>; Inno then signs the
+; installer and the uninstaller it embeds. Local builds stay unsigned.
+#ifdef Sign
+SignTool=opsign
+SignedUninstaller=yes
+#endif
 CloseApplications=yes
 RestartApplications=no
 SetupLogging=yes

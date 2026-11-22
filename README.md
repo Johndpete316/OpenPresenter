@@ -8,7 +8,7 @@ presentations, and has its own format (`.opres`, themes `.optheme`) for things a
 file can't hold.
 
 - **Plan and status:** [`docs/PLAN.md`](docs/PLAN.md), editor: [`docs/EDITOR-PLAN.md`](docs/EDITOR-PLAN.md)
-- **Building the installer and setting up the show PC:** [`docs/windows-setup.md`](docs/windows-setup.md)
+- **Building the installer and setting up the show PC:** [`docs/windows-setup.md`](docs/windows-setup.md); releases and code signing (CI): [`docs/release.md`](docs/release.md)
 - **Branding (icon, colours, UI pattern):** [`docs/branding/ICON.md`](docs/branding/ICON.md)
 - **Licence:** [`docs/LICENSING.md`](docs/LICENSING.md)
 
