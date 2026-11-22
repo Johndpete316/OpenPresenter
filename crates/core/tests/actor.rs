@@ -31,6 +31,14 @@ fn wait(
 }
 
 /// Poll the disk (written by the core's I/O thread) for up to 10 s.
+/// An absolute video path (a drive is needed on Windows).
+const MISSIONS: &str = if cfg!(windows) {
+    "C:/videos/missions.mp4"
+} else {
+    "/videos/missions.mp4"
+};
+
+/// Poll the disk (written by the core's I/O thread) for up to 10 s.
 fn wait_for_disk(what: &str, done: impl Fn() -> bool) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while !done() {
@@ -1102,7 +1110,7 @@ fn slide_videos_play_pause_and_follow_their_end_setting() {
     first.start = doc::VideoStart::OnClick;
     first.end = doc::VideoEnd::Next;
     let mut second = doc::SlideVideo::new(doc::MediaRef {
-        path: "/videos/missions.mp4".into(),
+        path: MISSIONS.into(),
         sha256: None,
     });
     second.end = doc::VideoEnd::Stop;
@@ -1143,7 +1151,7 @@ fn slide_videos_play_pause_and_follow_their_end_setting() {
     // Its end: the next slide, whose own video takes over.
     core.send(Command::MediaEnded(intro.clone()));
     let s = wait(&rx, "next slide", |s| pos(s) == Some(1));
-    let missions = std::path::PathBuf::from("/videos/missions.mp4");
+    let missions = std::path::PathBuf::from(MISSIONS);
     assert_eq!(s.background_media.as_deref(), Some(missions.as_path()));
     assert!(!s.media_paused, "starts when the slide is shown");
     // Its end: the video goes away; the slide stays.

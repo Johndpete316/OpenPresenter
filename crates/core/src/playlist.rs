@@ -183,16 +183,22 @@ mod tests {
     fn round_trip_and_relative_paths() {
         let dir = std::env::temp_dir().join(format!("opcore-pl-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        // An absolute path needs a drive on Windows.
+        let abs = if cfg!(windows) {
+            "C:/abs/Notices.pro6"
+        } else {
+            "/abs/Notices.pro6"
+        };
         std::fs::write(
             dir.join("sunday.toml"),
-            "name = \"Sunday\"\n[[item]]\npath = \"songs/Amazing Grace.pro6\"\narrangement = \"AA\"\n[[item]]\npath = \"/abs/Notices.pro6\"\n",
+            format!("name = \"Sunday\"\n[[item]]\npath = \"songs/Amazing Grace.pro6\"\narrangement = \"AA\"\n[[item]]\npath = \"{abs}\"\n"),
         )
         .unwrap();
         let p = Playlist::load(&dir.join("sunday.toml")).unwrap();
         assert_eq!(p.name, "Sunday");
         assert_eq!(p.items[0].path, dir.join("songs/Amazing Grace.pro6"));
         assert_eq!(p.items[0].arrangement.as_deref(), Some("AA"));
-        assert_eq!(p.items[1].path, PathBuf::from("/abs/Notices.pro6"));
+        assert_eq!(p.items[1].path, PathBuf::from(abs));
         p.save(&dir.join("copy.toml")).unwrap();
         assert_eq!(Playlist::load(&dir.join("copy.toml")).unwrap(), p);
         let err = Playlist::load(&dir.join("missing.toml")).unwrap_err();
