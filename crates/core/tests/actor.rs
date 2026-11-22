@@ -30,6 +30,29 @@ fn wait(
     }
 }
 
+/// Poll the disk (written by the core's I/O thread) for up to 10 s.
+fn wait_for_disk(what: &str, done: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !done() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn tomls(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(dir)
+        .map(|d| {
+            d.filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn start(config: CoreConfig) -> (opcore::CoreHandle, Receiver<Arc<ShowState>>) {
     let (core, _join) = opcore::spawn(config).unwrap();
     let rx = core.subscribe(None);
@@ -248,7 +271,13 @@ fn playlists_are_saved_reloaded_and_deleted_to_a_folder() {
         s.playlists.len() == 2 && s.playlists[1].playlist.name == "Evening"
     });
     core.shutdown();
-    std::thread::sleep(Duration::from_millis(200)); // saves run on the I/O thread
+    // Saves run on the I/O thread: wait until both files are on disk, renamed.
+    wait_for_disk("saved", || {
+        let t = tomls(&dir);
+        t.len() == 2
+            && t.iter()
+                .any(|f| std::fs::read_to_string(f).is_ok_and(|x| x.contains("Evening")))
+    });
 
     // A new start finds both, in name order, with their items.
     let (core, rx) = start(config());
@@ -266,13 +295,10 @@ fn playlists_are_saved_reloaded_and_deleted_to_a_folder() {
     // Delete keeps the file aside, out of the list.
     core.send(Command::PlaylistDelete(0));
     wait(&rx, "deleted", |s| s.playlists.len() == 1);
-    std::thread::sleep(Duration::from_millis(200));
-    let left: Vec<_> = std::fs::read_dir(&dir)
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter(|e| e.path().extension().is_some_and(|x| x == "toml"))
-        .collect();
-    assert_eq!(left.len(), 1);
+    wait_for_disk("moved aside", || {
+        tomls(&dir).len() == 1
+            && std::fs::read_dir(dir.join("deleted")).is_ok_and(|d| d.count() == 1)
+    });
     assert_eq!(std::fs::read_dir(dir.join("deleted")).unwrap().count(), 1);
     core.shutdown();
     std::fs::remove_dir_all(&dir).unwrap();

@@ -1,3 +1,5 @@
+# Checks on Windows, the only platform OpenPresenter ships for. A pass on main
+# triggers the installer build (release.yml).
 name: CI
 
 on:
@@ -9,32 +11,16 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  linux:
-    runs-on: ubuntu-latest
+  windows:
+    runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
-      # keyring's Secret Service backend (ESV token) links libdbus.
-      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      # render tests use only the bundled fixture fonts; media tests skip when libmpv is absent.
-      - run: cargo nextest run -p pro6 -p opcore -p render -p media -p web -p pp6tool
-
-  windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --workspace
-      - uses: actions/upload-artifact@v4
-        with:
-          name: openpresenter-windows
-          path: |
-            target/release/openpresenter.exe
-            target/release/pp6tool.exe
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # Render tests use only the bundled fixture fonts; media tests skip when libmpv is absent.
+      - run: cargo nextest run --workspace --locked
