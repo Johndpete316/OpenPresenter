@@ -724,21 +724,29 @@ mod tests {
 
     #[test]
     fn relative_paths() {
+        // Absolute paths need a drive on Windows (the show PC), a `/` elsewhere.
+        let root = if cfg!(windows) { r"C:\" } else { "/" };
+        let abs = |p: &str| PathBuf::from(format!("{root}{p}"));
         assert_eq!(
-            relative_to(
-                Path::new("/lib/Themes/Media/a.png"),
-                Path::new("/lib/songs")
-            ),
+            relative_to(&abs("lib/Themes/Media/a.png"), &abs("lib/songs")),
             "../Themes/Media/a.png"
         );
         assert_eq!(
-            relative_to(Path::new("/lib/songs/Media/a.png"), Path::new("/lib/songs")),
+            relative_to(&abs("lib/songs/Media/a.png"), &abs("lib/songs")),
             "Media/a.png"
         );
+        // Not absolute: kept as it is.
         assert_eq!(
-            relative_to(Path::new("rel/a.png"), Path::new("/x")),
-            "rel/a.png"
+            Path::new(&relative_to(Path::new("rel/a.png"), &abs("x"))),
+            Path::new("rel/a.png")
         );
+        // Another drive can't be reached relatively: the full path is kept.
+        if cfg!(windows) {
+            assert_eq!(
+                relative_to(Path::new(r"D:\media\a.png"), Path::new(r"C:\lib")),
+                r"D:\media\a.png"
+            );
+        }
     }
 
     #[test]
