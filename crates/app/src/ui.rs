@@ -56,6 +56,10 @@ pub enum UiAction {
     /// Slide tile width in the grid (saved when the slider is let go).
     SetTileWidth(f32),
     SetGroupColors(Vec<opcore::GroupColor>),
+    /// Font of the plain look for new presentations.
+    SetDefaultFont(String),
+    /// Its size, canvas pixels (0 = sized for the canvas).
+    SetDefaultFontSize(f64),
     /// Re-read the library folders (a presentation was added).
     RefreshLibrary,
     /// mpv audio device name; `None` = system default.
@@ -70,6 +74,10 @@ pub enum UiAction {
     NewPin,
     /// Turn the phone remote on/off (saved).
     RemoteEnabled(bool),
+    /// ESV Bible API integration on/off (saved).
+    SetEsvEnabled(bool),
+    /// Theme (UUID) for scripture slides; `None` = plain.
+    SetEsvTheme(Option<String>),
 }
 
 /// Phone remote status shown in the UI (refreshed by the app each frame).
@@ -86,6 +94,7 @@ pub enum SettingsTab {
     General,
     Folders,
     Keys,
+    Integrations,
     Log,
 }
 
@@ -106,6 +115,8 @@ pub struct UiState {
     pub audio_devices: Vec<media::AudioDevice>,
     pub settings_open: bool,
     pub settings_tab: SettingsTab,
+    /// Library right-click menu: the Rename and Delete prompts.
+    pub library_menu: crate::library_menu::LibraryMenu,
     pub settings_path: String,
     pub playlists_path: String,
     /// Playlist whose name is being edited, and the text so far.
@@ -324,6 +335,10 @@ pub fn draw(
     }
     toolbar(ui, st, show, settings, &mut actions);
     st.edit.fit_min_size = settings.editor.fit_min_size;
+    st.edit
+        .default_font
+        .clone_from(&settings.editor.default_font);
+    st.edit.default_font_size = settings.editor.default_font_size;
     if st.edit.group_colors != settings.editor.group_colors {
         st.edit
             .group_colors
@@ -340,6 +355,12 @@ pub fn draw(
     st.edit.new_dir = settings.new_presentations_folder();
     // A new presentation finished saving (from either window): open it.
     crate::editor::lyrics::poll(st, &mut actions);
+    st.edit.scripture.enabled = settings.integrations.esv.enabled;
+    st.edit
+        .scripture
+        .theme
+        .clone_from(&settings.integrations.esv.theme);
+    crate::editor::scripture::poll(st, ui.ctx());
     crate::file_menu::poll(st);
     if let Some(p) = &st.edit.open_when_selected
         && show.selected.as_ref() == Some(p)
@@ -392,6 +413,7 @@ pub fn draw(
         let sel = selected.as_ref().map(|(p, d)| (p.as_path(), &**d));
         crate::editor::lyrics::new_window(ui.ctx(), st, thumbs, &mut actions, sel);
         crate::editor::lyrics::blank_dialog(ui.ctx(), st, &mut actions, sel);
+        crate::library_menu::dialogs(ui.ctx(), st, show, &mut actions);
     }
     egui::Panel::left("left")
         .resizable(true)
@@ -402,7 +424,14 @@ pub fn draw(
             egui::Panel::top("preview-panel")
                 .resizable(false)
                 .frame(egui::Frame::new().fill(color::PANEL))
-                .show(ui, |ui| preview(ui, st, show, thumbs, &mut actions));
+                .show(ui, |ui| {
+                    let scaling = match settings.output.media_scaling {
+                        opcore::MediaScaling::Fill => doc::Fit::Fill,
+                        opcore::MediaScaling::Fit => doc::Fit::Fit,
+                        opcore::MediaScaling::Stretch => doc::Fit::Stretch,
+                    };
+                    preview(ui, st, show, scaling, thumbs, &mut actions)
+                });
             let half = (ui.available_height() * 0.5).max(140.0);
             egui::Panel::bottom("playlist-panel")
                 .resizable(true)
@@ -479,7 +508,7 @@ fn toolbar(
                 if tool_button(
                     ui,
                     icon::TEXT_T_SLASH,
-                    "Slides",
+                    "Clear Text",
                     Color32::from_rgb(214, 68, 58),
                     false,
                     true,
@@ -492,7 +521,7 @@ fn toolbar(
                 if tool_button(
                     ui,
                     icon::IMAGE,
-                    "BkGrds",
+                    "Clear Background",
                     Color32::from_rgb(47, 143, 216),
                     false,
                     true,
@@ -501,6 +530,56 @@ fn toolbar(
                 .clicked()
                 {
                     actions.push(UiAction::Core(Command::ClearBackground));
+                }
+                toolbar_gap(ui);
+                let frozen = show.frozen;
+                if tool_button(
+                    ui,
+                    icon::SNOWFLAKE,
+                    "Freeze",
+                    Color32::from_rgb(64, 176, 214),
+                    frozen,
+                    true,
+                )
+                .on_hover_text(if frozen {
+                    format!(
+                        "The output is FROZEN. Click to unfreeze: what's live now goes to the screen.{}",
+                        keys(&k.freeze)
+                    )
+                } else {
+                    format!(
+                        "Freeze the output: the screen keeps what it shows now while you move on \
+                         (the preview follows).{}",
+                        keys(&k.freeze)
+                    )
+                })
+                .clicked()
+                {
+                    actions.push(UiAction::Core(Command::Freeze(!frozen)));
+                }
+                let blanked = show.blanked;
+                if tool_button(
+                    ui,
+                    icon::SQUARE,
+                    "Blank",
+                    Color32::from_rgb(30, 30, 34),
+                    blanked,
+                    true,
+                )
+                .on_hover_text(if blanked {
+                    format!(
+                        "The output is BLANK. Click to unblank: what's live now goes to the screen.{}",
+                        keys(&k.blank)
+                    )
+                } else {
+                    format!(
+                        "Blank the output: black and silent, whatever is live.{}",
+                        keys(&k.blank)
+                    )
+                })
+                .clicked()
+                {
+                    actions.push(UiAction::Core(Command::Blank(!blanked)));
                 }
                 toolbar_gap(ui);
                 crate::file_menu::button(ui, st, show, settings, actions);
@@ -710,23 +789,44 @@ fn remote_button(
 
 // ───────────────────────────── preview ─────────────────────────────
 
+/// `scaling`: how the output places background media that isn't a slide's video.
 fn preview(
     ui: &mut egui::Ui,
     st: &mut UiState,
     show: &ShowState,
+    scaling: doc::Fit,
     thumbs: &Sender<ThumbRequest>,
     actions: &mut Vec<UiAction>,
 ) {
     section_header(ui, "Preview", |ui| {
-        if show.live.is_some() {
-            ui.label(
-                RichText::new("LIVE")
-                    .small()
-                    .strong()
-                    .color(color::LIVE_TEXT),
-            );
+        // What the screen is doing: following the preview (red), or not (grey).
+        let state = if show.blanked {
+            Some((
+                "BLANK",
+                color::OFF_AIR,
+                "The output is black: nothing is sent to the screen.",
+            ))
+        } else if show.frozen {
+            Some((
+                "FROZEN",
+                color::OFF_AIR,
+                "The output holds what it showed when frozen; the preview moves on.",
+            ))
+        } else if show.live.is_some() {
+            Some(("LIVE", color::ON_AIR, "The output shows this preview."))
+        } else {
+            None
+        };
+        if let Some((label, dot, hover)) = state {
+            let text_colour = if dot == color::ON_AIR {
+                Color32::from_rgb(240, 96, 90)
+            } else {
+                Color32::from_gray(200)
+            };
+            ui.label(RichText::new(label).small().strong().color(text_colour))
+                .on_hover_text(hover);
             let (r, _) = ui.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-            ui.painter().circle_filled(r.center(), 4.0, color::LIVE);
+            ui.painter().circle_filled(r.center(), 4.0, dot);
         }
     });
     let w = ui.available_width();
@@ -735,12 +835,22 @@ fn preview(
     });
     let (rect, _) = ui.allocate_exact_size(Vec2::new(w, (w * aspect).round()), Sense::hover());
     ui.painter().rect_filled(rect, 0.0, Color32::BLACK);
-    // The background video's poster under the slide (a video slide draws no colour).
+    // The background video's poster under the slide (a video slide draws no colour),
+    // placed and coloured as the output shows it.
     if show.background_visible
         && let Some(m) = &show.background_media
-        && let Some(Ok(t)) = st.media_thumbs.as_mut().and_then(|th| th.get(m))
     {
-        egui::Image::new(t).paint_at(ui, rect);
+        let (fit, adjust) = match &show.background_cue {
+            Some(c) => (c.video.fit, c.video.adjust),
+            None => (scaling, doc::VideoAdjust::default()),
+        };
+        if let Some(Ok(t)) = st
+            .media_thumbs
+            .as_mut()
+            .and_then(|th| th.get_adjusted(m, &adjust))
+        {
+            crate::media_thumbs::paint_poster(ui.painter(), rect, t, fit);
+        }
     }
     match &show.live {
         Some(l) if show.text_visible => {
@@ -1034,6 +1144,7 @@ fn library(
         ui.label(RichText::new(status).small().weak());
     });
     let row_h = 20.0;
+    let mut picked: Option<(crate::library_menu::Pick, PathBuf)> = None;
     egui::ScrollArea::vertical()
         .id_salt("library")
         .auto_shrink(false)
@@ -1122,6 +1233,11 @@ fn library(
                     actions.push(UiAction::Core(Command::Open(e.path.clone())));
                 }
                 resp.context_menu(|ui| {
+                    use crate::library_menu as menu;
+                    if let Some(p) = menu::items(ui, show, &e.path, e.error.is_none()) {
+                        picked = Some((p, e.path.clone()));
+                    }
+                    ui.separator();
                     if show.playlists.is_empty() && ui.button("Add to a new playlist").clicked() {
                         actions.push(add_to(0));
                         ui.close();
@@ -1132,9 +1248,16 @@ fn library(
                             ui.close();
                         }
                     }
+                    ui.separator();
+                    if let Some(p) = menu::delete_item(ui, show, &e.path) {
+                        picked = Some((p, e.path.clone()));
+                    }
                 });
             }
         });
+    if let Some((p, path)) = picked {
+        crate::library_menu::pick(st, p, &path, actions);
+    }
 }
 
 // ───────────────────────────── playlist ─────────────────────────────
@@ -1694,8 +1817,9 @@ fn presentation(
                             let f = v.media.resolve(&path);
                             st.media_thumbs
                                 .as_mut()
-                                .and_then(|t| t.get(&f))
+                                .and_then(|t| t.get_adjusted(&f, &v.adjust))
                                 .and_then(|t| t.as_ref().ok().cloned())
+                                .map(|t| (t, v.fit))
                         });
                         let badge = video.map(|v| match v.start {
                             doc::VideoStart::OnShow => "Video",
@@ -1710,7 +1834,7 @@ fn presentation(
                             color32(group.color),
                             is_live,
                             r.enabled,
-                            poster.as_ref(),
+                            poster.as_ref().map(|(t, f)| (t, *f)),
                             badge,
                         );
                         if resp.clicked() {
@@ -1742,7 +1866,7 @@ fn slide_tile(
     group: Color32,
     live: bool,
     enabled: bool,
-    poster: Option<&TextureHandle>,
+    poster: Option<(&TextureHandle, doc::Fit)>,
     badge: Option<&str>,
 ) -> egui::Response {
     let bar_h = 18.0;
@@ -1755,8 +1879,8 @@ fn slide_tile(
     if badge.is_some() {
         ui.painter().rect_filled(img_rect, 0.0, Color32::BLACK);
     }
-    if let Some(p) = poster {
-        egui::Image::new(p).paint_at(ui, img_rect);
+    if let Some((p, fit)) = poster {
+        crate::media_thumbs::paint_poster(ui.painter(), img_rect, p, fit);
     }
     paint_thumb(ui, img_rect, tex);
     if let Some(b) = badge {
@@ -2104,6 +2228,7 @@ fn settings_window(
                     (SettingsTab::General, "General"),
                     (SettingsTab::Folders, "Folders"),
                     (SettingsTab::Keys, "Keys"),
+                    (SettingsTab::Integrations, "Integrations"),
                     (SettingsTab::Log, "Log"),
                 ] {
                     ui.selectable_value(&mut st.settings_tab, tab, name);
@@ -2114,6 +2239,9 @@ fn settings_window(
                 SettingsTab::General => settings_general(ui, st, show, settings, actions),
                 SettingsTab::Folders => settings_folders(ui, st, settings, actions),
                 SettingsTab::Keys => settings_keys(ui, st, settings),
+                SettingsTab::Integrations => {
+                    crate::editor::scripture::settings(ui, st, settings, actions);
+                }
                 SettingsTab::Log => {
                     st.mark_seen(show);
                     settings_log(ui, st, show, log_lines);
@@ -2125,7 +2253,7 @@ fn settings_window(
 
 fn settings_general(
     ui: &mut egui::Ui,
-    st: &UiState,
+    st: &mut UiState,
     show: &ShowState,
     settings: &Settings,
     actions: &mut Vec<UiAction>,
@@ -2233,6 +2361,55 @@ fn settings_general(
             .changed()
         {
             actions.push(UiAction::SetFitMinSize(v));
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("Default font");
+        let current = settings.editor.default_font.clone();
+        let mut picked = None;
+        ui.menu_button(current.as_str(), |ui| {
+            picked = crate::editor::font_picker(ui, st, &current);
+            if picked.is_some() {
+                ui.close();
+            }
+        })
+        .response
+        .on_hover_text("Font of the plain look for new presentations, including scripture");
+        if let Some(f) = picked {
+            actions.push(UiAction::SetDefaultFont(f));
+        }
+        if !st.families.is_empty()
+            && !st
+                .families
+                .iter()
+                .any(|f| f.eq_ignore_ascii_case(settings.editor.default_font.trim()))
+        {
+            let used = crate::editor::lyrics::default_font(st).unwrap_or_default();
+            ui.label(
+                RichText::new(format!("not installed: {used} is used"))
+                    .small()
+                    .color(Color32::YELLOW),
+            );
+        }
+        ui.label("size");
+        let mut size = settings.editor.default_font_size;
+        if ui
+            .add(
+                egui::DragValue::new(&mut size)
+                    .range(0.0..=400.0)
+                    .speed(0.5)
+                    .custom_formatter(move |v, _| {
+                        if v <= 0.0 {
+                            "auto".into()
+                        } else {
+                            format!("{v:.0} px")
+                        }
+                    }),
+            )
+            .on_hover_text("Canvas pixels; 0 = auto (72 on a 1920 × 1080 canvas)")
+            .changed()
+        {
+            actions.push(UiAction::SetDefaultFontSize(size.max(0.0)));
         }
     });
     egui::CollapsingHeader::new("Group colours for Paste Lyrics")
@@ -2454,6 +2631,8 @@ fn settings_keys(ui: &mut egui::Ui, st: &UiState, settings: &Settings) {
                 ("Clear Text", &k.clear_text),
                 ("Clear Background", &k.clear_background),
                 ("Clear All", &k.clear_all),
+                ("Freeze", &k.freeze),
+                ("Blank", &k.blank),
             ] {
                 ui.label(name);
                 ui.label(list.join(", "));

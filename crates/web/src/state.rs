@@ -25,6 +25,12 @@ pub struct RemoteState {
     pub text_visible: bool,
     pub background_visible: bool,
     pub output_enabled: bool,
+    /// The output holds what it showed (the live slide moves on without it).
+    #[serde(default)]
+    pub frozen: bool,
+    /// The output is black.
+    #[serde(default)]
+    pub blanked: bool,
     /// Poster frame of the background media, if any (`?w=` sets the width).
     #[serde(default)]
     pub background: Option<String>,
@@ -230,6 +236,8 @@ impl RemoteState {
             text_visible: s.text_visible,
             background_visible: s.background_visible,
             output_enabled: s.output_enabled,
+            frozen: s.frozen,
+            blanked: s.blanked,
             background,
             item: s.playlist_item.map(|r| [r.playlist, r.item]),
         }

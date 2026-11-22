@@ -79,6 +79,10 @@ pub struct ShowState {
     pub text_visible: bool,
     pub background_visible: bool,
     pub output_enabled: bool,
+    /// The output holds what it showed when this was set (see `Command::Freeze`).
+    pub frozen: bool,
+    /// The output is black and silent (see `Command::Blank`); wins over `frozen`.
+    pub blanked: bool,
     /// Background media playing under the text (when the background layer is visible).
     pub background_media: Option<PathBuf>,
     /// Media to pre-load for an instant switch.
@@ -118,6 +122,8 @@ impl Default for ShowState {
             text_visible: true,
             background_visible: true,
             output_enabled: true,
+            frozen: false,
+            blanked: false,
             background_media: None,
             background_next: None,
             background_cue: None,

@@ -20,4 +20,6 @@ egui default fonts (built into openpresenter.exe)
 Rust libraries (built into openpresenter.exe and pp6tool.exe)
   Several hundred crates from https://crates.io, under the MIT, Apache-2.0,
   BSD-2-Clause, BSD-3-Clause, ISC, Zlib, BSL-1.0, MPL-2.0, Unicode-3.0 and
-  Unlicense licences. Run `cargo metadata` in the source tree for the full list.
+  Unlicense licences. The HTTPS root certificate list (webpki-roots, for the
+  ESV Bible API) is under CDLA-Permissive-2.0. Run `cargo metadata` in the
+  source tree for the full list.

@@ -39,6 +39,8 @@ pub mod icon {
     pub const PAUSE: char = '\u{E39E}';
     pub const ARROW_COUNTER_CLOCKWISE: char = '\u{E038}';
     pub const VIDEO_CAMERA: char = '\u{E4DA}';
+    pub const SNOWFLAKE: char = '\u{E5AA}';
+    pub const SQUARE: char = '\u{E45E}';
 }
 
 /// The brand palette (docs/branding/ICON.md, Colours). New UI uses these: dark neutral
@@ -62,6 +64,10 @@ pub mod color {
     /// Live slide / live item: the brand orange marks what's on screen.
     pub const LIVE: Color32 = brand::ACCENT;
     pub const LIVE_TEXT: Color32 = brand::ACCENT_START;
+    /// The on-air dot above the preview: red while the output follows what's live,
+    /// grey while it's frozen or blanked.
+    pub const ON_AIR: Color32 = Color32::from_rgb(226, 52, 46);
+    pub const OFF_AIR: Color32 = Color32::from_gray(140);
     /// Section header bars.
     pub const HEADER: Color32 = Color32::from_rgb(26, 26, 31);
     pub const PANEL: Color32 = brand::BG_TOP;

@@ -20,6 +20,17 @@ pub enum Command {
     ClearText,
     ClearBackground,
     ClearAll,
+    /// Freeze the output: it keeps showing what it shows now, whatever goes live
+    /// meanwhile (the operator's preview follows as usual). Unfreezing shows what's
+    /// live by then.
+    Freeze(bool),
+    /// Blank the output: black and silent, whatever is live. Unblanking shows what's
+    /// live by then.
+    Blank(bool),
+    /// Freeze or unfreeze (a key or a Stream Deck button).
+    FreezeToggle,
+    /// Blank or unblank.
+    BlankToggle,
     /// Put a slide live: `position` indexes the presentation's current play order
     /// (see `ShowState::order_for`). Disabled slides can still be shown this way.
     GoTo {
@@ -95,6 +106,13 @@ pub enum Command {
     Save(PathBuf),
     /// Throw away the editor copy and its undo history.
     Revert(PathBuf),
+    /// A presentation file was renamed (`to`) or deleted (`None`) by the app:
+    /// playlists follow it (or drop it), and loaded copies of the old path are
+    /// forgotten. The selection follows a rename.
+    PresentationMoved {
+        from: PathBuf,
+        to: Option<PathBuf>,
+    },
     /// Apply a theme to presentations (loading them first if needed): one edit on
     /// each one's editor copy, so one undo step per presentation. `save` saves each
     /// afterwards (restyling slides linked to an edited theme). A `.pro6`

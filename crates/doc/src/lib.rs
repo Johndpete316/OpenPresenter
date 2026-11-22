@@ -25,7 +25,7 @@ pub use file::{LoadError, SaveError, is_native, is_pro6, load, open, preferred, 
 pub use history::History;
 pub use model::*;
 pub use style::{Scope, Style};
-pub use theme::{Theme, ThemeLink};
+pub use theme::{Theme, ThemeLink, ThemeParts};
 
 /// Native presentation file extension.
 pub const NATIVE_EXT: &str = "opres";

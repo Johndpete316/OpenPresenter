@@ -124,6 +124,7 @@ pub fn spawn(
                 events,
                 size: None,
                 sent: Sent::default(),
+                hold: Hold::default(),
             };
             w.run(&snapshots, &rx);
         })?;
@@ -133,6 +134,8 @@ pub fn spawn(
 /// What the output currently has, to send only changes.
 #[derive(Default, Clone)]
 struct Sent {
+    /// The output was blanked (see `Command::Blank`).
+    blank: bool,
     live: Option<(usize, usize)>,
     layers: Option<(bool, bool)>,
     media: Option<MediaSent>,
@@ -157,6 +160,41 @@ struct Worker {
     events: winit::event_loop::EventLoopProxy<UserEvent>,
     size: Option<(u32, u32)>,
     sent: Sent,
+    hold: Hold,
+}
+
+/// What the output should show for a show state: freeze and blank sit between the
+/// operator's state and the screen.
+#[derive(Default)]
+struct Hold {
+    /// What the output shows (`None` while blanked).
+    shown: Option<Arc<ShowState>>,
+    /// While frozen: the state the output holds.
+    held: Option<Arc<ShowState>>,
+}
+
+enum View {
+    Blank,
+    Show(Arc<ShowState>),
+}
+
+impl Hold {
+    /// Blanked: black and silent. Frozen: what the output showed when the freeze
+    /// began (or what was live, when frozen while blanked). Otherwise `s`.
+    fn view(&mut self, s: &Arc<ShowState>) -> View {
+        if !s.frozen {
+            self.held = None;
+        } else if self.held.is_none() {
+            self.held = Some(self.shown.clone().unwrap_or_else(|| s.clone()));
+        }
+        if s.blanked {
+            self.shown = None;
+            return View::Blank;
+        }
+        let shown = self.held.clone().unwrap_or_else(|| s.clone());
+        self.shown = Some(shown.clone());
+        View::Show(shown)
+    }
 }
 
 impl Worker {
@@ -195,13 +233,52 @@ impl Worker {
 
     /// Bring the output in line with `s`. `force` re-sends everything (new window/size).
     /// The live slide goes first so background media never delays it.
-    fn apply(&mut self, s: &ShowState, force: bool) {
+    /// Blanked: black and silent. Frozen: the output keeps what it showed when the
+    /// freeze began; unfreezing or unblanking shows what's live by then.
+    fn apply(&mut self, s: &Arc<ShowState>, force: bool) {
         if self.size.is_none() {
             return;
         }
         if force {
             self.sent = Sent::default();
         }
+        match self.hold.view(s) {
+            View::Blank => self.apply_blank(s, force),
+            View::Show(shown) => {
+                self.sent.blank = false;
+                self.apply_state(&shown, force);
+            }
+        }
+    }
+
+    /// Black, no media (once; a forced re-send does it again).
+    fn apply_blank(&mut self, s: &ShowState, force: bool) {
+        if self.sent.blank && !force {
+            return;
+        }
+        let requested_at = if force { None } else { s.command_at };
+        let layers = (false, false);
+        self.send(RenderCmd::Blank {
+            layers,
+            requested_at,
+        });
+        let media: MediaSent = (None, None, None, false, s.media_restart);
+        self.send(RenderCmd::Media {
+            current: None,
+            next: None,
+            cue: None,
+            paused: false,
+            restart: media.4,
+        });
+        self.sent = Sent {
+            blank: true,
+            live: None,
+            layers: Some(layers),
+            media: Some(media),
+        };
+    }
+
+    fn apply_state(&mut self, s: &ShowState, force: bool) {
         self.apply_live(s, force);
         let media: MediaSent = (
             s.background_media.clone(),
@@ -336,4 +413,47 @@ impl Worker {
 
 pub fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state(slide: u64, frozen: bool, blanked: bool) -> Arc<ShowState> {
+        Arc::new(ShowState {
+            seq: slide,
+            frozen,
+            blanked,
+            ..ShowState::default()
+        })
+    }
+
+    fn seq(v: View) -> Option<u64> {
+        match v {
+            View::Blank => None,
+            View::Show(s) => Some(s.seq),
+        }
+    }
+
+    #[test]
+    fn freeze_holds_the_screen_and_blank_blacks_it() {
+        let mut h = Hold::default();
+        assert_eq!(seq(h.view(&state(1, false, false))), Some(1));
+        // Frozen on slide 1: moving on doesn't reach the screen.
+        assert_eq!(seq(h.view(&state(1, true, false))), Some(1));
+        assert_eq!(seq(h.view(&state(4, true, false))), Some(1));
+        // Blank wins over freeze; unblanking (still frozen) brings back the hold.
+        assert_eq!(seq(h.view(&state(5, true, true))), None);
+        assert_eq!(seq(h.view(&state(5, true, false))), Some(1));
+        // Unfrozen: what's live now.
+        assert_eq!(seq(h.view(&state(6, false, false))), Some(6));
+        // Blanked: black whatever goes live; unblanked: what's live by then.
+        assert_eq!(seq(h.view(&state(7, false, true))), None);
+        assert_eq!(seq(h.view(&state(8, false, true))), None);
+        assert_eq!(seq(h.view(&state(9, false, false))), Some(9));
+        // Frozen while blanked: holds what was live then.
+        assert_eq!(seq(h.view(&state(10, false, true))), None);
+        assert_eq!(seq(h.view(&state(10, true, true))), None);
+        assert_eq!(seq(h.view(&state(12, true, false))), Some(10));
+    }
 }

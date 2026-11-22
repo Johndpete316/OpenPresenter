@@ -174,7 +174,10 @@ fn index_file(path: &Path, modified_ms: u64, size: u64) -> IndexEntry {
         text_tokens: Vec::new(),
         error: None,
     };
-    match doc::load(path) {
+    // A file that trips a parser bug is listed as unreadable; the scan goes on.
+    let loaded = std::panic::catch_unwind(|| doc::load(path).map_err(|e| e.user_message()))
+        .unwrap_or_else(|_| Err("This file couldn't be read because of an internal error.".into()));
+    match loaded {
         Ok(d) => {
             let mut text = String::new();
             for s in d.slides() {
@@ -183,7 +186,7 @@ fn index_file(path: &Path, modified_ms: u64, size: u64) -> IndexEntry {
             }
             entry.text_tokens = tokenize(&text);
         }
-        Err(e) => entry.error = Some(e.user_message()),
+        Err(e) => entry.error = Some(e),
     }
     entry
 }

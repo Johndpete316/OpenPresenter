@@ -45,6 +45,13 @@ tracing-subscriber = "0.3.23"
 web.workspace = true
 winit = "0.30"
 sha2 = "0.11.1"
+# ESV Bible API (Settings → Integrations): HTTPS requests, and the API token in the
+# system credential store (Windows Credential Manager, Secret Service on Linux).
+ureq = "3.5.2"
+serde_json = "1.0.154"
+# Library → Delete moves presentations to the Recycle Bin / Trash.
+trash = "5.4.0"
+keyring = { version = "3.6.3", features = ["windows-native", "sync-secret-service", "crypto-rust"] }
 
 # Not inheriting workspace lints: GL calls are inherently `unsafe`, so this crate
 # uses `deny` (allowed only inside the GL module) instead of the workspace `forbid`.

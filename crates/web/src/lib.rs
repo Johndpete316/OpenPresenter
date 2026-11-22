@@ -566,6 +566,12 @@ async fn api_cmd(
         "clear-bg" => Command::ClearBackground,
         "output-on" => Command::OutputEnable(true),
         "output-off" => Command::OutputEnable(false),
+        // Explicit on/off (the page sends what its button shows): a repeated tap
+        // never undoes itself.
+        "freeze" => Command::Freeze(true),
+        "unfreeze" => Command::Freeze(false),
+        "blank" => Command::Blank(true),
+        "unblank" => Command::Blank(false),
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     tracing::info!(?cmd, "phone remote command");

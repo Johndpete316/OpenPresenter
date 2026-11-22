@@ -39,8 +39,57 @@ pub struct Theme {
     /// The main text box's place, canvas pixels.
     pub text_frame: Rect,
     pub text: TextStyle,
+    /// What applying the theme changes.
+    #[serde(default, skip_serializing_if = "ThemeParts::is_all")]
+    pub parts: ThemeParts,
     #[serde(skip)]
     pub path: PathBuf,
+}
+
+/// What applying a theme changes; everything by default (and in theme files from
+/// before this existed). A theme that only sets the font and size leaves each
+/// slide's alignment, place and colours alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ThemeParts {
+    /// Background colour and image.
+    pub background: bool,
+    /// Canvas size and the main text box's place.
+    pub layout: bool,
+    pub font: bool,
+    /// Text size (main text box).
+    pub size: bool,
+    pub color: bool,
+    /// Bold, italic, underline.
+    pub style: bool,
+    /// Horizontal and vertical alignment (main text box).
+    pub alignment: bool,
+    /// Line and letter spacing.
+    pub spacing: bool,
+    /// Outline and shadow.
+    pub effects: bool,
+}
+
+impl Default for ThemeParts {
+    fn default() -> Self {
+        ThemeParts {
+            background: true,
+            layout: true,
+            font: true,
+            size: true,
+            color: true,
+            style: true,
+            alignment: true,
+            spacing: true,
+            effects: true,
+        }
+    }
+}
+
+impl ThemeParts {
+    pub fn is_all(&self) -> bool {
+        *self == ThemeParts::default()
+    }
 }
 
 pub fn is_theme(path: &Path) -> bool {
@@ -177,6 +226,7 @@ impl Theme {
             background_image,
             text_frame: t.frame,
             text,
+            parts: ThemeParts::default(),
             path: PathBuf::new(),
         })
     }
@@ -220,6 +270,7 @@ impl Theme {
                 outline: None,
                 shadow: None,
             },
+            parts: ThemeParts::default(),
             path: PathBuf::new(),
         }
     }
@@ -354,62 +405,115 @@ impl Theme {
         let mut t = Theme::from_slide(&link.name, doc, (0, 0))?;
         t.uuid = link.uuid;
         t.path = doc.path.clone();
+        // What the theme applies isn't on its sample slide: keep the file's choice.
+        if let Ok(old) = Theme::load(&doc.path) {
+            t.parts = old.parts;
+        }
         Ok(t)
     }
 
-    /// Text boxes of a slide get the theme's style; the first also its place.
-    /// `scale`, `(ox, oy)`: how the theme's canvas maps into the document's.
+    /// Style one slide (`scale`, `(ox, oy)`: how the theme's canvas maps into the
+    /// document's), as far as [`ThemeParts`] says. The first text box is the main
+    /// one: it takes the theme's place and whole text style. Other text boxes (a
+    /// reference or caption) keep their own place, size and alignment and take only
+    /// the font, colour and effects. The main box stops above any of them sitting in
+    /// its lower half, so they don't overlap.
     fn style_slide(&self, slide: &mut Slide, scale: f64, (ox, oy): (f64, f64), link: bool) {
-        slide.background = self.background;
-        slide.background_image = self.background_image.clone();
+        let parts = self.parts;
+        if parts.background {
+            slide.background = self.background;
+            slide.background_image = self.background_image.clone();
+        }
         slide.theme = link.then(|| self.link());
         let st = &self.text;
+        let size = ((st.run.size * scale * 2.0).round() / 2.0).max(1.0);
+        let letter_spacing = st.run.letter_spacing * scale;
+        let mut main_frame = Rect {
+            x: (ox + self.text_frame.x * scale).round(),
+            y: (oy + self.text_frame.y * scale).round(),
+            width: (self.text_frame.width * scale).round().max(1.0),
+            height: (self.text_frame.height * scale).round().max(1.0),
+        };
+        let usable = |t: &TextBox| t.problem.is_none();
+        let others: Vec<Rect> = slide
+            .elements
+            .iter()
+            .filter_map(|e| match e {
+                Element::Text(t) if usable(t) => Some(t.frame),
+                _ => None,
+            })
+            .skip(1)
+            .collect();
+        let bottom = main_frame.y + main_frame.height;
+        let mid = main_frame.y + main_frame.height / 2.0;
+        for o in &others {
+            let across = o.x < main_frame.x + main_frame.width && o.x + o.width > main_frame.x;
+            if across && o.y > mid && o.y < bottom {
+                let gap = (o.height / 3.0).round();
+                let h = (o.y - gap - main_frame.y).round();
+                main_frame.height = main_frame.height.min(h).max(1.0);
+            }
+        }
         let mut first = true;
         for el in &mut slide.elements {
             let Element::Text(t) = el else { continue };
-            if t.problem.is_some() {
+            if !usable(t) {
                 continue;
             }
-            if first {
-                t.frame = Rect {
-                    x: (ox + self.text_frame.x * scale).round(),
-                    y: (oy + self.text_frame.y * scale).round(),
-                    width: (self.text_frame.width * scale).round().max(1.0),
-                    height: (self.text_frame.height * scale).round().max(1.0),
-                };
+            let main = std::mem::replace(&mut first, false);
+            if main && parts.layout {
+                t.frame = main_frame;
                 t.rotation = 0.0;
-                first = false;
             }
-            let run = RunStyle {
-                size: ((st.run.size * scale * 2.0).round() / 2.0).max(1.0),
-                letter_spacing: st.run.letter_spacing * scale,
-                ..st.run.clone()
-            };
+            if main && parts.alignment {
+                t.valign = st.valign;
+            }
             for p in &mut t.paragraphs {
-                p.align = st.align;
-                p.line_spacing = st.line_spacing;
+                if main && parts.alignment {
+                    p.align = st.align;
+                }
+                if main && parts.spacing {
+                    p.line_spacing = st.line_spacing;
+                }
                 for r in &mut p.runs {
-                    run.apply(r);
+                    if parts.font {
+                        r.font.clone_from(&st.run.font);
+                    }
+                    if main && parts.size {
+                        r.size = size;
+                    }
+                    if parts.color {
+                        r.color = st.run.color;
+                    }
+                    if parts.style {
+                        r.bold = st.run.bold;
+                        r.italic = st.run.italic;
+                        r.underline = st.run.underline;
+                    }
+                    if parts.spacing {
+                        r.letter_spacing = letter_spacing;
+                    }
                 }
             }
             crate::rich::normalize(&mut t.paragraphs);
-            t.valign = st.valign;
-            t.outline = st.outline.map(|o| Outline {
-                width: o.width * scale,
-                ..o
-            });
-            t.shadow = st.shadow.map(|s| Shadow {
-                blur: s.blur * scale,
-                offset: (s.offset.0 * scale, s.offset.1 * scale),
-                ..s
-            });
+            if parts.effects {
+                t.outline = st.outline.map(|o| Outline {
+                    width: o.width * scale,
+                    ..o
+                });
+                t.shadow = st.shadow.map(|s| Shadow {
+                    blur: s.blur * scale,
+                    offset: (s.offset.0 * scale, s.offset.1 * scale),
+                    ..s
+                });
+            }
         }
     }
 
     /// Apply to `slides` of `doc` (all of them when `all`). With `all`, a different
     /// canvas size rescales the whole presentation to the theme's first.
     pub fn apply(&self, doc: &mut Document, slides: &[(usize, usize)], all: bool, link: bool) {
-        if all && doc.canvas != self.canvas {
+        if all && self.parts.layout && doc.canvas != self.canvas {
             rescale(doc, self.canvas);
         }
         let (scale, offset) = fit(self.canvas, doc.canvas);
@@ -432,32 +536,31 @@ impl Theme {
     /// Whether `.pro6` can hold what this theme sets.
     pub fn features(&self) -> Vec<crate::Feature> {
         use crate::Feature as F;
-        let mut v = vec![
-            F::BackgroundColor,
-            F::ElementFrame,
-            F::Text,
-            F::FontFamily,
-            F::FontSize,
-            F::TextColor,
-            F::Bold,
-            F::Italic,
-            F::Underline,
-            F::HorizontalAlign,
-            F::VerticalAlign,
-        ];
-        if self.text.line_spacing != 1.0 {
-            v.push(F::LineSpacing);
-        }
-        if self.text.run.letter_spacing != 0.0 {
-            v.push(F::LetterSpacing);
-        }
-        if self.text.outline.is_some() {
-            v.push(F::TextOutline);
-        }
-        if self.text.shadow.is_some() {
-            v.push(F::TextShadow);
-        }
-        if let Some(b) = &self.background_image {
+        let p = &self.parts;
+        let mut v = vec![F::Text];
+        let mut on = |cond: bool, f: F| {
+            if cond {
+                v.push(f);
+            }
+        };
+        on(p.background, F::BackgroundColor);
+        on(p.layout, F::ElementFrame);
+        on(p.font, F::FontFamily);
+        on(p.size, F::FontSize);
+        on(p.color, F::TextColor);
+        on(p.style, F::Bold);
+        on(p.style, F::Italic);
+        on(p.style, F::Underline);
+        on(p.alignment, F::HorizontalAlign);
+        on(p.alignment, F::VerticalAlign);
+        on(p.spacing && self.text.line_spacing != 1.0, F::LineSpacing);
+        on(
+            p.spacing && self.text.run.letter_spacing != 0.0,
+            F::LetterSpacing,
+        );
+        on(p.effects && self.text.outline.is_some(), F::TextOutline);
+        on(p.effects && self.text.shadow.is_some(), F::TextShadow);
+        if let Some(b) = self.background_image.as_ref().filter(|_| p.background) {
             v.push(F::ImageBackground);
             if b.adjust.has_color() {
                 v.push(F::ImageAdjustColor);
@@ -528,6 +631,96 @@ pub fn rescale(doc: &mut Document, to: CanvasSize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_theme_applies_only_its_chosen_parts() {
+        let canvas = CanvasSize {
+            width: 1024,
+            height: 768,
+        };
+        let mut d = Theme::plain(canvas).to_document();
+        let before = d.groups[0].slides[0].text_boxes().next().unwrap().clone();
+        let mut theme = Theme::plain(canvas);
+        theme.text.run.font = "Bookman Old Style".into();
+        theme.text.run.size = 54.0;
+        theme.text.align = Align::Left;
+        theme.text.run.color = Some([255, 255, 0]);
+        theme.text_frame.x += 40.0;
+        theme.parts = ThemeParts {
+            background: false,
+            layout: false,
+            color: false,
+            alignment: false,
+            ..ThemeParts::default()
+        };
+        theme.apply(&mut d, &[], true, false);
+        let t = d.groups[0].slides[0].text_boxes().next().unwrap();
+        let run = t.runs().next().unwrap();
+        assert_eq!(run.font, "Bookman Old Style");
+        assert_eq!(run.size, 54.0);
+        assert_eq!(run.color, before.runs().next().unwrap().color);
+        assert_eq!(t.paragraphs[0].align, Align::Center);
+        assert_eq!(t.frame, before.frame);
+        let json = serde_json::to_string(&theme).unwrap();
+        let back: Theme = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.parts, theme.parts);
+        let old: Theme =
+            serde_json::from_str(&serde_json::to_string(&Theme::plain(canvas)).unwrap()).unwrap();
+        assert!(
+            old.parts.is_all(),
+            "files without the list apply everything"
+        );
+    }
+
+    #[test]
+    fn other_text_boxes_keep_their_size_place_and_alignment() {
+        let canvas = CanvasSize {
+            width: 1024,
+            height: 768,
+        };
+        let mut d = Theme::plain(canvas).to_document();
+        let slide = &mut d.groups[0].slides[0];
+        let Some(Element::Text(main)) = slide.elements.first() else {
+            panic!("no text box")
+        };
+        let mut reference = main.clone();
+        reference.frame = Rect {
+            x: 50.0,
+            y: 690.0,
+            width: 920.0,
+            height: 40.0,
+        };
+        for p in &mut reference.paragraphs {
+            p.align = Align::Right;
+            for r in &mut p.runs {
+                r.size = 27.0;
+            }
+        }
+        slide.elements.push(Element::Text(reference.clone()));
+        let mut theme = Theme::plain(canvas);
+        theme.text.run.font = "Bookman Old Style".into();
+        theme.text.run.size = 54.0;
+        theme.text_frame = Rect {
+            x: 30.0,
+            y: 30.0,
+            width: 964.0,
+            height: 708.0,
+        };
+        theme.apply(&mut d, &[], true, false);
+        let boxes: Vec<&TextBox> = d.groups[0].slides[0].text_boxes().collect();
+        let (m, r) = (boxes[0], boxes[1]);
+        assert_eq!(m.runs().next().map(|r| r.size), Some(54.0));
+        assert_eq!(m.frame.y, 30.0);
+        assert!(
+            m.frame.y + m.frame.height < r.frame.y,
+            "the main box stops above the reference"
+        );
+        assert_eq!(r.frame, reference.frame);
+        assert_eq!(r.paragraphs[0].align, Align::Right);
+        let run = r.runs().next().unwrap();
+        assert_eq!(run.size, 27.0);
+        assert_eq!(run.font, "Bookman Old Style");
+    }
 
     #[test]
     fn relative_paths() {

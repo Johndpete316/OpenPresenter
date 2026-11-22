@@ -7,10 +7,12 @@ mod canvas;
 mod crash;
 mod editor;
 mod error;
+mod esv;
 mod file_menu;
 mod gl;
 mod grid_menu;
 mod keys;
+mod library_menu;
 mod media_scan;
 mod media_thumbs;
 mod operator;
@@ -158,7 +160,7 @@ fn parse_size(s: &str) -> Result<(u32, u32), String> {
     }
 }
 
-/// Version and the git commit it was built from, e.g. "0.1.0 (851e7e5)".
+/// Version and the git commit it was built from, e.g. "0.9.0 (851e7e5)".
 pub const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (",
@@ -237,6 +239,12 @@ fn paths(data_dir: Option<PathBuf>) -> Paths {
     }
 }
 
+fn unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 fn main() -> ExitCode {
     let started = Instant::now();
     let args = Args::parse();
@@ -249,6 +257,19 @@ fn main() -> ExitCode {
     let mut settings = Settings::load(&paths.settings).unwrap_or_else(|e| {
         tracing::error!(error = %e, "settings");
         app_notices.push(e.user_message());
+        // Keep the broken file: the next settings change would overwrite it with defaults.
+        if matches!(e, opcore::SettingsError::Format { .. }) {
+            let aside = paths
+                .settings
+                .with_extension(format!("toml.broken-{}", unix_secs()));
+            match std::fs::copy(&paths.settings, &aside) {
+                Ok(_) => app_notices.push(format!(
+                    "The broken settings file was kept as {}.",
+                    aside.display()
+                )),
+                Err(e) => tracing::warn!(error = %e, "couldn't keep a copy of the broken settings"),
+            }
+        }
         Settings::default()
     });
     let mut changed = false;
@@ -283,6 +304,10 @@ fn main() -> ExitCode {
         }
     };
     let proxy = event_loop.create_proxy();
+    let notify = proxy.clone();
+    crash::set_notifier(move |msg| {
+        let _ = notify.send_event(UserEvent::MediaFailed(msg));
+    });
     let wake = proxy.clone();
     let snaps = core.subscribe(Some(Box::new(move || {
         let _ = wake.send_event(UserEvent::Snapshot);
@@ -965,6 +990,22 @@ impl App {
                     self.settings.view.tile_width = w;
                     self.save_settings();
                 }
+            }
+            UiAction::SetEsvEnabled(on) => {
+                self.settings.integrations.esv.enabled = on;
+                self.save_settings();
+            }
+            UiAction::SetEsvTheme(t) => {
+                self.settings.integrations.esv.theme = t;
+                self.save_settings();
+            }
+            UiAction::SetDefaultFont(f) => {
+                self.settings.editor.default_font = f;
+                self.save_settings();
+            }
+            UiAction::SetDefaultFontSize(v) => {
+                self.settings.editor.default_font_size = v;
+                self.save_settings();
             }
             UiAction::SetFitMinSize(v) => {
                 self.settings.editor.fit_min_size = v;

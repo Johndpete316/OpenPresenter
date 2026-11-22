@@ -2,6 +2,7 @@
 //! library index. No GUI, GPU or media dependencies.
 
 mod actor;
+pub mod bible;
 mod command;
 pub mod library;
 mod order;
@@ -19,8 +20,8 @@ pub use playlist::{
     ItemRef, Playlist, PlaylistError, PlaylistFile, PlaylistItem, load_dir as load_playlists,
 };
 pub use settings::{
-    EditorSettings, GroupColor, KeyBindings, MediaScaling, OutputSettings, Resolution, Settings,
-    SettingsError, WebSettings,
+    EditorSettings, EsvSettings, GroupColor, IntegrationSettings, KeyBindings, MediaScaling,
+    OutputSettings, Resolution, Settings, SettingsError, WebSettings,
 };
 pub use state::{Editing, Live, LoopState, MediaCue, Notice, NoticeLevel, ShowState};
 

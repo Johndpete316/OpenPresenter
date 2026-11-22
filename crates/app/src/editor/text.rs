@@ -1015,7 +1015,7 @@ pub(super) fn toolbar(
 }
 
 /// Font list with search and a preview of each font. Returns the family picked.
-fn font_picker(ui: &mut egui::Ui, st: &mut UiState, current: &str) -> Option<String> {
+pub(super) fn font_picker(ui: &mut egui::Ui, st: &mut UiState, current: &str) -> Option<String> {
     let mut picked = None;
     ui.set_min_width(280.0);
     let r = ui.add(

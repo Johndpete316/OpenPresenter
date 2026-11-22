@@ -61,7 +61,7 @@ pub struct Saving {
 }
 
 /// Canvas for the plain look when there's no presentation to take one from.
-const PLAIN_CANVAS: doc::CanvasSize = doc::CanvasSize {
+pub(super) const PLAIN_CANVAS: doc::CanvasSize = doc::CanvasSize {
     width: 1920,
     height: 1080,
 };
@@ -163,7 +163,7 @@ fn chosen_theme(st: &UiState, doc_path: &Path) -> Option<Box<Theme>> {
 /// A new presentation: one slide styled like `d`'s first text slide (or the
 /// theme), then the lyrics.
 /// With no text: one empty slide in the template's style (a blank presentation).
-fn new_presentation(
+pub(super) fn new_presentation(
     d: &doc::Document,
     path: &Path,
     text: &str,
@@ -348,7 +348,7 @@ fn template<'a>(
             let canvas = selected.map_or(PLAIN_CANVAS, |(_, d)| d.canvas);
             (
                 PathBuf::from("new.opres"),
-                Cow::Owned(Theme::plain(canvas).to_document()),
+                Cow::Owned(plain_theme(st, canvas).to_document()),
             )
         }
     }
@@ -373,6 +373,8 @@ pub fn open_blank(st: &mut UiState, ctx: &egui::Context, selected: bool) {
     l.blank = true;
     l.open = false;
     l.like_selected = selected;
+    st.edit.scripture.on = false;
+    let l = &mut st.edit.lyrics;
     l.theme = None;
     l.text.clear();
     l.target = Target::New;
@@ -410,7 +412,14 @@ pub fn blank_dialog(
         }
         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         ui.add_space(4.0);
-        new_header(ui, st, title.as_deref());
+        new_header(ui, st, title.as_deref(), true);
+        let scripture = st.edit.scripture.on && st.edit.scripture.enabled;
+        let mut scripture_ready = false;
+        if scripture {
+            let mut name = std::mem::take(&mut st.edit.lyrics.new_name);
+            scripture_ready = super::scripture::pickers(ui, st, &mut name);
+            st.edit.lyrics.new_name = name;
+        }
         match &st.edit.new_dir {
             Some(dir) => ui.label(
                 RichText::new(format!(
@@ -427,7 +436,9 @@ pub fn blank_dialog(
             ),
         };
         ui.add_space(6.0);
-        let ready = !st.edit.lyrics.new_name.trim().is_empty() && st.edit.new_dir.is_some();
+        let ready = !st.edit.lyrics.new_name.trim().is_empty()
+            && st.edit.new_dir.is_some()
+            && (!scripture || scripture_ready);
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(ready, egui::Button::new(RichText::new("Create").strong()))
@@ -443,6 +454,13 @@ pub fn blank_dialog(
     });
     if cancel || modal.should_close() {
         st.edit.lyrics.blank = false;
+        super::scripture::cancel(st);
+        return;
+    }
+    if create && st.edit.scripture.on {
+        // The prompt closes once the passage is fetched and laid out.
+        let name = st.edit.lyrics.new_name.trim().to_owned();
+        super::scripture::create(st, ctx, &name);
         return;
     }
     if create {
@@ -513,7 +531,7 @@ fn body(
     standalone: Option<&Option<String>>,
 ) {
     if let Some(selected) = standalone {
-        new_header(ui, st, selected.as_deref());
+        new_header(ui, st, selected.as_deref(), false);
     } else {
         lyrics_header(ui, st);
     }
@@ -525,13 +543,21 @@ fn body(
 }
 
 /// Top row from the toolbar: what new slides look like.
-fn new_header(ui: &mut egui::Ui, st: &mut UiState, selected: Option<&str>) {
+/// `scripture`: offer the look "Scripture (ESV)" when the integration is on.
+fn new_header(ui: &mut egui::Ui, st: &mut UiState, selected: Option<&str>, scripture: bool) {
     ui.horizontal(|ui| {
         let names: Vec<(String, String)> = st.edit.themes.names();
         let l = &mut st.edit.lyrics;
-        let before = (l.like_selected, l.theme.clone());
+        let sc = &mut st.edit.scripture;
+        let scripture = scripture && sc.enabled;
+        if !scripture {
+            sc.on = false;
+        }
+        let before = (l.like_selected, l.theme.clone(), sc.on);
         ui.label("Look");
-        let current = if l.like_selected {
+        let current = if sc.on {
+            "Scripture (ESV)".to_owned()
+        } else if l.like_selected {
             format!("like {}", selected.unwrap_or("the selected presentation"))
         } else {
             l.theme
@@ -545,36 +571,49 @@ fn new_header(ui: &mut egui::Ui, st: &mut UiState, selected: Option<&str>) {
             .selected_text(current)
             .width(280.0)
             .show_ui(ui, |ui| {
+                if scripture
+                    && ui
+                        .selectable_label(sc.on, "Scripture (ESV)")
+                        .on_hover_text("Choose a passage; it's fetched from the ESV Bible API and laid out in the look from Settings → Integrations")
+                        .clicked()
+                {
+                    sc.on = true;
+                    l.like_selected = false;
+                    l.theme = None;
+                }
                 if let Some(t) = selected
                     && ui
-                        .selectable_label(l.like_selected, format!("like {t}"))
+                        .selectable_label(!sc.on && l.like_selected, format!("like {t}"))
                         .on_hover_text("Same font, size, layout and background as the presentation selected in the library")
                         .clicked()
                 {
+                    sc.on = false;
                     l.like_selected = true;
                     l.theme = None;
                 }
                 if ui
-                    .selectable_label(!l.like_selected && l.theme.is_none(), "plain (white text on black)")
+                    .selectable_label(!sc.on && !l.like_selected && l.theme.is_none(), "plain (white text on black)")
                     .clicked()
                 {
+                    sc.on = false;
                     l.like_selected = false;
                     l.theme = None;
                 }
                 for (id, n) in &names {
                     if ui
                         .selectable_label(
-                            !l.like_selected && l.theme.as_ref() == Some(id),
+                            !sc.on && !l.like_selected && l.theme.as_ref() == Some(id),
                             format!("theme {n}"),
                         )
                         .clicked()
                     {
+                        sc.on = false;
                         l.like_selected = false;
                         l.theme = Some(id.clone());
                     }
                 }
             });
-        if (l.like_selected, l.theme.clone()) != before {
+        if (l.like_selected, l.theme.clone(), sc.on) != before {
             l.preview_for = None;
         }
     });
@@ -642,7 +681,7 @@ fn name_row(ui: &mut egui::Ui, st: &mut UiState) {
 }
 
 /// A file name for a presentation called `name`.
-fn file_stem(name: &str) -> String {
+pub(crate) fn file_stem(name: &str) -> String {
     let n = name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
     if n.is_empty() { "…".into() } else { n }
 }
@@ -868,49 +907,108 @@ fn apply(
             st.edit.lyrics.open = false;
         }
         Target::New => {
-            let Some(dir) = st.edit.new_dir.clone() else {
+            let name = st.edit.lyrics.new_name.trim().to_owned();
+            let Some((dir, file)) = new_file(st, &name) else {
                 return;
             };
-            let name = st.edit.lyrics.new_name.trim().to_owned();
-            let file: PathBuf = dir.join(format!("{}.{}", file_stem(&name), doc::NATIVE_EXT));
             // A blank presentation opens in the editor; a song is ready to use.
             let edit = text.trim().is_empty();
-            if file.exists() || file.with_extension("pro6").exists() {
-                st.toast(format!(
-                    "A presentation named '{name}' already exists in {}. Choose another name.",
-                    dir.display()
-                ));
-                return;
-            }
             let theme = theme.map(|t| Box::new(t.for_document(&file)));
             match new_presentation(d, &file, &text, colors, theme) {
                 Ok(n) => {
-                    // Written on a worker thread, then opened in the editor.
-                    let tx_ctx = ctx.clone();
-                    let (done_tx, done_rx) = crossbeam_channel::bounded(1);
-                    let spawned = std::thread::Builder::new()
-                        .name("new-presentation".into())
-                        .spawn(move || {
-                            let r = match std::fs::create_dir_all(&dir) {
-                                Ok(()) => doc::save(&n).map(|s| s.path).map_err(|e| e.user_message()),
-                                Err(e) => Err(format!(
-                                    "The folder for new presentations, {}, couldn't be made ({e}). Choose another in Settings, Folders.",
-                                    dir.display()
-                                )),
-                            };
-                            let _ = done_tx.send(r);
-                            tx_ctx.request_repaint();
-                        });
-                    match spawned {
-                        Ok(_) => st.edit.lyrics_new = Some(Saving { rx: done_rx, edit }),
-                        Err(e) => st.toast(format!("Couldn't save the new presentation: {e}")),
-                    }
+                    save_new(st, ctx, dir, n, edit);
                     st.edit.lyrics.open = false;
                 }
                 Err(e) => st.toast(e),
             }
         }
     }
+}
+
+/// The folder and file for a new presentation called `name`; `None` (with a toast)
+/// if there's no folder for new presentations or the name is taken.
+pub(super) fn new_file(st: &mut UiState, name: &str) -> Option<(PathBuf, PathBuf)> {
+    let dir = st.edit.new_dir.clone()?;
+    let file: PathBuf = dir.join(format!("{}.{}", file_stem(name), doc::NATIVE_EXT));
+    if file.exists() || file.with_extension("pro6").exists() {
+        st.toast(format!(
+            "A presentation named '{name}' already exists in {}. Choose another name.",
+            dir.display()
+        ));
+        return None;
+    }
+    Some((dir, file))
+}
+
+/// Write a new presentation on a worker thread; [`poll`] then opens it (in the
+/// editor when `edit`).
+pub(super) fn save_new(
+    st: &mut UiState,
+    ctx: &egui::Context,
+    dir: PathBuf,
+    n: doc::Document,
+    edit: bool,
+) {
+    let tx_ctx = ctx.clone();
+    let (done_tx, done_rx) = crossbeam_channel::bounded(1);
+    let spawned = std::thread::Builder::new()
+        .name("new-presentation".into())
+        .spawn(move || {
+            let r = match std::fs::create_dir_all(&dir) {
+                Ok(()) => doc::save(&n).map(|s| s.path).map_err(|e| e.user_message()),
+                Err(e) => Err(format!(
+                    "The folder for new presentations, {}, couldn't be made ({e}). Choose another in Settings, Folders.",
+                    dir.display()
+                )),
+            };
+            let _ = done_tx.send(r);
+            tx_ctx.request_repaint();
+        });
+    match spawned {
+        Ok(_) => st.edit.lyrics_new = Some(Saving { rx: done_rx, edit }),
+        Err(e) => st.toast(format!("Couldn't save the new presentation: {e}")),
+    }
+}
+
+/// The plain look for `canvas`, in the default font and size from Settings → General.
+pub(super) fn plain_theme(st: &UiState, canvas: doc::CanvasSize) -> Theme {
+    let mut t = Theme::plain(canvas);
+    if let Some(font) = default_font(st) {
+        t.text.run.font = font;
+    }
+    if st.edit.default_font_size > 0.0 {
+        t.text.run.size = st.edit.default_font_size;
+    }
+    t
+}
+
+/// The default font if it's installed; otherwise the first installed of a few common
+/// ones (so a new presentation can always be shown). `None` = keep the built-in one
+/// (fonts not listed yet).
+pub(crate) fn default_font(st: &UiState) -> Option<String> {
+    let want = st.edit.default_font.trim();
+    let installed = |name: &str| st.families.iter().find(|f| f.eq_ignore_ascii_case(name));
+    if st.families.is_empty() {
+        return (!want.is_empty()).then(|| want.to_owned());
+    }
+    [
+        want,
+        "Arial",
+        "Liberation Sans",
+        "DejaVu Sans",
+        "Noto Sans",
+        "Segoe UI",
+    ]
+    .into_iter()
+    .filter(|n| !n.is_empty())
+    .find_map(installed)
+    .or_else(|| st.families.first())
+    .cloned()
+}
+
+/// Close the New presentation prompt.
+pub(super) fn close_blank(st: &mut UiState) {
+    st.edit.lyrics.blank = false;
 }
 
 /// A new presentation finished saving: open it in the editor.

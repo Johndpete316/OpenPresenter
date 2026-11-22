@@ -31,11 +31,21 @@ mod copy_style;
 mod fit;
 mod image;
 pub(crate) mod lyrics;
+pub(crate) mod scripture;
 mod snap;
 mod text;
 mod themes;
 mod video;
 pub use themes::THEMES_DIR;
+
+/// The font list with search and previews (as in the editor). Returns the family picked.
+pub fn font_picker(
+    ui: &mut egui::Ui,
+    st: &mut crate::ui::UiState,
+    current: &str,
+) -> Option<String> {
+    text::font_picker(ui, st, current)
+}
 
 const RULER: f32 = 18.0;
 const HANDLE: f32 = 4.5;
@@ -135,9 +145,14 @@ pub struct EditState {
     themes: themes::Themes,
     /// Paste Lyrics window, and a new presentation being saved from it.
     lyrics: lyrics::Lyrics,
+    /// ESV scripture import (Settings → Integrations, New presentation).
+    pub scripture: scripture::Scripture,
     lyrics_new: Option<lyrics::Saving>,
     /// Default group colours (from the settings).
     pub group_colors: Vec<opcore::GroupColor>,
+    /// Plain look's font and size (Settings → General; 0 = sized for the canvas).
+    pub default_font: String,
+    pub default_font_size: f64,
     /// Turn the editor back on after theme editing ends (Done).
     reopen_after_theme: bool,
     /// Copied style (Copy Style), for pasting.
@@ -1020,8 +1035,8 @@ fn strip(
                     st.edit.tiles.push(((gi, si), rect));
                     if slide.video.is_some() {
                         ui.painter().rect_filled(rect, 0.0, Color32::BLACK);
-                        if let Some(t) = video_poster(st, path, d, gi, si) {
-                            egui::Image::new(&t).paint_at(ui, rect);
+                        if let Some((t, fit)) = video_poster(st, path, d, gi, si) {
+                            crate::media_thumbs::paint_poster(ui.painter(), rect, &t, fit);
                         }
                     }
                     let (key, tex) = st.thumb_public(thumbs, d, flat);
@@ -2142,13 +2157,8 @@ fn canvas(
     };
     painter.rect_filled(rect, 0.0, Color32::BLACK);
     // A video slide: the video's poster under the slide (which draws no colour).
-    if let Some(t) = video_poster(st, path, d, g, s) {
-        painter.image(
-            t.id(),
-            rect,
-            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-            Color32::WHITE,
-        );
+    if let Some((t, fit)) = video_poster(st, path, d, g, s) {
+        crate::media_thumbs::paint_poster(&painter, rect, &t, fit);
     }
     if let Some(c) = &mut st.canvas {
         c.request(
@@ -2986,17 +2996,19 @@ fn rulers(
     }
 }
 
-/// The poster (first frame) of slide `(g, s)`'s video, once it's made.
+/// The poster (first frame) of slide `(g, s)`'s video with its picture settings, and
+/// how it fits the slide, once it's made.
 fn video_poster(
     st: &mut UiState,
     path: &Path,
     d: &doc::Document,
     g: usize,
     s: usize,
-) -> Option<egui::TextureHandle> {
+) -> Option<(egui::TextureHandle, doc::Fit)> {
     let v = d.groups.get(g)?.slides.get(s)?.video.as_ref()?;
     let f = v.media.resolve(path);
-    st.media_thumbs.as_mut()?.get(&f)?.as_ref().ok().cloned()
+    let t = st.media_thumbs.as_mut()?.get_adjusted(&f, &v.adjust)?;
+    Some((t.as_ref().ok().cloned()?, v.fit))
 }
 
 /// `(group, slide)` exists in `d`.

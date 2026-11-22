@@ -75,6 +75,10 @@ nav button { display: flex; align-items: center; justify-content: center; gap: 1
 .arrow { height: .9em; width: auto; }
 .arrow.back { transform: scaleX(-1); }
 #clear { grid-column: 1 / 3; background: var(--danger); padding: 14px 0; font-size: 1.1rem; }
+#holds { grid-column: 1 / 3; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+#holds button { background: #2a2a2a; padding: 14px 0; font-size: 1.1rem; border: 2px solid transparent; }
+#freeze.on { background: #1d5a70; border-color: #40b0d6; }
+#blank.on { background: #000; border-color: #fff; }
 button:active { filter: brightness(1.3); }
 button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 
@@ -85,9 +89,9 @@ button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
   #stage > .curbox { flex: 2; }
   #stage > .nextbox { flex: 1; }
   .nextrow { grid-template-columns: 1fr; }
-  nav { grid-template-columns: 1fr; grid-template-rows: 2fr 3fr 1fr; width: 34%; border-top: 0; border-left: 1px solid var(--line); }
+  nav { grid-template-columns: 1fr; grid-template-rows: 2fr 3fr 1fr 1fr; width: 34%; border-top: 0; border-left: 1px solid var(--line); }
   nav button { padding: 0; }
-  #clear { grid-column: auto; }
+  #clear, #holds { grid-column: auto; }
 }
 
 /* Wide screens: playlists | slide grid | current/next + controls. */
@@ -163,6 +167,10 @@ details[open] > summary::before { content: "▾"; }
   <nav>
     <button id="prev"><svg class="arrow back" viewBox="0 0 84 134" aria-hidden="true"><path d="M 17 17 L 67 67 L 17 117" fill="none" stroke="currentColor" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/></svg>Prev</button>
     <button id="nextbtn">Next<svg class="arrow" viewBox="0 0 84 134" aria-hidden="true"><path d="M 17 17 L 67 67 L 17 117" fill="none" stroke="currentColor" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <div id="holds">
+      <button id="freeze">Freeze</button>
+      <button id="blank">Blank</button>
+    </div>
     <button id="clear">Clear</button>
   </nav>
 </div>
@@ -185,6 +193,8 @@ function cmd(name) { if (navigator.vibrate) navigator.vibrate(10); post('/api/cm
 $('prev').onclick = () => cmd('prev');
 $('nextbtn').onclick = () => cmd('next');
 $('clear').onclick = () => cmd('clear');
+$('freeze').onclick = () => cmd(S && S.frozen ? 'unfreeze' : 'freeze');
+$('blank').onclick = () => cmd(S && S.blanked ? 'unblank' : 'blank');
 $('cleartext').onclick = () => cmd('clear-text');
 $('clearbg').onclick = () => cmd('clear-bg');
 $('output').onclick = () => cmd(S && S.output_enabled ? 'output-off' : 'output-on');
@@ -257,6 +267,8 @@ function show(s) {
   const badges = [];
   if (l && !s.text_visible) badges.push('Text cleared');
   if (!s.output_enabled) badges.push('Output off');
+  if (s.blanked) badges.push('Screen blank');
+  else if (s.frozen) badges.push('Screen frozen');
   $('badges').replaceChildren(...badges.map(t => { const b = document.createElement('span'); b.className = 'badge'; b.textContent = t; return b; }));
   $('nexttitle').textContent = !n ? (l ? 'End' : '') : (n.same_presentation ? '' : n.title);
   screen($('nxt'), n && n.image, n ? (n.text || '') : '', s.background, true, s.background_visible);
@@ -265,6 +277,11 @@ function show(s) {
   const o = $('output');
   o.textContent = s.output_enabled ? 'Output on' : 'Output off';
   o.classList.toggle('off', !s.output_enabled);
+  const fz = $('freeze'), bk = $('blank');
+  fz.textContent = s.frozen ? 'Unfreeze' : 'Freeze';
+  fz.classList.toggle('on', s.frozen);
+  bk.textContent = s.blanked ? 'Unblank' : 'Blank';
+  bk.classList.toggle('on', s.blanked);
   if (follow && l && l.id !== prevLive) browse = l.id;
   if (l && l.id === browse) follow = true; // went live from the grid: follow it again
   renderLists();

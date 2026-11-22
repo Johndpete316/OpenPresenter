@@ -380,6 +380,7 @@ fn theme_actions(
     (g, s): (usize, usize),
 ) {
     ui.label(RichText::new(&theme.name).strong());
+    parts_editor(ui, st, theme);
     let native: Vec<&str> = theme
         .features()
         .into_iter()
@@ -526,6 +527,66 @@ fn theme_actions(
             }
         }
     });
+}
+
+/// What the theme changes when applied (saved to its file right away).
+fn parts_editor(ui: &mut egui::Ui, st: &mut UiState, theme: &Theme) {
+    let mut p = theme.parts;
+    egui::CollapsingHeader::new(if p.is_all() {
+        "Applies: everything".to_owned()
+    } else {
+        "Applies: some parts".to_owned()
+    })
+    .id_salt(("theme-parts", &theme.uuid))
+    .show(ui, |ui| {
+        let rows: [(&mut bool, &str, &str); 9] = [
+            (&mut p.font, "Font", "Font family, on every text box"),
+            (&mut p.size, "Text size", "The main text's size"),
+            (&mut p.color, "Text colour", ""),
+            (&mut p.style, "Bold / italic / underline", ""),
+            (&mut p.alignment, "Alignment", "Left / centre / right and top / middle / bottom of the main text"),
+            (&mut p.spacing, "Line and letter spacing", ""),
+            (&mut p.effects, "Outline and shadow", ""),
+            (&mut p.layout, "Text box place and canvas size", "Moves the main text box to the theme's place; applied to a whole presentation, also its canvas size"),
+            (&mut p.background, "Background", "Background colour and image"),
+        ];
+        egui::Grid::new(("theme-parts-grid", &theme.uuid))
+            .num_columns(2)
+            .show(ui, |ui| {
+                for (i, (v, label, tip)) in rows.into_iter().enumerate() {
+                    let r = ui.checkbox(v, label);
+                    if !tip.is_empty() {
+                        r.on_hover_text(tip);
+                    }
+                    if i % 2 == 1 {
+                        ui.end_row();
+                    }
+                }
+            });
+        ui.label(
+            RichText::new("Unticked parts are left as each slide has them.")
+                .small()
+                .weak(),
+        );
+    });
+    if p != theme.parts {
+        let mut t = theme.clone();
+        t.parts = p;
+        let file = theme.path.clone();
+        spawn(st, ui.ctx(), move || {
+            Job::Saved(Box::new(t.save(&file).map_err(|e| e.user_message())))
+        });
+        // Shown changed until the save comes back.
+        if let Some(x) = st
+            .edit
+            .themes
+            .list
+            .iter_mut()
+            .find(|x| x.uuid == theme.uuid)
+        {
+            x.parts = p;
+        }
+    }
 }
 
 /// "Editing this theme restyles N slides in M presentations."

@@ -4,9 +4,10 @@
 //! in-memory rings: the last lines at debug level for crash reports, and recent
 //! info lines for the operator UI.
 //!
-//! Panics are unrecoverable faults: the hook writes a crash report (version, OS,
-//! panic + backtrace, show state, recent commands, recent log lines) to the logs
-//! folder, shows a native dialog with the report's path, and exits immediately.
+//! Every panic writes a crash report (version, OS, panic + backtrace, show state,
+//! recent commands, recent log lines) to the logs folder. On a show-critical thread
+//! (`CRITICAL_THREADS`) it's unrecoverable: a native dialog shows the report's path
+//! and the program exits. Elsewhere the operator gets a toast and the thread unwinds.
 
 use std::collections::VecDeque;
 use std::fmt::Write as _;
@@ -99,6 +100,19 @@ pub struct CrashContext {
 static FILE_GUARD: OnceLock<Mutex<Option<tracing_appender::non_blocking::WorkerGuard>>> =
     OnceLock::new();
 
+/// Threads the show can't run without. A panic anywhere else (phone remote, ESV,
+/// thumbnails, exports, library scan, file loading, …) is reported and that work
+/// stops, but the output stays up: closing mid-service is worse than a lost feature.
+const CRITICAL_THREADS: &[&str] = &["main", "core", "raster", "output-render"];
+
+type Notifier = Box<dyn Fn(String) + Send + Sync>;
+static NOTIFY: OnceLock<Notifier> = OnceLock::new();
+
+/// Where non-fatal panics are told to the operator (a toast).
+pub fn set_notifier(f: impl Fn(String) + Send + Sync + 'static) {
+    let _ = NOTIFY.set(Box::new(f));
+}
+
 /// Install logging. Returns the crash context to hand to `install_panic_hook`.
 pub fn init_logging(logs_dir: PathBuf, verbose: bool) -> CrashContext {
     let ctx = CrashContext {
@@ -185,6 +199,20 @@ pub fn install_panic_hook(ctx: CrashContext) {
             .to_owned();
         let report = build_report(&ctx, &message, &location, &thread, &backtrace.to_string());
         let path = write_report(&ctx, &report);
+        let where_ = path.as_ref().map_or_else(
+            || "(the report couldn't be written)".to_owned(),
+            |p| p.display().to_string(),
+        );
+        if !CRITICAL_THREADS.contains(&thread.as_str()) {
+            // Let this thread unwind; the show keeps going.
+            tracing::error!(%message, %location, %thread, report = ?path, "internal error in a background task; continuing");
+            if let Some(n) = NOTIFY.get() {
+                n(format!(
+                    "Something went wrong in the background ({thread}: {message}). The show keeps running, but that task may have stopped; restart OpenPresenter after the service. Report: {where_}"
+                ));
+            }
+            return;
+        }
         tracing::error!(%message, %location, %thread, report = ?path, "unrecoverable fault; exiting");
         // Flush the file log before exiting.
         if let Some(g) = FILE_GUARD.get()
@@ -192,10 +220,6 @@ pub fn install_panic_hook(ctx: CrashContext) {
         {
             drop(g.take());
         }
-        let where_ = path.as_ref().map_or_else(
-            || "(the report couldn't be written)".to_owned(),
-            |p| p.display().to_string(),
-        );
         eprintln!(
             "\nOpenPresenter hit an unrecoverable error and must close: {message}\nCrash report: {where_}"
         );
@@ -204,7 +228,7 @@ pub fn install_panic_hook(ctx: CrashContext) {
                 .set_level(rfd::MessageLevel::Error)
                 .set_title("OpenPresenter has to close")
                 .set_description(format!(
-                    "OpenPresenter hit an unrecoverable error and must close.\n\n{message}\n\nA crash report was saved to:\n{where_}\n\nRestart OpenPresenter; it will return to where you were."
+                    "OpenPresenter hit an unrecoverable error and must close.\n\n{message}\n\nA crash report was saved to:\n{where_}\n\nRestart OpenPresenter and choose the slide again (it starts blank)."
                 ))
                 .set_buttons(rfd::MessageButtons::Ok)
                 .show();
@@ -258,4 +282,39 @@ fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A panic on a background thread is reported and that thread stops, but the
+    /// process keeps running (the hook only exits for `CRITICAL_THREADS`).
+    #[test]
+    fn background_panic_is_reported_not_fatal() {
+        let dir = std::env::temp_dir().join(format!("op-crash-test-{}", std::process::id()));
+        let ctx = CrashContext {
+            logs_dir: dir.clone(),
+            crash_log: Ring::new(4),
+            ui_log: Ring::new(4),
+            show_state: Arc::new(Mutex::new(String::new())),
+            recent_commands: Ring::new(4),
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        set_notifier(move |m| {
+            let _ = tx.send(m);
+        });
+        install_panic_hook(ctx);
+        let r = std::thread::Builder::new()
+            .name("esv".into())
+            .spawn(|| panic!("boom"))
+            .map(std::thread::JoinHandle::join);
+        assert!(matches!(r, Ok(Err(_))), "the thread unwound");
+        let msg = rx.recv_timeout(std::time::Duration::from_secs(5));
+        assert!(msg.is_ok_and(|m| m.contains("esv: boom")));
+        let reports = std::fs::read_dir(&dir).map(Iterator::count).unwrap_or(0);
+        assert_eq!(reports, 1, "a crash report was written");
+        let _ = std::panic::take_hook();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

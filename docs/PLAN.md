@@ -68,6 +68,7 @@ ProPresenter-Replacement/   # repo folder (the program is OpenPresenter)
 - **Recoverable** (bad file, missing font, missing media): show in UI, log, keep running.
 - **Unrecoverable** (core state invariant broken, GL context lost and can't be recreated): panic.
 - Panic hook: write crash report (version, OS, backtrace, last N log lines, `ShowState` snapshot, recent commands) to the logs dir, show native dialog (`rfd`) with summary + report path, exit immediately.
+- **Panics off the show-critical threads don't close the program (2026-11-21).** The hook writes the report for every panic, but exits only on `main`, `core`, `raster` and `output-render` (`crash::CRITICAL_THREADS`). Elsewhere (phone remote, ESV, thumbnails, exports, themes, library scan) the operator gets a toast and that thread unwinds. File loads/saves on `core-io` and the library scan catch panics per file, so one bad file fails with a message instead of stopping file work. A broken `settings.toml` is copied to `settings.toml.broken-<time>` before defaults are used.
 - Logging: `tracing` with a span per command and per file load; rolling daily files via `tracing-appender`; debug to file, info to UI.
 - Persist current playlist + slide position so a relaunch restores where the operator was.
 - **Missing fonts never silently fall back.**

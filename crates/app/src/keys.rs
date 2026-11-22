@@ -26,6 +26,8 @@ mod tests {
             (Key::Named(NamedKey::F1), opcore::Command::ClearAll),
             (Key::Named(NamedKey::F2), opcore::Command::ClearBackground),
             (Key::Named(NamedKey::F3), opcore::Command::ClearText),
+            (Key::Named(NamedKey::F4), opcore::Command::FreezeToggle),
+            (Key::Named(NamedKey::F5), opcore::Command::BlankToggle),
             (Key::Character(".".into()), opcore::Command::ClearAll),
         ] {
             assert_eq!(

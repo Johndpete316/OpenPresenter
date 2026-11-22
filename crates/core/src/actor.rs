@@ -111,7 +111,9 @@ fn io_worker(rx: &Receiver<IoJob>, back: &Sender<Msg>) {
     while let Ok(job) = rx.recv() {
         let msg = match job {
             IoJob::Load(path) => {
-                let r = doc::open(&path).map(Arc::new).map_err(|e| e.user_message());
+                let r = guarded(&path, || {
+                    doc::open(&path).map(Arc::new).map_err(|e| e.user_message())
+                });
                 Msg::Loaded(path, r)
             }
             IoJob::LoadPlaylist(path) => {
@@ -119,7 +121,7 @@ fn io_worker(rx: &Receiver<IoJob>, back: &Sender<Msg>) {
                 Msg::PlaylistLoaded(path, r)
             }
             IoJob::SaveDocument(path, d) => {
-                let r = doc::save(&d).map_err(|e| e.user_message());
+                let r = guarded(&path, || doc::save(&d).map_err(|e| e.user_message()));
                 Msg::Saved(path, d, r)
             }
             IoJob::SavePlaylist(p, path) => {
@@ -140,6 +142,18 @@ fn io_worker(rx: &Receiver<IoJob>, back: &Sender<Msg>) {
         // still reach the disk. The loop ends when the queue is empty and closed.
         let _ = back.send(msg);
     }
+}
+
+/// Run a load or save so that a bug tripped by one file (a panic in a parser or
+/// writer) fails that file with a message instead of stopping all file work. The
+/// panic hook has already written a crash report by the time this returns.
+fn guarded<T>(path: &std::path::Path, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| {
+        Err(format!(
+            "'{}' couldn't be handled because of an internal error (a crash report was saved). Nothing else is affected.",
+            path.display()
+        ))
+    })
 }
 
 struct PendingGoTo {
@@ -445,6 +459,22 @@ impl Core {
                 self.clear_media();
                 self.stop_loop_by_operator("Loop stopped (cleared).");
             }
+            Command::Freeze(on) => {
+                tracing::info!(on, "output freeze");
+                self.s.frozen = on;
+            }
+            Command::Blank(on) => {
+                tracing::info!(on, "output blank");
+                self.s.blanked = on;
+            }
+            Command::FreezeToggle => {
+                self.s.frozen = !self.s.frozen;
+                tracing::info!(on = self.s.frozen, "output freeze");
+            }
+            Command::BlankToggle => {
+                self.s.blanked = !self.s.blanked;
+                tracing::info!(on = self.s.blanked, "output blank");
+            }
             Command::SetBackground { media, next } => {
                 if media.is_some() {
                     self.s.background_visible = true;
@@ -646,6 +676,56 @@ impl Core {
                 Arc::make_mut(&mut self.s.editing).remove(&path);
                 Arc::make_mut(&mut self.s.unsaved).remove(&path);
                 self.histories.remove(&path);
+            }
+            Command::PresentationMoved { from, to } => self.presentation_moved(&from, to, at),
+        }
+    }
+
+    fn presentation_moved(&mut self, from: &PathBuf, to: Option<PathBuf>, at: Instant) {
+        let mut changed = Vec::new();
+        for (pi, p) in Arc::make_mut(&mut self.s.playlists).iter_mut().enumerate() {
+            let items = &mut p.playlist.items;
+            let before = items.len();
+            let hit = match &to {
+                Some(t) => {
+                    let mut hit = false;
+                    for i in items.iter_mut().filter(|i| &i.path == from) {
+                        i.path.clone_from(t);
+                        hit = true;
+                    }
+                    hit
+                }
+                None => {
+                    items.retain(|i| &i.path != from);
+                    items.len() != before
+                }
+            };
+            if hit {
+                changed.push(pi);
+            }
+        }
+        if to.is_none()
+            && self
+                .s
+                .playlist_item
+                .is_some_and(|r| changed.contains(&r.playlist))
+        {
+            self.s.playlist_item = None;
+        }
+        for pi in changed {
+            self.save_playlist(pi);
+        }
+        Arc::make_mut(&mut self.s.docs).remove(from);
+        Arc::make_mut(&mut self.s.editing).remove(from);
+        Arc::make_mut(&mut self.s.unsaved).remove(from);
+        Arc::make_mut(&mut self.s.load_errors).remove(from);
+        Arc::make_mut(&mut self.s.arrangements).remove(from);
+        self.histories.remove(from);
+        self.doc_lru.retain(|p| p != from);
+        if self.s.selected.as_ref() == Some(from) {
+            self.s.selected = None;
+            if let Some(t) = to {
+                self.command_inner(Command::Open(t), at);
             }
         }
     }
@@ -1028,13 +1108,20 @@ impl Core {
     }
 
     /// The live slide has a video: it becomes the background, from the beginning.
-    /// (A slide without one leaves the background as it is, as in ProPresenter.)
+    /// A slide without one ends the previous slide's video (moving on ends it), but
+    /// leaves a background from the Video/Image panel as it is.
     fn start_slide_video(&mut self, path: &std::path::Path) {
         let Some(l) = &self.s.live else { return };
         let Some(slide) = l.doc.slides().nth(l.slide.flat) else {
             return;
         };
-        let Some(v) = &slide.video else { return };
+        let Some(v) = &slide.video else {
+            if self.s.background_cue.is_some() {
+                tracing::info!("slide video ended: moved to a slide without one");
+                self.clear_media();
+            }
+            return;
+        };
         let file = v.media.resolve(path);
         tracing::info!(file = %file.display(), start = ?v.start, end = ?v.end, "slide video");
         self.s.background_media = Some(file);

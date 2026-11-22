@@ -1125,5 +1125,107 @@ fn slide_videos_play_pause_and_follow_their_end_setting() {
     let s = wait(&rx, "video gone", |s| s.background_media.is_none());
     assert_eq!(pos(&s), Some(1));
     assert!(s.background_cue.is_none());
+    // Moving on to a slide without a video ends the playing one.
+    core.send(Command::GoTo {
+        presentation: path.clone(),
+        position: 1,
+    });
+    wait(&rx, "video again", |s| s.background_media.is_some());
+    core.send(Command::Next);
+    let s = wait(&rx, "third slide", |s| pos(s) == Some(2));
+    assert!(s.background_media.is_none(), "moving on ends the video");
+    // A background from the Video/Image panel stays through slide changes.
+    let panel = std::path::PathBuf::from("/videos/motion.mp4");
+    core.send(Command::SetBackground {
+        media: Some(panel.clone()),
+        next: None,
+    });
+    wait(&rx, "panel background", |s| s.background_media.is_some());
+    core.send(Command::GoTo {
+        presentation: path.clone(),
+        position: 2,
+    });
+    // Commands run in order: once the pause shows, the slide change has been made.
+    core.send(Command::MediaPause);
+    let s = wait(&rx, "slide shown again", |s| s.media_paused);
+    assert_eq!(s.background_media.as_deref(), Some(panel.as_path()));
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn freeze_and_blank_are_output_states_that_leave_live_alone() {
+    let (core, rx) = start(CoreConfig::default());
+    let song = fixture("song_1024x768.pro6");
+    core.send(Command::GoTo {
+        presentation: song.clone(),
+        position: 0,
+    });
+    wait(&rx, "live", |s| pos(s) == Some(0));
+    core.send(Command::Freeze(true));
+    wait(&rx, "frozen", |s| s.frozen);
+    // The operator's live slide still moves on (the output holds; see raster).
+    core.send(Command::Next);
+    wait(&rx, "moved on while frozen", |s| {
+        s.frozen && pos(s) == Some(1)
+    });
+    core.send(Command::Blank(true));
+    wait(&rx, "blanked", |s| s.blanked && s.frozen);
+    core.send(Command::Freeze(false));
+    core.send(Command::Blank(false));
+    let s = wait(&rx, "back to live", |s| !s.blanked && !s.frozen);
+    assert_eq!(pos(&s), Some(1));
+}
+
+#[test]
+fn renamed_and_deleted_presentations_update_the_playlists() {
+    let dir = std::env::temp_dir().join(format!("openpresenter-moved-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("A.pro6");
+    let b = dir.join("B.pro6");
+    std::fs::copy(fixture("song_1024x768.pro6"), &a).unwrap();
+    std::fs::copy(fixture("song_1024x768.pro6"), &b).unwrap();
+    let (core, rx) = start(CoreConfig::default());
+    for p in [&a, &b, &a] {
+        core.send(Command::PlaylistAdd {
+            playlist: 0,
+            path: p.clone(),
+            arrangement: None,
+        });
+    }
+    core.send(Command::Open(a.clone()));
+    wait(&rx, "loaded", |s| {
+        s.docs.contains_key(&a)
+            && s.playlists
+                .first()
+                .is_some_and(|p| p.playlist.items.len() == 3)
+    });
+    let renamed = dir.join("A2.pro6");
+    std::fs::rename(&a, &renamed).unwrap();
+    core.send(Command::PresentationMoved {
+        from: a.clone(),
+        to: Some(renamed.clone()),
+    });
+    let s = wait(&rx, "renamed", |s| s.selected.as_ref() == Some(&renamed));
+    let paths: Vec<&PathBuf> = s.playlists[0]
+        .playlist
+        .items
+        .iter()
+        .map(|i| &i.path)
+        .collect();
+    assert_eq!(paths, [&renamed, &b, &renamed]);
+    assert!(!s.docs.contains_key(&a));
+    core.send(Command::PresentationMoved {
+        from: b.clone(),
+        to: None,
+    });
+    let s = wait(&rx, "deleted", |s| s.playlists[0].playlist.items.len() == 2);
+    assert!(
+        s.playlists[0]
+            .playlist
+            .items
+            .iter()
+            .all(|i| i.path == renamed)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

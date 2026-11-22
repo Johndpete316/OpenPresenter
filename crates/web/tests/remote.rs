@@ -532,4 +532,21 @@ async fn playlists_browse_load_and_go_to_without_touching_the_operator() {
         204
     );
     wait(&watch, |s| !s.output_enabled);
+    // Freeze and Blank: explicit on/off, shown in the state.
+    for (name, check) in [
+        (
+            "freeze",
+            (|s: &ShowState| s.frozen) as fn(&ShowState) -> bool,
+        ),
+        ("blank", |s: &ShowState| s.blanked && s.frozen),
+        ("unfreeze", |s: &ShowState| s.blanked && !s.frozen),
+        ("unblank", |s: &ShowState| !s.blanked && !s.frozen),
+    ] {
+        let path = format!("/api/cmd/{name}");
+        assert_eq!(
+            http(&url, "POST", &path, Some(&cookie), None).await.status,
+            204
+        );
+        wait(&watch, check);
+    }
 }

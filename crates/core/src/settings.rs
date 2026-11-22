@@ -26,6 +26,24 @@ pub struct Settings {
     pub web: WebSettings,
     pub editor: EditorSettings,
     pub view: ViewSettings,
+    pub integrations: IntegrationSettings,
+}
+
+/// Optional connections to outside services (Settings → Integrations).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IntegrationSettings {
+    pub esv: EsvSettings,
+}
+
+/// ESV Bible API (api.esv.org): scripture presentations from a reference. The API
+/// token isn't kept here but in the system's credential store.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EsvSettings {
+    pub enabled: bool,
+    /// Theme (UUID) for scripture slides; `None` = the plain look.
+    pub theme: Option<String>,
 }
 
 /// How the operator window looks (remembered between runs).
@@ -45,6 +63,10 @@ pub struct EditorSettings {
     /// Colours for groups made by Paste Lyrics, by name ("Verse" also matches
     /// "Verse 2").
     pub group_colors: Vec<GroupColor>,
+    /// Font of the plain look for new presentations (scripture too).
+    pub default_font: String,
+    /// Text size of the plain look, canvas pixels; 0 = sized for the canvas.
+    pub default_font_size: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -71,6 +93,8 @@ impl Default for EditorSettings {
                 c("Outro", [120, 120, 120]),
                 c("Ending", [120, 120, 120]),
             ],
+            default_font: "Arial".into(),
+            default_font_size: 0.0,
         }
     }
 }
@@ -153,6 +177,9 @@ pub struct KeyBindings {
     pub clear_text: Vec<String>,
     pub clear_background: Vec<String>,
     pub clear_all: Vec<String>,
+    /// Toggles Freeze / Blank.
+    pub freeze: Vec<String>,
+    pub blank: Vec<String>,
 }
 
 impl Default for KeyBindings {
@@ -165,6 +192,8 @@ impl Default for KeyBindings {
             clear_text: v(&["F3"]),
             clear_background: v(&["F2"]),
             clear_all: v(&["F1", ".", "b", "Clear"]),
+            freeze: v(&["F4"]),
+            blank: v(&["F5"]),
         }
     }
 }
@@ -183,6 +212,10 @@ impl KeyBindings {
             Some(Command::ClearText)
         } else if hit(&self.clear_background) {
             Some(Command::ClearBackground)
+        } else if hit(&self.freeze) {
+            Some(Command::FreezeToggle)
+        } else if hit(&self.blank) {
+            Some(Command::BlankToggle)
         } else {
             None
         }

@@ -97,11 +97,14 @@ pub(super) fn video_tab(
     let (rect, _) =
         ui.allocate_exact_size(Vec2::new(w, (w * 9.0 / 16.0).round()), egui::Sense::hover());
     ui.painter().rect_filled(rect, 3.0, Color32::BLACK);
-    match st.media_thumbs.as_mut().and_then(|t| t.get(&file)) {
+    // With its picture settings, whole (the canvas shows how it fits the slide).
+    match st
+        .media_thumbs
+        .as_mut()
+        .and_then(|t| t.get_adjusted(&file, &v.adjust))
+    {
         Some(Ok(t)) => {
-            egui::Image::new(t)
-                .maintain_aspect_ratio(true)
-                .paint_at(ui, rect);
+            crate::media_thumbs::paint_poster(ui.painter(), rect, t, doc::Fit::Fit);
         }
         Some(Err(e)) => {
             ui.painter().text(
