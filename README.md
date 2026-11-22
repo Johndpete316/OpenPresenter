@@ -12,6 +12,78 @@ file can't hold.
 - **Branding (icon, colours, UI pattern):** [`docs/branding/ICON.md`](docs/branding/ICON.md)
 - **Licence:** [`docs/LICENSING.md`](docs/LICENSING.md)
 
+## Overview
+
+OpenPresenter is built for the person running slides on a Sunday: fast to start, quick to
+respond to a clicker, and designed so a problem never takes the screen down mid-service. It
+opens an existing ProPresenter 6 library as it is, so a team can switch without converting
+anything.
+
+![The operator window: preview, library, playlists and the slide grid](docs/screenshots/operator.png)
+
+### Running the service
+
+- **Operator window** laid out the way ProPresenter users expect: Preview, a searchable
+  Library (titles and lyrics), Playlists, and the slide grid with each group's name and colour.
+- **Playlists** as a collapsible tree. You can have several at once (e.g. morning and
+  evening), and they save automatically. Next and Prev flow from one song into the next.
+- **Arrangements** (Verse, Chorus, Verse, …) can be picked and switched live without leaving
+  the current slide.
+- **Clear All / Clear Text / Clear Background, Freeze and Blank**, each with its own key.
+- **Clicker and keyboard** (Page Up/Down, arrows; configurable) work whichever window has
+  focus.
+- **Output** goes full screen on the projector at the slide's own resolution, scaled to fit
+  with black bars, never stretched. It can be turned off and on without restarting.
+- **Video and image backgrounds** (via libmpv) under the text. A slide can carry its own
+  video with start, loop, end and picture settings.
+- **Announcement loops**: timed presentations advance and loop on their own, with a countdown
+  by the preview.
+
+### Editing
+
+![The slide editor](docs/screenshots/editor.png)
+
+- **Slide editor** with undo/redo: text boxes, fonts, sizes, colours, alignment, spacing,
+  outline and shadow effects, Fit Text, images, video, position and layers. Snap, guides,
+  safe area and a grid help with placement.
+- **Groups and arrangements**: create, rename, recolour and reorder groups, move slides
+  between them, and build arrangements by dragging group chips.
+- **New songs from pasted lyrics.** Headings like `Verse 1:`, `CHORUS` or `[Bridge]` become
+  groups.
+- **Themes** to keep a look consistent, and **Copy Style** between slides.
+- **Scripture import** from the ESV API: pick a passage and get slides sized for your theme,
+  with the reference on each slide.
+- **Quick edits from the grid**: right-click a slide to fix a typo, rename its group or
+  disable it, without opening the editor.
+
+### Phone remote
+
+<img src="docs/screenshots/remote.png" width="280" align="right" alt="The phone remote">
+
+- **Control from any phone or laptop** on the church network, in the browser, with nothing
+  to install. A PIN is shown in the app.
+- **What's on screen and what's next**, as real slide images, with Prev / Next / Freeze /
+  Blank / Clear.
+- **On a wider screen** it also shows the playlists and the slide grid, so a second operator
+  can run the service from a laptop.
+
+<br clear="right">
+
+### Files and safety
+
+- **`.pro6` in, `.pro6` out.** ProPresenter 6 files open, edit and save as `.pro6`, and
+  unchanged files are written back byte for byte. New presentations can use OpenPresenter's
+  own `.opres` format for things `.pro6` can't hold.
+- **Saves are safe**: every save is atomic and keeps the previous version as a backup.
+- **Crash reports**: problems show as plain-English messages. A fault in a background task
+  (remote, thumbnails, a bad file) is reported without closing the output.
+- **`pp6tool`** checks a whole library: fonts used, files that don't parse, round-trip
+  tests, bulk resolution changes and render-to-PNG.
+
+<sub>Scripture quotations in the screenshots are from the ESV® Bible (The Holy Bible,
+English Standard Version®), © 2001 by Crossway, a publishing ministry of Good News
+Publishers. Used by permission. All rights reserved.</sub>
+
 ## Layout
 
 | Crate | What |
