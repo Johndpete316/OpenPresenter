@@ -32,12 +32,15 @@ anything.
 - **Clear All / Clear Text / Clear Background, Freeze and Blank**, each with its own key.
 - **Clicker and keyboard** (Page Up/Down, arrows; configurable) work whichever window has
   focus.
-- **Output** goes full screen on the projector at the slide's own resolution, scaled to fit
-  with black bars, never stretched. It can be turned off and on without restarting.
+- **Output** goes full screen on the projector at the slide's own resolution: fitted with
+  black bars, or stretched to the screen as ProPresenter does (for a projector that squeezes
+  a widescreen signal). It can be turned off and on without restarting.
 - **Video and image backgrounds** (via libmpv) under the text. A slide can carry its own
   video with start, loop, end and picture settings.
 - **Announcement loops**: timed presentations advance and loop on their own, with a countdown
-  by the preview.
+  by the preview. The **Timers** panel shows every slide's time as a chain you can click to
+  edit, sets every slide at once, and grid tiles carry a stopwatch badge. Timers save into
+  `.pro6` files in ProPresenter's own format.
 
 ### Editing
 

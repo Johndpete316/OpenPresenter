@@ -42,6 +42,10 @@ library folders again in **Settings → Folders**. Your `.pro6` files aren't tou
 3. Install every font the slides use. Find them with:
    `pp6tool.exe report "D:\ProPresenter\Library"` (see the FONTS section).
 4. GPU driver with OpenGL 3.3.
+5. **Text looks narrow on the projector** (but right on a widescreen TV showing the same
+   signal)? The projector is squeezing a 16:9 signal into 4:3. Choose **Settings → Output →
+   Slides: Stretch**, which is what ProPresenter does; the TV will then look wide, as it did
+   under ProPresenter.
 
 Data locations: settings `%APPDATA%\OpenPresenter\config\settings.toml`; logs, crash reports and
 playlists under `%LOCALAPPDATA%\OpenPresenter\data\`; caches under `%LOCALAPPDATA%\OpenPresenter\cache\`.
@@ -136,6 +140,9 @@ Work on **copies** of real presentations.
 4. Next/Prev during the loop: step, and the countdown restarts for that slide.
 5. Clear (any): the loop stops and stays stopped (Next won't restart it); **Start loop** resumes.
 6. Select a song in the library: the loop keeps running. Put a song live: the loop stops.
+7. Timers (toolbar): change one slide's time (it saves at once), then open the file in
+   ProPresenter 6 and check it plays the new time (timers are written as PP6's own
+   `RVSlideTimerCue`, not yet verified in PP6).
 
 ## Known issues on the Linux dev machine (not the app)
 
