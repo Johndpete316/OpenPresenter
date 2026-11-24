@@ -7,6 +7,7 @@ window, a slide editor and a phone remote. It reads and writes ProPresenter 6 (`
 presentations, and has its own format (`.opres`, themes `.optheme`) for things a `.pro6`
 file can't hold.
 
+- **Architecture (stack, crates, threads, main loop):** [`ARCHITECTURE.md`](ARCHITECTURE.md)
 - **Plan and status:** [`docs/PLAN.md`](docs/PLAN.md), editor: [`docs/EDITOR-PLAN.md`](docs/EDITOR-PLAN.md)
 - **Building the installer and setting up the show PC:** [`docs/windows-setup.md`](docs/windows-setup.md); releases and code signing (CI): [`docs/release.md`](docs/release.md)
 - **Branding (icon, colours, UI pattern):** [`docs/branding/ICON.md`](docs/branding/ICON.md)
