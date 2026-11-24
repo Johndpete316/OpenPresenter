@@ -351,6 +351,9 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let _ = raster.tx.send(RasterCmd::Stretch(
+        settings.output.slide_scaling == opcore::SlideScaling::Stretch,
+    ));
     let (thumbs_tx, thumbs_rx) =
         match thumbs::spawn(fonts_rx, Some(paths.thumbs.clone()), proxy.clone()) {
             Ok(v) => v,
@@ -984,6 +987,13 @@ impl App {
                 if let Some(o) = &self.output {
                     let _ = o.tx.send(RenderCmd::MediaScaling(media_scaling(sc)));
                 }
+            }
+            UiAction::SetSlideScaling(sc) => {
+                self.settings.output.slide_scaling = sc;
+                self.save_settings();
+                let _ = self
+                    .raster_tx
+                    .send(RasterCmd::Stretch(sc == opcore::SlideScaling::Stretch));
             }
             UiAction::SetTileWidth(w) => {
                 if self.settings.view.tile_width != w {

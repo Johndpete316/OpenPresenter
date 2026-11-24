@@ -135,6 +135,20 @@ pub struct OutputSettings {
     pub resolution: Option<Resolution>,
     /// How background images and videos fill the output.
     pub media_scaling: MediaScaling,
+    /// How the slide itself (text, its colour) fills an output of another shape.
+    pub slide_scaling: SlideScaling,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SlideScaling {
+    /// Keep the slide's shape: centred, black bars on the sides that don't fit.
+    #[default]
+    Fit,
+    /// Stretch the slide to the output's shape, as ProPresenter does. For a 16:9
+    /// signal shown by a 4:3 projector (which squeezes it back), this is the one that
+    /// looks right on the projector.
+    Stretch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,6 +177,7 @@ impl Default for OutputSettings {
             monitor_index: None,
             resolution: None,
             media_scaling: MediaScaling::Fill,
+            slide_scaling: SlideScaling::Fit,
         }
     }
 }

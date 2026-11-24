@@ -98,6 +98,7 @@ ProPresenter-Replacement/   # repo folder (the program is OpenPresenter)
 ### M2 — Rendering + Output Spike (Windows-Critical)
 - [x] `render`: lay out a slide onto its own canvas size with `cosmic-text` using RTF face/size; positions from `RVRect3D` in canvas pixels
 - [x] Canvas → output scaling: uniform fit, centred, black bars. Never stretch
+  - **Stretch option (John, 2026-11-23):** at church one 16:9 signal feeds both a TV and a 4:3 projector, which squeezes the signal back to 4:3. ProPresenter stretches the slide to the output, so text looks right on the projector (wide on the TV); fitting it made the projector's text narrow. Settings → Output → **Slides: Fit / Stretch** (`[output] slide_scaling`, default Fit). Stretch renders the slide in its own shape at a size covering the output, then the output's GPU scales it to the full window (shrinking on one axis only, for sharp text). Backgrounds keep their own setting.
 - [x] `pp6tool render <file> --out dir/` → PNG per slide (for visual diff against PP6)
 - [x] Output window: `winit` + `glutin` + `glow`, borderless fullscreen on a chosen monitor, own thread, vsync
 - [x] Output disable = destroy window and release the monitor; re-enable recreates it

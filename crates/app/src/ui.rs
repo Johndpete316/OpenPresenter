@@ -52,6 +52,7 @@ pub enum UiAction {
     SetResolution(Option<opcore::Resolution>),
     /// How background media fills the output.
     SetMediaScaling(opcore::MediaScaling),
+    SetSlideScaling(opcore::SlideScaling),
     SetFitMinSize(f64),
     /// Slide tile width in the grid (saved when the slider is let go).
     SetTileWidth(f32),
@@ -2342,6 +2343,30 @@ fn settings_general(
                 .clicked()
             {
                 actions.push(UiAction::SetMediaScaling(m));
+            }
+        }
+    });
+    ui.horizontal(|ui| {
+        use opcore::SlideScaling as S;
+        ui.label("Slides");
+        for (m, label, tip) in [
+            (
+                S::Fit,
+                "Fit",
+                "Keep the slide's shape; black bars where the screen is a different shape.",
+            ),
+            (
+                S::Stretch,
+                "Stretch",
+                "Stretch the slide to the screen's shape, as ProPresenter does. Use this when a 4:3 projector shows a 16:9 signal (it squeezes the picture back), or text looks narrow on the projector.",
+            ),
+        ] {
+            if ui
+                .selectable_label(settings.output.slide_scaling == m, label)
+                .on_hover_text(tip)
+                .clicked()
+            {
+                actions.push(UiAction::SetSlideScaling(m));
             }
         }
     });

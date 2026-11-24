@@ -21,7 +21,7 @@ pub use playlist::{
 };
 pub use settings::{
     EditorSettings, EsvSettings, GroupColor, IntegrationSettings, KeyBindings, MediaScaling,
-    OutputSettings, Resolution, Settings, SettingsError, WebSettings,
+    OutputSettings, Resolution, Settings, SettingsError, SlideScaling, WebSettings,
 };
 pub use state::{Editing, Live, LoopState, MediaCue, Notice, NoticeLevel, ShowState};
 

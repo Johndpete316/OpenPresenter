@@ -20,8 +20,12 @@ pub struct FrameKey {
     /// Identity of the loaded document (`Arc` pointer): a reload is a new key.
     pub doc: usize,
     pub flat: usize,
+    /// The size the frame was rendered at (the output's, or larger when stretched).
     pub width: u32,
     pub height: u32,
+    /// Draw the frame over the whole output, whatever its shape (Settings → Output →
+    /// Slides: Stretch). Otherwise it's drawn 1:1, centred.
+    pub stretch: bool,
 }
 
 /// Commands to the output render thread.
@@ -84,6 +88,8 @@ pub enum RasterCmd {
         width: u32,
         height: u32,
     },
+    /// Slides stretch to the output's shape (`true`) or keep their own (`false`).
+    Stretch(bool),
     Stop,
 }
 
@@ -123,6 +129,7 @@ pub fn spawn(
                 output,
                 events,
                 size: None,
+                stretch: false,
                 sent: Sent::default(),
                 hold: Hold::default(),
             };
@@ -159,6 +166,7 @@ struct Worker {
     output: OutputLink,
     events: winit::event_loop::EventLoopProxy<UserEvent>,
     size: Option<(u32, u32)>,
+    stretch: bool,
     sent: Sent,
     hold: Hold,
 }
@@ -215,6 +223,14 @@ impl Worker {
                         self.size = Some((width, height));
                         if let Some(s) = &latest {
                             self.apply(s, true);
+                        }
+                    }
+                    Ok(RasterCmd::Stretch(on)) => {
+                        if self.stretch != on {
+                            self.stretch = on;
+                            if let Some(s) = &latest {
+                                self.apply(s, true);
+                            }
                         }
                     }
                     Ok(RasterCmd::Stop) | Err(_) => return,
@@ -377,13 +393,19 @@ impl Worker {
         &mut self,
         doc: &Arc<doc::Document>,
         flat: usize,
-        (width, height): (u32, u32),
+        output: (u32, u32),
     ) -> (FrameKey, Rendered) {
+        let (width, height) = if self.stretch {
+            stretch_size(doc.canvas, output)
+        } else {
+            output
+        };
         let key = FrameKey {
             doc: Arc::as_ptr(doc) as usize,
             flat,
             width,
             height,
+            stretch: self.stretch,
         };
         if let Some(pos) = self.cache.iter().position(|(k, _)| *k == key)
             && let Some(hit) = self.cache.remove(pos)
@@ -411,6 +433,18 @@ impl Worker {
     }
 }
 
+/// The size to render a slide at when it will be stretched over a `w × h` output:
+/// the canvas's own shape, scaled until it covers the output on both axes. The GPU
+/// then only ever shrinks it (sharper text than enlarging), on one axis.
+fn stretch_size(canvas: doc::CanvasSize, (w, h): (u32, u32)) -> (u32, u32) {
+    let (cw, ch) = (canvas.width.max(1) as f32, canvas.height.max(1) as f32);
+    let scale = (w as f32 / cw).max(h as f32 / ch);
+    (
+        ((cw * scale).round() as u32).max(w),
+        ((ch * scale).round() as u32).max(h),
+    )
+}
+
 pub fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
 }
@@ -418,6 +452,18 @@ pub fn ms(d: Duration) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stretched_frames_cover_the_output_in_the_canvas_shape() {
+        let c = |width, height| doc::CanvasSize { width, height };
+        // 4:3 slide on a 16:9 signal: rendered 1920 × 1440, squeezed to 1080 tall.
+        assert_eq!(stretch_size(c(1024, 768), (1920, 1080)), (1920, 1440));
+        // 16:9 slide on a 4:3 output: rendered wider, squeezed to 1024 wide.
+        assert_eq!(stretch_size(c(1920, 1080), (1024, 768)), (1365, 768));
+        // Same shape: exactly the output.
+        assert_eq!(stretch_size(c(1024, 768), (1024, 768)), (1024, 768));
+        assert_eq!(stretch_size(c(1024, 768), (2048, 1536)), (2048, 1536));
+    }
 
     fn state(slide: u64, frozen: bool, blanked: bool) -> Arc<ShowState> {
         Arc::new(ShowState {

@@ -379,8 +379,9 @@ impl Renderer {
             let tex = gl.create_texture()?;
             gl.bind_texture(glow::TEXTURE_2D, Some(tex));
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
-            // Drawn 1:1, so nearest keeps pixels exactly as rendered.
-            set_tex_params(gl, glow::NEAREST);
+            // Linear: exact at 1:1 (each pixel samples its texel's centre), and smooth
+            // when a stretched frame is scaled to the output.
+            set_tex_params(gl, glow::LINEAR);
             gl.tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
@@ -429,7 +430,7 @@ impl Renderer {
     }
 
     /// Black → media → slide background colour → text. A frame rendered for a
-    /// different size is centred 1:1, never stretched.
+    /// different size is centred 1:1, unless its key says to stretch it.
     fn draw(&self, gl: &glow::Context, media: &MediaLayer, sw: u32, sh: u32) {
         unsafe {
             // mpv may leave its own state bound.
@@ -461,18 +462,24 @@ impl Renderer {
                 .current
                 .and_then(|k| self.textures.iter().find(|t| t.key == k))
         {
-            let (ox, oy) = Self::frame_origin(f, sw, sh);
-            self.blit(
-                gl,
-                t.tex,
+            let rect = if t.key.stretch {
+                // Settings → Output → Slides: Stretch (like ProPresenter).
+                GlRect {
+                    x: 0,
+                    y: 0,
+                    w: sw,
+                    h: sh,
+                }
+            } else {
+                let (ox, oy) = Self::frame_origin(f, sw, sh);
                 GlRect {
                     x: ox,
                     y: oy,
                     w: f.width,
                     h: f.height,
-                },
-                true,
-            );
+                }
+            };
+            self.blit(gl, t.tex, rect, true);
         }
     }
 
