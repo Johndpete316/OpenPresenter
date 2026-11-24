@@ -10,6 +10,10 @@ use crate::model::*;
 
 pub use pro6::ops::new_uuid;
 
+/// Shortest and longest slide timer (seconds).
+pub const MIN_TIMER_SECS: f64 = 0.5;
+pub const MAX_TIMER_SECS: f64 = 3600.0;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Edit {
     /// Replace the text of the slide's first text box (`\n` = new paragraph), in the
@@ -155,6 +159,12 @@ pub enum Edit {
         group: usize,
         slide: usize,
         enabled: bool,
+    },
+    /// The slide's auto-advance timer (`None` = none: it waits for the operator).
+    SetSlideTimer {
+        group: usize,
+        slide: usize,
+        timer: Option<SlideTimer>,
     },
     SetSlideNotes {
         group: usize,
@@ -316,6 +326,8 @@ impl Edit {
             Edit::SetSlideEnabled { enabled: true, .. } => "Enable slide".into(),
             Edit::SetSlideEnabled { enabled: false, .. } => "Disable slide".into(),
             Edit::SetSlideNotes { .. } => "Edit notes".into(),
+            Edit::SetSlideTimer { timer: Some(_), .. } => "Set timer".into(),
+            Edit::SetSlideTimer { timer: None, .. } => "Remove timer".into(),
             Edit::SetSlideBackground { .. } => "Change background".into(),
             Edit::AddSlide { .. } => "Add slide".into(),
             Edit::DuplicateSlide { .. } => "Duplicate slide".into(),
@@ -765,6 +777,24 @@ impl Edit {
                 slide_mut(doc, *group, *slide)?.notes.clone_from(notes);
                 Ok(())
             }
+            Edit::SetSlideTimer {
+                group,
+                slide,
+                timer,
+            } => {
+                if let Some(t) = timer {
+                    let secs = t.duration.as_secs_f64();
+                    if !(MIN_TIMER_SECS..=MAX_TIMER_SECS).contains(&secs) {
+                        return Err(EditError::NotFound {
+                            what: format!(
+                                "a timer of {secs} s (it must be {MIN_TIMER_SECS}–{MAX_TIMER_SECS} s)"
+                            ),
+                        });
+                    }
+                }
+                slide_mut(doc, *group, *slide)?.timer = *timer;
+                Ok(())
+            }
             Edit::SetSlideBackground {
                 group,
                 slide,
@@ -959,6 +989,7 @@ impl Edit {
             | Edit::RenameElement { group, slide, .. }
             | Edit::SetBackgroundImage { group, slide, .. }
             | Edit::SetSlideVideo { group, slide, .. }
+            | Edit::SetSlideTimer { group, slide, .. }
             | Edit::SetSlideBackground { group, slide, .. }
             | Edit::DuplicateSlide { group, slide } => at(*group, *slide).into_iter().collect(),
             Edit::Batch { edits, .. } => edits.iter().flat_map(|e| e.slides_touched(doc)).collect(),

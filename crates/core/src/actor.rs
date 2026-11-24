@@ -858,6 +858,17 @@ impl Core {
         let file = saved.path.clone();
         let saved = Arc::new(saved);
         Arc::make_mut(&mut self.s.docs).insert(path.clone(), saved.clone());
+        // A running loop takes edited timers from the next slide on.
+        if self.s.looping.as_ref().is_some_and(|l| l.path == path) {
+            match saved.slide_timings() {
+                Some(t) => {
+                    if let Some(l) = self.s.looping.as_mut() {
+                        l.timings = Arc::new(t);
+                    }
+                }
+                None => self.stop_loop("Loop stopped (no slide timers left)."),
+            }
+        }
         if self
             .s
             .editing

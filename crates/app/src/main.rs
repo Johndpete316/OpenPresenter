@@ -20,6 +20,7 @@ mod output;
 mod raster;
 mod theme;
 mod thumbs;
+mod timers;
 mod ui;
 
 use std::path::PathBuf;
@@ -107,6 +108,9 @@ struct Args {
     /// Open the arrangement editor for --open's presentation (development / screenshots).
     #[arg(long)]
     open_arrangements: bool,
+    /// Show the Timers panel instead of Video/Image (development / screenshots).
+    #[arg(long)]
+    open_timers: bool,
     /// Save the operator window as PNG 3 s after it opens, then exit.
     #[arg(long)]
     capture_ui: Option<PathBuf>,
@@ -426,6 +430,7 @@ fn main() -> ExitCode {
             settings_open: args.open_settings,
             open_new_at_start: args.open_new,
             open_arrangements_at_start: args.open_arrangements,
+            bottom_timers: args.open_timers,
             tile_w: settings.view.tile_width,
             edit: ui_state_edit,
             media_thumbs,

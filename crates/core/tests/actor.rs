@@ -741,6 +741,66 @@ fn timed_presentation_loops_on_its_own_skips_disabled_and_loops_back() {
 }
 
 #[test]
+fn a_running_loop_takes_saved_timer_edits_from_the_next_slide() {
+    let dir = std::env::temp_dir().join(format!("opcore-loop-edit-{}", std::process::id()));
+    let ann = fast_announcements(&dir, true);
+    let (core, rx) = start(CoreConfig::default());
+    core.send(Command::GoTo {
+        presentation: ann.clone(),
+        position: 0,
+    });
+    let s = wait(&rx, "looping", |s| s.looping.is_some() && pos(s) == Some(0));
+    // The second slide (0.5 s) becomes 0.9 s, saved to the .pro6.
+    let d = s.docs[&ann].clone();
+    let second = d.slides().nth(1).unwrap().uuid.clone();
+    let (group, slide) = d
+        .groups
+        .iter()
+        .enumerate()
+        .find_map(|(g, gr)| {
+            gr.slides
+                .iter()
+                .position(|x| x.uuid == second)
+                .map(|i| (g, i))
+        })
+        .unwrap();
+    core.send(Command::Edit {
+        presentation: ann.clone(),
+        edit: doc::Edit::SetSlideTimer {
+            group,
+            slide,
+            timer: Some(doc::SlideTimer {
+                duration: Duration::from_millis(900),
+                loop_to_beginning: false,
+            }),
+        },
+        accept_native: false,
+    });
+    core.send(Command::Save(ann.clone()));
+    wait(&rx, "timings updated", |s| {
+        s.looping
+            .as_ref()
+            .and_then(|l| l.timings.timers.get(&second))
+            .is_some_and(|t| t.duration == Duration::from_millis(900))
+    });
+    let s = wait(&rx, "second slide", |s| pos(s) == Some(1));
+    assert_eq!(
+        s.looping.as_ref().unwrap().slide_duration,
+        Some(Duration::from_millis(900))
+    );
+    let on_disk = doc::load(&ann).unwrap();
+    assert_eq!(
+        on_disk.slides().nth(1).unwrap().timer.map(|t| t.duration),
+        Some(Duration::from_millis(900)),
+        "saved in the .pro6"
+    );
+    core.send(Command::StopLoop);
+    wait(&rx, "stopped", |s| s.looping.is_none());
+    core.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn loop_rules_next_restarts_clear_stops_other_live_stops_select_keeps() {
     let dir = std::env::temp_dir().join(format!("opcore-loop-rules-{}", std::process::id()));
     let ann = fast_announcements(&dir, true);

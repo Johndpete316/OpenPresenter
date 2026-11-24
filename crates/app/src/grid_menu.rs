@@ -53,7 +53,13 @@ fn rgba(c: [u8; 3]) -> doc::Rgba {
 }
 
 /// Apply and save, or tell the operator why not.
-fn send(st: &mut UiState, actions: &mut Vec<UiAction>, path: &Path, d: &Document, op: Op) {
+pub(crate) fn send(
+    st: &mut UiState,
+    actions: &mut Vec<UiAction>,
+    path: &Path,
+    d: &Document,
+    op: Op,
+) {
     match doc::check(d, &op) {
         doc::Check::Ok => {
             actions.push(UiAction::Core(Command::Edit {
@@ -159,6 +165,7 @@ pub fn slide_menu(
         );
         ui.close();
     }
+    crate::timers::slide_menu(ui, st, path, d, r, actions);
     ui.separator();
     let names: Vec<(String, [u8; 3])> = st
         .edit

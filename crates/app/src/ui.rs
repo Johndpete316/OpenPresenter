@@ -128,8 +128,11 @@ pub struct UiState {
     pub edit: crate::editor::EditState,
     /// Editor canvas renderer (`None` if it couldn't start).
     pub canvas: Option<crate::canvas::CanvasRenderer>,
-    /// Video/Image panel hidden (toolbar toggle).
+    /// Bottom panel hidden (toolbar toggles).
     pub media_hidden: bool,
+    /// The bottom panel shows Timers instead of Video/Image.
+    pub bottom_timers: bool,
+    pub timers: crate::timers::TimersState,
     /// Folder shown in the Video/Image panel (`None` = everything).
     pub media_bin: Option<PathBuf>,
     /// Slide tile width in the grid (0 = default).
@@ -451,7 +454,11 @@ pub fn draw(
         .size_range(120.0..=600.0)
         .frame(egui::Frame::new().fill(color::LIST))
         .show_collapsible(ui, &mut media_open, |ui| {
-            media_panel(ui, st, show, settings, &mut actions)
+            if st.bottom_timers {
+                crate::timers::panel(ui, st, show, &mut actions);
+            } else {
+                media_panel(ui, st, show, settings, &mut actions);
+            }
         });
     st.media_hidden = !media_open;
     egui::CentralPanel::default()
@@ -607,18 +614,35 @@ fn toolbar(
                     }
                 }
                 toolbar_gap(ui);
+                let media_on = !st.media_hidden && !st.bottom_timers;
                 if tool_button(
                     ui,
                     icon::FILM_STRIP,
                     "Video/Image",
                     Color32::from_rgb(110, 92, 214),
-                    !st.media_hidden,
+                    media_on,
                     true,
                 )
                 .on_hover_text("Show or hide the backgrounds panel")
                 .clicked()
                 {
-                    st.media_hidden = !st.media_hidden;
+                    st.media_hidden = media_on;
+                    st.bottom_timers = false;
+                }
+                let timers_on = !st.media_hidden && st.bottom_timers;
+                if tool_button(
+                    ui,
+                    icon::TIMER,
+                    "Timers",
+                    Color32::from_rgb(46, 150, 120),
+                    timers_on,
+                    true,
+                )
+                .on_hover_text("Show or hide the slide timers of the selected presentation")
+                .clicked()
+                {
+                    st.media_hidden = timers_on;
+                    st.bottom_timers = true;
                 }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1822,6 +1846,9 @@ fn presentation(
                                 .and_then(|t| t.as_ref().ok().cloned())
                                 .map(|t| (t, v.fit))
                         });
+                        let timer = crate::timers::badge(
+                            doc.groups()[r.group].slides()[r.slide].timer.as_ref(),
+                        );
                         let badge = video.map(|v| match v.start {
                             doc::VideoStart::OnShow => "Video",
                             doc::VideoStart::OnClick => "Video (Play)",
@@ -1837,6 +1864,7 @@ fn presentation(
                             r.enabled,
                             poster.as_ref().map(|(t, f)| (t, *f)),
                             badge,
+                            timer.as_deref(),
                         );
                         if resp.clicked() {
                             actions.push(UiAction::Core(Command::GoTo {
@@ -1869,6 +1897,7 @@ fn slide_tile(
     enabled: bool,
     poster: Option<(&TextureHandle, doc::Fit)>,
     badge: Option<&str>,
+    timer: Option<&str>,
 ) -> egui::Response {
     let bar_h = 18.0;
     let (rect, resp) = ui.allocate_exact_size(img + Vec2::new(0.0, bar_h), Sense::click());
@@ -1893,6 +1922,21 @@ fn slide_tile(
         let r = Rect::from_min_size(
             img_rect.left_top() + Vec2::new(4.0, 4.0),
             galley.size() + Vec2::new(8.0, 4.0),
+        );
+        ui.painter()
+            .rect_filled(r, 3.0, Color32::from_black_alpha(170));
+        ui.painter()
+            .galley(r.min + Vec2::new(4.0, 2.0), galley, Color32::WHITE);
+    }
+    // Slide timer: a stopwatch and the time, top right.
+    if let Some(t) = timer {
+        let galley =
+            ui.painter()
+                .layout_no_wrap(t.to_owned(), FontId::proportional(11.0), Color32::WHITE);
+        let size = galley.size() + Vec2::new(8.0, 4.0);
+        let r = Rect::from_min_size(
+            Pos2::new(img_rect.max.x - size.x - 4.0, img_rect.min.y + 4.0),
+            size,
         );
         ui.painter()
             .rect_filled(r, 3.0, Color32::from_black_alpha(170));

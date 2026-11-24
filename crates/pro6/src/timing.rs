@@ -15,7 +15,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::model::Document;
+use crate::model::{Document, Slide};
+use crate::raw::{RawElement, RawNode};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SlideTimer {
@@ -69,5 +70,89 @@ impl Document {
             }
         }
         (!t.timers.is_empty()).then_some(t)
+    }
+}
+
+/// An enabled "Go to Next" timer cue (the only kind that's used).
+fn is_go_to_next(e: &RawElement) -> bool {
+    e.name == "RVSlideTimerCue" && e.attr("actionType").map(|a| a.raw_value.trim()) == Some("9")
+}
+
+/// `10` for whole seconds (as PP6 writes them), otherwise e.g. `7.5`.
+fn seconds(d: Duration) -> String {
+    let s = (d.as_secs_f64() * 1000.0).round() / 1000.0;
+    format!("{s}")
+}
+
+impl Slide {
+    /// Set or remove the slide's "Go to Next" timer in its `cues`, in the verified
+    /// format (see the module docs). An existing timer cue keeps its UUID and any
+    /// other attributes; other cues are left alone.
+    pub fn set_timer(&mut self, timer: Option<SlideTimer>) {
+        let children = &mut self.extra.element.children;
+        let pos = children
+            .iter()
+            .position(|n| matches!(n, RawNode::Element(e) if e.ivar_name() == Some("cues")));
+        let pos = match (pos, timer) {
+            (Some(p), _) => p,
+            (None, None) => return,
+            (None, Some(_)) => {
+                children.insert(
+                    0,
+                    RawNode::Element(RawElement::new("array", &[("rvXMLIvarName", "cues")])),
+                );
+                0
+            }
+        };
+        let Some(RawNode::Element(cues)) = children.get_mut(pos) else {
+            return;
+        };
+        match timer {
+            Some(t) => {
+                let duration = seconds(t.duration);
+                let loops = if t.loop_to_beginning { "true" } else { "false" };
+                let existing = cues.children.iter_mut().find_map(|n| match n {
+                    RawNode::Element(e) if is_go_to_next(e) => Some(e),
+                    _ => None,
+                });
+                match existing {
+                    Some(e) => {
+                        e.set_attr("enabled", "1");
+                        e.set_attr("loopToBeginning", loops);
+                        e.set_attr("duration", &duration);
+                    }
+                    None => {
+                        let uuid = crate::ops::new_uuid();
+                        cues.children.push(RawNode::Element(RawElement::new(
+                            "RVSlideTimerCue",
+                            &[
+                                ("UUID", uuid.as_str()),
+                                ("displayName", "Go to Next"),
+                                ("actionType", "9"),
+                                ("enabled", "1"),
+                                ("timeStamp", "0"),
+                                ("delayTime", "0"),
+                                ("loopToBeginning", loops),
+                                ("duration", &duration),
+                            ],
+                        )));
+                        cues.self_closing = false;
+                    }
+                }
+            }
+            None => {
+                cues.children
+                    .retain(|n| !matches!(n, RawNode::Element(e) if is_go_to_next(e)));
+                // Back to `<array rvXMLIvarName="cues" />` when nothing is left.
+                if !cues
+                    .children
+                    .iter()
+                    .any(|n| matches!(n, RawNode::Element(_)))
+                {
+                    cues.children.clear();
+                    cues.self_closing = true;
+                }
+            }
+        }
     }
 }

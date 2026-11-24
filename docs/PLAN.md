@@ -219,6 +219,14 @@ Only the Announcements presentation uses these.
 - **Accept:** Announcements file loops on its own with the same timing as PP6.
 - **Status (2026-11-20):** built against the **verified** format from `AA001 Welcome.pro6`. Each slide's `RVSlideTimerCue` gives its time, and `loopToBeginning` on the last slide loops back. The timer runs on the core thread. Like PP6, putting a timed presentation live starts it. John's rules apply: Next/Prev restart the timer; any Clear stops it (it stays stopped until Start loop or the presentation is put live again); selecting elsewhere keeps it; another presentation live stops it. Without a loop-back slide it stops at the end. The UI shows LOOP RUNNING + countdown + Stop near Preview. Timing tests run in real time. **Still to do for acceptance:** run the Welcome file on the Windows PC next to PP6 and compare timing (needs Bookman Old Style installed). **Windows run (2026-11-20):** the real Welcome file auto-started on Windows and advanced every 10.0 s. Note: at launch the first slide's countdown starts when it goes live, about 1 s before it's on screen. **Confirmed by John (2026-11-20):** auto-start when a timed presentation goes live, and it stays stopped after Clear until Start loop (or put live again).
 
+### Slide timers: editing (John, 2026-11-24)
+- [x] **Timers panel** (`timers.rs`): toolbar **Timers** button, next to Video/Image; the bottom panel shows one or the other. The selected presentation in play order as a chain, `1. Title 10s › 2. … ↺ to start`; the live slide is outlined with a countdown while looping. Clicking a step opens its settings (timer on/off, seconds, loop to the first slide after it). "Every slide N s, then loop to start" and "Remove all" as one undo step.
+- [x] **Right-click → Timer** on grid slides: set/change (defaults to the last time used), loop to start, remove.
+- [x] **Stopwatch badge** with the time at the top right of timed grid tiles (↺ on a loop-back slide).
+- [x] Saved at once like the grid's other right-click edits. `.pro6` stays `.pro6`: a timer is written as PP6's own `RVSlideTimerCue` ("Go to Next", `actionType="9"`, as in the real Welcome file); an existing cue keeps its UUID; untouched slides stay byte-identical. 0.5 s – 1 h.
+- [x] A running loop takes saved timer edits from its next slide (the slide on screen keeps its countdown).
+- [ ] Open a `.pro6` with timers edited here in real PP6 (not verified yet).
+
 ## Backlog (John, 2026-11-21)
 
 **Strategy: split library.** For a while the library holds both `.pro6` and `.opres` files.

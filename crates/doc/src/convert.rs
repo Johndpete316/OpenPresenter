@@ -738,6 +738,12 @@ fn export_slide(s: &Slide, ix: &Index<'_>, path: &Path) -> Result<pro6::Slide, E
             s.background,
         );
     }
+    if s.timer != base.timer {
+        ps.set_timer(s.timer.map(|t| pro6::timing::SlideTimer {
+            duration: t.duration,
+            loop_to_beginning: t.loop_to_beginning,
+        }));
+    }
     let mut items = Vec::with_capacity(s.elements.len());
     for e in &s.elements {
         // Elements made here with nothing to copy (images, text boxes in a

@@ -41,6 +41,8 @@ pub mod icon {
     pub const VIDEO_CAMERA: char = '\u{E4DA}';
     pub const SNOWFLAKE: char = '\u{E5AA}';
     pub const SQUARE: char = '\u{E45E}';
+    /// Stopwatch (slide timers).
+    pub const TIMER: char = '\u{E492}';
 }
 
 /// The brand palette (docs/branding/ICON.md, Colours). New UI uses these: dark neutral
