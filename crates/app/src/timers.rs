@@ -200,6 +200,22 @@ pub fn panel(ui: &mut egui::Ui, st: &mut UiState, show: &ShowState, actions: &mu
         },
         |_| {},
     );
+    // One scroll area filling the panel: the panel keeps the height it's dragged to,
+    // and the content sits at the top.
+    egui::ScrollArea::vertical()
+        .id_salt("timers")
+        .auto_shrink(false)
+        .show(ui, |ui| body(ui, st, show, actions, doc_path, doc));
+}
+
+fn body(
+    ui: &mut egui::Ui,
+    st: &mut UiState,
+    show: &ShowState,
+    actions: &mut Vec<UiAction>,
+    doc_path: Option<std::path::PathBuf>,
+    doc: Option<std::sync::Arc<Document>>,
+) {
     let (Some(path), Some(d)) = (doc_path, doc) else {
         hint(ui, "Select a presentation to see and set its slide timers.");
         return;
@@ -296,52 +312,43 @@ pub fn panel(ui: &mut egui::Ui, st: &mut UiState, show: &ShowState, actions: &mu
         ui.ctx().request_repaint_after(Duration::from_millis(100));
     }
 
-    egui::ScrollArea::vertical()
-        .id_salt("timers-chain")
-        .auto_shrink([false, true])
-        .max_height((ui.available_height() - 64.0).max(60.0))
-        .show(ui, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.add_space(8.0);
-                ui.spacing_mut().item_spacing = Vec2::new(4.0, 6.0);
-                for (pos, r) in order.iter().enumerate() {
-                    let s = &d.groups[r.group].slides[r.slide];
-                    let is_live = live_pos == Some(pos);
-                    let open = st.timers.open.as_deref() == Some(s.uuid.as_str());
-                    let time = match (s.timer, is_live.then_some(left).flatten()) {
-                        (Some(_), Some(l)) => {
-                            format!("{} {:.1}s left", icon::TIMER, l.as_secs_f64())
-                        }
-                        (Some(t), None) => format!("{} {}", icon::TIMER, format_secs(t.duration)),
-                        (None, _) => "waits".to_owned(),
-                    };
-                    let resp = chip(
-                        ui,
-                        &format!("{}. {}", pos + 1, slide_title(&d, *r)),
-                        &time,
-                        color32(d.groups[r.group].color),
-                        is_live,
-                        open,
-                        r.enabled,
-                    );
-                    if resp.clicked() {
-                        st.timers.draft = None;
-                        st.timers.open = if open { None } else { Some(s.uuid.clone()) };
-                    }
-                    if s.timer.is_some_and(|t| t.loop_to_beginning) {
-                        ui.label(
-                            RichText::new(format!("{} to start", icon::REPEAT))
-                                .color(brand::ACCENT),
-                        );
-                    } else if pos + 1 < order.len() {
-                        ui.label(RichText::new("›").color(Color32::GRAY));
-                    } else if s.timer.is_some() {
-                        ui.label(RichText::new(format!("{} stops", icon::STOP)).weak());
-                    }
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.add_space(8.0);
+        ui.spacing_mut().item_spacing = Vec2::new(4.0, 6.0);
+        for (pos, r) in order.iter().enumerate() {
+            let s = &d.groups[r.group].slides[r.slide];
+            let is_live = live_pos == Some(pos);
+            let open = st.timers.open.as_deref() == Some(s.uuid.as_str());
+            let time = match (s.timer, is_live.then_some(left).flatten()) {
+                (Some(_), Some(l)) => {
+                    format!("{} {:.1}s left", icon::TIMER, l.as_secs_f64())
                 }
-            });
-        });
+                (Some(t), None) => format!("{} {}", icon::TIMER, format_secs(t.duration)),
+                (None, _) => "waits".to_owned(),
+            };
+            let resp = chip(
+                ui,
+                &format!("{}. {}", pos + 1, slide_title(&d, *r)),
+                &time,
+                color32(d.groups[r.group].color),
+                is_live,
+                open,
+                r.enabled,
+            );
+            if resp.clicked() {
+                st.timers.draft = None;
+                st.timers.open = if open { None } else { Some(s.uuid.clone()) };
+            }
+            if s.timer.is_some_and(|t| t.loop_to_beginning) {
+                ui.label(RichText::new(format!("{} to start", icon::REPEAT)).color(brand::ACCENT));
+            } else if pos + 1 < order.len() {
+                ui.label(RichText::new("›").color(Color32::GRAY));
+            } else if s.timer.is_some() {
+                ui.label(RichText::new(format!("{} stops", icon::STOP)).weak());
+            }
+        }
+    });
 
     // Settings of the open slide.
     let Some(r) = st.timers.open.clone().and_then(|u| {
